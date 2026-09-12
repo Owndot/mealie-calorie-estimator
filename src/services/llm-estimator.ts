@@ -71,6 +71,12 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
   }
 }
 
+function nutrientNumber(value: unknown): number | null {
+  if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) return null
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? number : null
+}
+
 export async function estimateNutrients(foodName: string): Promise<NutrientSet | null> {
   if (!config.llm.enabled || !config.llm.apiKey) return null
 
@@ -115,17 +121,17 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
     const json = JSON.parse(content.replace(/```json\n?|\n?```/g, ""))
 
     const nutrients: NutrientSet = {
-      kcalPer100g: Number(json.kcal) || null,
-      proteinPer100g: Number(json.protein) || null,
-      carbsPer100g: Number(json.carbs) || null,
-      fatPer100g: Number(json.fat) || null,
-      saturatedFatPer100g: Number(json.saturatedFat) || null,
-      transFatPer100g: Number(json.transFat) || null,
+      kcalPer100g: nutrientNumber(json.kcal),
+      proteinPer100g: nutrientNumber(json.protein),
+      carbsPer100g: nutrientNumber(json.carbs),
+      fatPer100g: nutrientNumber(json.fat),
+      saturatedFatPer100g: nutrientNumber(json.saturatedFat),
+      transFatPer100g: nutrientNumber(json.transFat),
       unsaturatedFatPer100g: null,
-      fiberPer100g: Number(json.fiber) || null,
-      sugarPer100g: Number(json.sugar) || null,
-      sodiumPer100g: Number(json.sodium) || null,
-      cholesterolPer100g: Number(json.cholesterol) || null,
+      fiberPer100g: nutrientNumber(json.fiber),
+      sugarPer100g: nutrientNumber(json.sugar),
+      sodiumPer100g: nutrientNumber(json.sodium),
+      cholesterolPer100g: nutrientNumber(json.cholesterol),
     }
 
     if (nutrients.fatPer100g !== null) {
@@ -134,13 +140,13 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
       nutrients.unsaturatedFatPer100g = Math.round((nutrients.fatPer100g - s - t) * 10) / 10
     }
 
-    if (nutrients.kcalPer100g !== null && nutrients.kcalPer100g > 0) {
+    if (nutrients.kcalPer100g !== null && nutrients.kcalPer100g >= 0) {
       setCachedLlmNutrients(foodName, nutrients)
       logger.debug({ foodName, kcal: nutrients.kcalPer100g }, "LLM nutrient estimate obtained")
       return nutrients
     }
 
-    logger.debug({ foodName, content }, "LLM returned zero kcal, discarding")
+    logger.debug({ foodName, content }, "LLM returned missing or invalid kcal, discarding")
     return null
   } catch (err) {
     logger.warn({ err, foodName }, "LLM nutrient estimation failed")

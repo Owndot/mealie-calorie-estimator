@@ -1,3 +1,4 @@
+import { isSuitableOffMatch } from "./off-matching.js"
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
 import { getCachedNutrients, setCachedNutrients } from "../utils/cache.js"
@@ -108,7 +109,9 @@ async function searchProduct(query: string): Promise<OffProduct | null> {
 }
 
 export async function lookupNutrients(foodName: string, unitName?: string): Promise<OffLookupResult> {
-  const cached = getCachedNutrients(foodName)
+  // Older entries contain no product identity and cannot be validated retroactively.
+  const cacheKey = `off-name-v2:${foodName}`
+  const cached = getCachedNutrients(cacheKey)
   if (cached) {
     logger.debug({ foodName }, "Cache hit for food")
     return { nutrients: cached, matched: true, productName: foodName }
@@ -126,6 +129,11 @@ export async function lookupNutrients(foodName: string, unitName?: string): Prom
     return { nutrients: null, matched: false, productName: null }
   }
 
+  if (!isSuitableOffMatch(searchTerm, product.product_name)) {
+    logger.debug({ foodName, product: product.product_name }, "Rejecting unrelated or differently prepared OFF product")
+    return { nutrients: null, matched: false, productName: product.product_name ?? null }
+  }
+
   if (!product.nutriments) {
     logger.debug({ foodName, product: product.product_name }, "OFF match has no nutrient data")
     return { nutrients: null, matched: false, productName: product.product_name }
@@ -139,6 +147,6 @@ export async function lookupNutrients(foodName: string, unitName?: string): Prom
   }
 
   logger.debug({ foodName, product: product.product_name }, "OFF match found")
-  setCachedNutrients(foodName, nutrients)
+  setCachedNutrients(cacheKey, nutrients)
   return { nutrients, matched: true, productName: product.product_name }
 }

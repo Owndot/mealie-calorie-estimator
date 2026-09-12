@@ -4,7 +4,7 @@ import type {
   NutrientSet, MealieNutrition,
 } from "../types.js"
 import { config } from "../config.js"
-import { convertToGrams } from "./unit-converter.js"
+import { convertToGrams, resolveUnitName } from "./unit-converter.js"
 import { lookupNutrients } from "./off-client.js"
 import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
@@ -87,7 +87,8 @@ function addToTotal(total: NutrientSet, nutrients: NutrientSet, grams: number): 
 }
 
 function divideByServings(total: NutrientSet, servings: number): NutrientSet {
-  const div = (v: number | null): number | null => (v !== null ? Math.round(v / servings) : null)
+  const div = (v: number | null, precision = 1): number | null =>
+    (v !== null ? Math.round(v / servings * precision) / precision : null)
   return {
     kcalPer100g: div(total.kcalPer100g),
     proteinPer100g: div(total.proteinPer100g),
@@ -98,7 +99,7 @@ function divideByServings(total: NutrientSet, servings: number): NutrientSet {
     unsaturatedFatPer100g: div(total.unsaturatedFatPer100g),
     fiberPer100g: div(total.fiberPer100g),
     sugarPer100g: div(total.sugarPer100g),
-    sodiumPer100g: div(total.sodiumPer100g),
+    sodiumPer100g: div(total.sodiumPer100g, 1000),
     cholesterolPer100g: div(total.cholesterolPer100g),
   }
 }
@@ -120,7 +121,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     let llmEstimated = false
 
     if (grams === null) {
-      const unitName = ing.unit?.name
+      const unitName = resolveUnitName(ing.unit)
       if (unitName) {
         const llmGrams = await estimateGrams(quantity, unitName, foodName)
         if (llmGrams !== null) {
