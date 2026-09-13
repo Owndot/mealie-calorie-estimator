@@ -2,7 +2,7 @@ import { buildUnresolvedFoodContext, interpretSemanticIngredient, INTERPRETATION
 import { contextForName, interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
 import { genericNutrients, matchGenericFood } from "./generic-foods.js"
 import { emptyAmounts, addAmounts, amountsFromProfile, divideAmounts, legacyAmounts } from "./nutrient-amounts.js"
-import { recipeWarnings, sanitizeNutritionPatch, validateProfile } from "./nutrition-validation.js"
+import { recipeWarnings, sanitizeNutritionPatch, validateCompleteProfile, validateProfile } from "./nutrition-validation.js"
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
@@ -202,9 +202,14 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     const weightConfidence = weightEstimated ? 0.7 : 1
     const finalMatchConfidence = Math.min(interpretationConfidence, sourceConfidence, weightConfidence)
 
-    if (!nutrients || validateProfile(nutrients).length || finalMatchConfidence < 0.6) {
+    const validationErrors = source === "LLM" ? validateCompleteProfile(nutrients ?? {
+      kcalPer100g: null, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
+      saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
+      fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
+    }) : nutrients ? validateProfile(nutrients) : ["missing nutrient profile"]
+    if (!nutrients || validationErrors.length || finalMatchConfidence < 0.6) {
       unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null, context, interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason })
+      matchedIngredients.push({       name: foodName, grams, matched: false, nutrients: null, context, interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: `${reason}; ${validationErrors.join(", ")}` })
       logger.debug({ ...context, quantity, unit, grams, source, reason, nutrientResolutionStatus: nutrients ? "invalid" : "unresolved", finalRejectionReason: reason }, "No valid nutrient profile")
       continue
     }

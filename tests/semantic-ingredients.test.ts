@@ -479,6 +479,23 @@ describe("interpretation cache and confidence safety", () => {
       expect(result.matchedIngredients[0]).toMatchObject({ source: "LLM", llmEstimated: true })
     },
   )
+  it.each(["smoked tofu", "geräucherter Tofu", "red lentils", "rote Linsen", "white beans", "brauner Reis", "Rigatoni", "cherry tomatoes", "Italian seasoning", "curry paste"])(
+    "accepts an unseen ordinary food through semantic nutrient fallback: %s",
+    async name => {
+      vi.mocked(fetch).mockImplementation(async (_url, options) => {
+        const body = JSON.parse(options?.body as string)
+        if (body.messages?.[0]?.role === "system") return new Response("null", { status: 200 })
+        return response({ kcal: 140, protein: 6, carbs: 12, fat: 7, fiber: 2, sugar: 2, sodium: 250, cholesterol: 10 })
+      })
+      const input = ingredient(name)
+      input.display = `100 g ${name}`
+      input.originalText = input.display
+      const result = await estimateRecipe(recipe(input))
+      expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 1 })
+      expect(result.matchedIngredients[0].matched).toBe(true)
+      expect(["generic", "LLM"]).toContain(result.matchedIngredients[0].source)
+    },
+  )
   it("splits quantified compound seasonings across trusted components", async () => {
     const input = ingredient("Salz und Pfeffer")
     input.quantity = 2

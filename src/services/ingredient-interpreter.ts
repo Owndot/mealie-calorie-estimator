@@ -59,10 +59,10 @@ const pending = new Map<string, Promise<SemanticInterpretation | null>>()
 export function isPlausibleFoodPhrase(context: IngredientContext): boolean {
   const normalized = normalizeFoodText(context.originalName)
   const tokens = normalized.split(" ").filter(Boolean)
-  const stopwords = new Set(["a", "d", "ad", "an", "and", "aus", "der", "die", "das", "de", "of", "the"])
-  if (!normalized || tokens.length > 8 || tokens.some(token => token.length < 2 && !stopwords.has(token))) return false
-  if (tokens.some(token => /^(?:xyz|qqq|asdf|n\/?a)$/i.test(token))) return false
-  return /[\p{L}]/u.test(normalized)
+  if (!normalized || tokens.length > 12 || !/[\p{L}]/u.test(normalized)) return false
+  if (tokens.every(token => /^(?:xyz|qqq|asdf|n|a|na|nichts|unknown|unbekannt)$/i.test(token))) return false
+  if (/^(?:add|mix|stir|combine|put|place|remove|hinzufugen|zugeben|mischen|verruehren)\b/.test(normalized)) return false
+  return true
 }
 
 export function buildUnresolvedFoodContext(context: IngredientContext): IngredientContext | null {
