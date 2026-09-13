@@ -25,6 +25,11 @@ function hasAnyToken(): boolean {
   return Object.keys(process.env).some((k) => k.startsWith("MEALIE_API_TOKEN_"))
 }
 
+function boundedNumber(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number(value)
+  return value && Number.isFinite(parsed) && parsed >= min && parsed <= max ? parsed : fallback
+}
+
 export const config = {
   port: parseInt(process.env.PORT || "8000", 10),
 
@@ -53,6 +58,10 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || "",
     model: process.env.LLM_MODEL || "mistral-small-latest",
     rateLimit: parseInt(process.env.LLM_RATE_LIMIT || "30", 10),
+  },
+
+  units: {
+    pinchGrams: boundedNumber(process.env.PINCH_GRAMS, 0.25, 0.05, 0.5),
   },
 
   estimate: {

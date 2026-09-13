@@ -1,3 +1,5 @@
+import { contextForName, nutrientCacheKey, type IngredientContext } from "./ingredient-context.js"
+import { convertToGrams, normalizeUnitName } from "./unit-converter.js"
 import { validateProfile } from "./nutrition-validation.js"
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
@@ -6,26 +8,34 @@ import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import type { NutrientSet } from "../types.js"
 
 export async function estimateGrams(quantity: number, unitName: string, foodName: string): Promise<number | null> {
+  unitName = normalizeUnitName(unitName)
+  const context = contextForName(foodName)
+  if (context.state === "ambiguous" || !Number.isFinite(quantity) || quantity <= 0) return null
+  const deterministic = convertToGrams(quantity, { id: "", name: unitName, abbreviation: null, pluralName: null, standardUnit: null, standardQuantity: null }, context)
+  if (deterministic !== null) return deterministic
+  foodName = context.query
   if (!config.llm.enabled) return null
   if (!config.llm.apiKey) {
     logger.warn("LLM enabled but LLM_API_KEY is not set")
     return null
   }
 
+  const maxGrams = unitName === "teaspoon" ? 15 : unitName === "tablespoon" ? 45 : unitName === "pinch" ? 0.5 : 10000
   const cached = getCachedLlmEstimate(`weight-v3:${unitName}`, foodName)
-  if (cached !== undefined) {
+  if (cached !== undefined && Number.isFinite(cached) && cached > 0 && cached <= maxGrams) {
     const totalGrams = cached * quantity
     logger.debug({ unitName, foodName, gramsPerUnit: cached, totalGrams }, "LLM estimate cache hit")
     return totalGrams
   }
 
-  const prompt = `Estimate the weight in grams for 1 ${unitName} of ${foodName}. Consider typical packaging sizes and food densities. Return ONLY a single number (the weight in grams). No explanation, no unit, no punctuation. If you cannot estimate, return 0.`
+  const prompt = `Estimate the weight in grams for 1 ${unitName} of ${foodName}. Consider typical packaging sizes and food densities. Return ONLY a single number (the weight in grams). Decimal numbers are allowed. No explanation or unit. If you cannot estimate, return 0.`
 
   try {
     await waitForRateLimit(RateLimitType.Llm)
 
     const res = await fetch(`${config.llm.baseUrl}${config.llm.endpointUrl}`, {
       method: "POST",
+      signal: AbortSignal.timeout(60000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.llm.apiKey}`,
@@ -54,7 +64,7 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
     const trimmed = content.trim()
     const num = Number(trimmed)
 
-    if (!Number.isFinite(num) || num <= 0 || num > 10000) {
+    if (!Number.isFinite(num) || num <= 0 || num > maxGrams) {
       logger.warn({ unitName, foodName, llmResponse: trimmed }, "LLM returned invalid number")
       return null
     }
@@ -78,11 +88,15 @@ function nutrientNumber(value: unknown): number | null {
   return Number.isFinite(number) && number >= 0 ? number : null
 }
 
-export async function estimateNutrients(foodName: string): Promise<NutrientSet | null> {
+export async function estimateNutrients(foodName: string, suppliedContext?: IngredientContext): Promise<NutrientSet | null> {
   if (!config.llm.enabled || !config.llm.apiKey) return null
 
-  const cached = getCachedLlmNutrients(`nutrition-v3:llm:${foodName}`)
-  if (cached) {
+  const context = suppliedContext ?? contextForName(foodName)
+  if (context.state === "ambiguous") return null
+  const cacheKey = nutrientCacheKey("llm", context)
+  foodName = context.query
+  const cached = getCachedLlmNutrients(cacheKey)
+  if (cached && validateProfile(cached).length === 0) {
     logger.debug({ foodName }, "LLM nutrient cache hit")
     return cached
   }
@@ -94,6 +108,7 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
 
     const res = await fetch(`${config.llm.baseUrl}${config.llm.endpointUrl}`, {
       method: "POST",
+      signal: AbortSignal.timeout(60000),
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.llm.apiKey}`,
@@ -145,13 +160,14 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
       nutrients.unsaturatedFatPer100g = Math.round((nutrients.fatPer100g - s - t) * 10) / 10
     }
 
-    if (validateProfile(nutrients).length === 0) {
-      setCachedLlmNutrients(`nutrition-v3:llm:${foodName}`, nutrients)
+    const validationErrors = validateProfile(nutrients)
+    if (validationErrors.length === 0) {
+      setCachedLlmNutrients(cacheKey, nutrients)
       logger.debug({ foodName, kcal: nutrients.kcalPer100g }, "LLM nutrient estimate obtained")
       return nutrients
     }
 
-    logger.debug({ foodName, content }, "LLM returned missing or invalid kcal, discarding")
+    logger.warn({ foodName, validationErrors }, "Rejecting implausible LLM nutrient profile")
     return null
   } catch (err) {
     logger.warn({ err, foodName }, "LLM nutrient estimation failed")

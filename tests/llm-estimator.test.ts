@@ -44,7 +44,7 @@ describe("estimateGrams", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1)
     const callArgs = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(callArgs.messages[0].content).toContain("Dose")
-    expect(callArgs.messages[0].content).toContain("Tomaten")
+    expect(callArgs.messages[0].content).toContain("tomato raw")
   })
 
   it("returns cached value without calling API", async () => {
@@ -144,4 +144,46 @@ describe("estimateNutrients", () => {
     const result = await respond({ kcal: 0, sodium: 39300, fat: null, sugar: -1, protein: "Infinity" })
     expect(result).toBeNull()
   })
+})
+
+it("specifies mass basis, milligrams and uncertainty in the nutrient prompt", async () => {
+  config.llm.enabled = true
+  config.llm.apiKey = "sk-test"
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content: "null" } }] }) }))
+  const { estimateNutrients } = await import("../src/services/llm-estimator.js")
+  expect(await estimateNutrients("Kidneybohnen gekocht")).toBeNull()
+  const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
+  expect(body.messages[0].content).toContain("milligrams (mg) per 100 g")
+  expect(body.messages[0].content).toContain("kidney beans cooked")
+  expect(body.messages[0].content).toContain("JSON null")
+})
+
+it.each(["1.5", "1.5 g", "Infinity", "20"])("strictly parses and bounds teaspoon gram response %s", async content => {
+  config.llm.enabled = true
+  config.llm.apiKey = "sk-test"
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ choices: [{ message: { content } }] }) }))
+  const result = await estimateGrams(2, "TL", "unknown spice")
+  expect(result).toBe(content === "1.5" ? 3 : null)
+})
+
+it("never asks the LLM for pinch weight, even when enabled", async () => {
+  config.llm.enabled = true
+  config.llm.apiKey = "sk-test"
+  vi.stubGlobal("fetch", vi.fn())
+  expect(await estimateGrams(1, "Prise", "Salz")).toBe(0.25)
+  expect(fetch).not.toHaveBeenCalled()
+})
+
+it("separates dry and cooked LLM nutrient caches", async () => {
+  config.llm.enabled = true
+  config.llm.apiKey = "sk-test"
+  vi.stubGlobal("fetch", vi.fn().mockImplementation(async (_url, options) => {
+    const prompt = JSON.parse(options.body).messages[0].content
+    return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: prompt.includes("ingredient: \"rice cooked\"") ? 130 : 365 }) } }] }) }
+  }))
+  const { estimateNutrients } = await import("../src/services/llm-estimator.js")
+  expect((await estimateNutrients("Reis trocken"))?.kcalPer100g).toBe(365)
+  expect((await estimateNutrients("Reis gekocht"))?.kcalPer100g).toBe(130)
+  expect((await estimateNutrients("rice dry"))?.kcalPer100g).toBe(365)
+  expect(fetch).toHaveBeenCalledTimes(2)
 })

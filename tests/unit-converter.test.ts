@@ -31,7 +31,7 @@ describe("convertToGrams", () => {
     expect(convertToGrams(3, unit({ name: "tsp" }))).toBe(15)
     expect(convertToGrams(1, unit({ name: "oz" }))).toBe(28.35)
     expect(convertToGrams(1, unit({ name: "lb" }))).toBe(453.592)
-    expect(convertToGrams(1, unit({ name: "pinch" }))).toBe(0.4)
+    expect(convertToGrams(1, unit({ name: "pinch" }))).toBe(0.25)
   })
 
   it("returns null for unknown units", () => {
@@ -53,7 +53,7 @@ describe("convertToGrams", () => {
   })
 
   it.each(["Prise", "Prisen", "pinch", "pinches", " PRISE "])("converts %s deterministically", name => {
-    expect(convertToGrams(2, unit({ name, abbreviation: null }))).toBeCloseTo(0.8)
+    expect(convertToGrams(2, unit({ name, abbreviation: null }))).toBeCloseTo(0.5)
   })
 
   it("keeps explicit standard quantities for a pinch", () => {
@@ -84,7 +84,7 @@ describe("unit normalization", () => {
   })
 
   it.each([
-    ["teaspoon", 5], ["tablespoon", 15], ["pinch", 0.4], ["gram", 1],
+    ["teaspoon", 5], ["tablespoon", 15], ["pinch", 0.25], ["gram", 1],
     ["kilogram", 1000], ["milliliter", 1], ["liter", 1000], ["cup", 240],
     ["ounces", 28.35], ["lbs", 453.592], ["dashes", 0.3], ["cloves", 5],
   ])("retains the English %s conversion", (name, grams) => {

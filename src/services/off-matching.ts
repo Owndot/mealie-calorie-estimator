@@ -1,39 +1,26 @@
-// Only ignore labels that do not change the identity or preparation of a food.
-const LABELS = new Set(["bio", "organic", "biologisch", "fresh", "frisch"])
+import type { NutrientSet } from "../types.js"
+import { contextForName, interpretIngredient, type IngredientContext } from "./ingredient-context.js"
+import { genericNutrients } from "./generic-foods.js"
 
-function normalize(name: string): string {
-  return name.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "")
-    .replace(/ß/g, "ss").replace(/[^\p{L}\p{N}]+/gu, " ").trim()
-    .split(/\s+/).filter(token => !LABELS.has(token)).join("")
+export function scoreOffMatch(context: IngredientContext, productName: string, nutrients?: NutrientSet): number {
+  const candidate = interpretIngredient({ food: { id: "", name: productName, pluralName: null, aliases: [] } }, [], false)
+  if (!context.canonicalName || candidate.canonicalName !== context.canonicalName || context.state === "ambiguous" || candidate.state === "ambiguous") return 0
+  const wanted = context.state
+  const found = candidate.state
+  if (wanted !== found && found !== "unspecified") {
+    if (![wanted, found].every(s => ["raw", "fresh"].includes(s)) && !(context.canonicalName === "coconut milk" && wanted === "unspecified" && found === "canned")) return 0
+  }
+  if (found === "unspecified" && ["cooked", "canned", "drained", "frozen"].includes(wanted)) return 0
+  const reference = genericNutrients(context)
+  if (reference?.kcalPer100g && nutrients?.kcalPer100g != null) {
+    const ratio = nutrients.kcalPer100g / reference.kcalPer100g
+    if (ratio < 0.65 || ratio > 1.5) return 0
+  }
+  if (reference && nutrients?.sodiumPer100g != null && nutrients.sodiumPer100g > Math.max(1000, (reference.sodiumPer100g ?? 0) * 5)) return 0
+  if (wanted === "dry" && found === "unspecified" && !reference) return 0
+  return wanted === found ? 100 : 85
 }
 
-// Explicit equivalents avoid fuzzy substring matches across different food types.
-const EQUIVALENTS = [
-  ["Basmati-Reis", "Basmatireis", "Basmati rice"],
-  ["Kokosöl", "Kokosoel", "coconut oil"],
-  ["Kokosmilch", "coconut milk"],
-  ["Tomatenmark", "tomato paste"],
-  ["Aubergine", "Auberginen", "eggplant", "eggplants"],
-  ["Ingwer", "ginger"],
-  ["Zwiebel", "Zwiebeln", "onion", "onions"],
-  ["Salz", "salt"],
-  ["Reis", "rice"],
-  ["Milch", "milk"],
-  ["Wasser", "water"],
-  ["Tomate", "Tomaten", "tomato", "tomatoes"],
-  ["Kartoffel", "Kartoffeln", "potato", "potatoes"],
-  ["Knoblauch", "garlic"],
-  ["Karotte", "Karotten", "Möhre", "Möhren", "carrot", "carrots"],
-  ["Ei", "Eier", "egg", "eggs"],
-]
-const aliases = new Map(EQUIVALENTS.flatMap(group =>
-  group.map(name => [normalize(name), normalize(group[0])] as const),
-))
-
 export function isSuitableOffMatch(foodName: string, productName: string | undefined): boolean {
-  if (!productName) return false
-  const food = normalize(foodName)
-  const product = normalize(productName)
-  if (!food || !product) return false
-  return (aliases.get(food) ?? food) === (aliases.get(product) ?? product)
+  return !!productName && scoreOffMatch(contextForName(foodName), productName) >= 80
 }

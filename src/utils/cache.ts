@@ -197,3 +197,24 @@ export function getCacheStats(): { size: number; maxSize: number } {
   }
   return { size, maxSize: 0 }
 }
+
+export interface CachedOffLookup {
+  nutrients: NutrientSet
+  productName: string
+  confidence: "high" | "medium"
+}
+
+export function getCachedOffLookup(key: string): CachedOffLookup | undefined {
+  const raw = getRow<string>("nutrient_cache", "food_name", normalizeKey(key), "nutrients")
+  if (raw === undefined) return undefined
+  try {
+    const value = JSON.parse(raw) as CachedOffLookup
+    return value?.nutrients && typeof value.productName === "string" ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function setCachedOffLookup(key: string, value: CachedOffLookup): void {
+  upsert("nutrient_cache", "food_name", normalizeKey(key), "nutrients", JSON.stringify(value))
+}

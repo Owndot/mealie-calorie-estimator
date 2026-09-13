@@ -1,12 +1,14 @@
+import { contextForName, nutrientCacheKey } from "../src/services/ingredient-context.js"
+import { genericNutrients } from "../src/services/generic-foods.js"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { estimateRecipe, buildNutritionPatch } from "../src/services/estimator.js"
 import { lookupNutrients } from "../src/services/off-client.js"
 import { estimateGrams, estimateNutrients } from "../src/services/llm-estimator.js"
-import { getCachedNutrients, setCachedNutrients } from "../src/utils/cache.js"
+import { getCachedOffLookup, setCachedOffLookup } from "../src/utils/cache.js"
 import type { MealieRecipe, NutrientSet } from "../src/types.js"
 
 vi.mock("../src/utils/cache.js", () => ({
-  getCachedNutrients: vi.fn(), setCachedNutrients: vi.fn(),
+  getCachedOffLookup: vi.fn(), setCachedOffLookup: vi.fn(),
 }))
 vi.mock("../src/utils/rate-limiter.js", () => ({
   waitForRateLimit: vi.fn(), RateLimitType: { Search: "search" },
@@ -54,15 +56,10 @@ describe("OFF identity validation and recipe fallback", () => {
     ["Kokosmilch", "coconut milk drink"],
     ["Kartoffeln", "fried potatoes"],
     ["flour", undefined],
-  ])("rejects %s -> %s and uses LLM nutrients", async (food, product) => {
+  ])("rejects %s -> %s before selecting a fallback", async (food, product) => {
     offResponse(product)
-    const fallback = { ...salt, kcalPer100g: 25, sodiumPer100g: 0 }
-    vi.mocked(estimateNutrients).mockResolvedValue(fallback)
-    const result = await estimateRecipe(recipe(food))
-    expect(estimateNutrients).toHaveBeenCalledExactlyOnceWith(food)
-    expect(result.totalNutrients.kcalPer100g).toBe(25)
-    expect(result.matchedIngredients[0].llmEstimated).toBe(true)
-    expect(setCachedNutrients).not.toHaveBeenCalled()
+    expect((await lookupNutrients(food)).matched).toBe(false)
+    expect(setCachedOffLookup).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -79,26 +76,27 @@ describe("OFF identity validation and recipe fallback", () => {
     ["Kokosoel", "Coconut Oil"],
     ["Eier", "Ei"],
   ])("accepts %s -> %s without LLM", async (food, product) => {
-    offResponse(product)
+    const kcal = genericNutrients(contextForName(food))?.kcalPer100g ?? 10
+    offResponse(product, kcal)
     const result = await estimateRecipe(recipe(food))
-    expect(result.totalNutrients.kcalPer100g).toBe(10)
+    expect(result.totalNutrients.kcalPer100g).toBe(kcal)
     expect(estimateNutrients).not.toHaveBeenCalled()
-    expect(setCachedNutrients).toHaveBeenCalledOnce()
+    expect(setCachedOffLookup).toHaveBeenCalledOnce()
   })
 
   it("leaves a rejected match unmatched if LLM is unavailable", async () => {
     offResponse("smalec")
     vi.mocked(estimateNutrients).mockResolvedValue(null)
-    const result = await estimateRecipe(recipe("Zwiebel"))
-    expect(result.unmatchedIngredients).toEqual(["Zwiebel"])
+    const result = await estimateRecipe(recipe("UnknownFood"))
+    expect(result.unmatchedIngredients).toEqual(["UnknownFood"])
     expect(result.totalNutrients.kcalPer100g).toBeNull()
   })
 
   it("bypasses legacy cache entries", async () => {
-    vi.mocked(getCachedNutrients).mockImplementation(key => key === "Zwiebel" ? salt : undefined)
+    vi.mocked(getCachedOffLookup).mockImplementation(key => key === "Zwiebel" ? { nutrients: salt, productName: "smalec", confidence: "high" as const } : undefined)
     offResponse("smalec")
     expect((await lookupNutrients("Zwiebel")).matched).toBe(false)
-    expect(getCachedNutrients).toHaveBeenCalledWith("nutrition-v3:off:Zwiebel")
+    expect(getCachedOffLookup).toHaveBeenCalledWith(nutrientCacheKey("off", contextForName("Zwiebel")))
   })
 
   it("validates the food after removing the unit prefix", async () => {
@@ -108,33 +106,33 @@ describe("OFF identity validation and recipe fallback", () => {
 })
 
 describe("zero kcal salt", () => {
-  it.each(["off", "llm"])("preserves sodium from %s for Prise Salz without estimating grams", async source => {
+  it.each(["off", "llm"])("uses deterministic Prise Salz regardless of %s availability", async source => {
     offResponse(source === "off" ? "Salz" : "unrelated product", 0, 39.3)
     vi.mocked(estimateNutrients).mockResolvedValue(salt)
     const result = await estimateRecipe(recipe("Salz", "Prise", 1))
     expect(estimateGrams).not.toHaveBeenCalled()
     expect(result.matchedCount).toBe(1)
-    expect(result.matchedIngredients[0].grams).toBe(0.4)
+    expect(result.matchedIngredients[0].grams).toBe(0.25)
     expect(result.totalNutrients.kcalPer100g).toBe(0)
-    expect(result.totalNutrients.sodiumPer100g).toBeCloseTo(157.2)
-    expect(result.perServingNutrients.sodiumPer100g).toBe(79)
+    expect(result.totalNutrients.sodiumPer100g).toBeCloseTo(98.25)
+    expect(result.perServingNutrients.sodiumPer100g).toBe(49.125)
     const patch = buildNutritionPatch(result, "test-hash", "2 servings")
     expect(patch.nutrition.calories).toBe("0")
-    expect(patch.nutrition.sodiumContent).toBe("79")
+    expect(patch.nutrition.sodiumContent).toBe("49")
   })
 })
 
 describe("German recipe units", () => {
   it.each([
-    ["TL", "Kreuzkümmel", 5], ["Teelöffel", "Currypulver", 5],
-    ["EL", "Kokosöl", 15], ["Esslöffel", "Tomatenmark", 15],
-    ["Prise", "Salz", 0.4], ["tl.", "Kreuzkümmel", 5],
-    ["TEEL.", "Currypulver", 5], ["el.", "Kokosöl", 15],
-    ["ESSL.", "Tomatenmark", 15], ["PRISE.", "Salz", 0.4],
+    ["TL", "Kreuzkümmel", 2.1], ["Teelöffel", "Currypulver", 2],
+    ["EL", "Kokosöl", 13.6], ["Esslöffel", "Tomatenmark", 16],
+    ["Prise", "Salz", 0.25], ["tl.", "Kreuzkümmel", 2.1],
+    ["TEEL.", "Currypulver", 2], ["el.", "Kokosöl", 13.6],
+    ["ESSL.", "Tomatenmark", 16], ["PRISE.", "Salz", 0.25],
     ["Gramm", "Salz", 1], ["Kilogramm", "Tomatenmark", 1000],
-    ["Milliliter", "Kokosöl", 1], ["Liter", "Kokosöl", 1000],
+    ["Milliliter", "Kokosöl", 0.9], ["Liter", "Kokosöl", 900],
   ])("converts 1 %s %s without asking the LLM for grams", async (unitName, foodName, grams) => {
-    offResponse(foodName)
+    offResponse(foodName, genericNutrients(contextForName(foodName))?.kcalPer100g ?? 10)
     const result = await estimateRecipe(recipe(foodName, unitName, 1))
     expect(result.matchedIngredients[0].grams).toBe(grams)
     expect(result.matchedCount).toBe(1)
@@ -146,7 +144,7 @@ describe("German recipe units", () => {
     offResponse("Aubergine")
     vi.mocked(estimateGrams).mockResolvedValue(300)
     const result = await estimateRecipe(recipe("Aubergine", unitName, 2))
-    expect(estimateGrams).toHaveBeenCalledExactlyOnceWith(2, "piece", "Aubergine")
+    expect(estimateGrams).toHaveBeenCalledExactlyOnceWith(2, "piece", "eggplant raw")
     expect(result.matchedIngredients[0].grams).toBe(300)
   })
 

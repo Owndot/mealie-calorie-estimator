@@ -1,3 +1,7 @@
+import { interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
+import { genericNutrients } from "./generic-foods.js"
+import { emptyAmounts, addAmounts, amountsFromProfile, divideAmounts, legacyAmounts } from "./nutrient-amounts.js"
+import { recipeWarnings, sanitizeNutritionPatch, validateProfile } from "./nutrition-validation.js"
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
@@ -10,16 +14,17 @@ import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
 
 export function computeIngredientHash(recipe: MealieRecipe): string {
-  const parts: string[] = []
+  const parts: string[] = [NUTRITION_VERSION, `pinch:${config.units.pinchGrams}`]
 
   for (const ing of recipe.recipeIngredient) {
     const qty = ing.quantity ?? 0
     const unitName = ing.unit?.name ?? ""
     const foodName = ing.food?.name ?? ""
-    parts.push(`${qty}|${unitName}|${foodName}`)
+    parts.push(JSON.stringify([qty, unitName, foodName, ing.unit, ing.note, ing.originalText, ing.original_text, ing.display]))
   }
 
   parts.sort()
+  parts.push(JSON.stringify(recipe.recipeInstructions ?? []))
   parts.push(`yield:${recipe.recipeYield ?? ""}`)
   parts.push(`servings:${recipe.recipeServings ?? ""}`)
   const hash = crypto.createHash("sha256").update(parts.join(",")).digest("hex")
@@ -34,153 +39,111 @@ export function shouldEstimate(recipe: MealieRecipe): boolean {
 
 export function parseYield(recipeYield: string | null): number | null {
   if (!recipeYield) return null
-
-  const rangeMatch = recipeYield.match(/(\d+)\s*[-–]\s*(\d+)/)
-  if (rangeMatch) {
-    return Math.round((parseInt(rangeMatch[1], 10) + parseInt(rangeMatch[2], 10)) / 2)
+  const text = recipeYield.trim()
+  if (/^-/.test(text)) return null
+  const range = text.match(/(\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)/)
+  const parse = (value: string) => Number(value.replace(",", "."))
+  if (range) {
+    const lo = parse(range[1]), hi = parse(range[2])
+    return lo > 0 && hi >= lo ? (lo + hi) / 2 : null
   }
-
-  const numMatch = recipeYield.match(/(\d+(?:[.,]\d+)?)/)
-  if (numMatch) {
-    return parseFloat(numMatch[1].replace(",", "."))
-  }
-
-  return null
+  const number = text.match(/\d+(?:[.,]\d+)?/)
+  const value = number ? parse(number[0]) : 0
+  return Number.isFinite(value) && value > 0 ? value : null
 }
 
-function emptyNutrients(): NutrientSet {
-  return {
-    kcalPer100g: null,
-    proteinPer100g: null,
-    carbsPer100g: null,
-    fatPer100g: null,
-    saturatedFatPer100g: null,
-    transFatPer100g: null,
-    unsaturatedFatPer100g: null,
-    fiberPer100g: null,
-    sugarPer100g: null,
-    sodiumPer100g: null,
-    cholesterolPer100g: null,
-  }
-}
-
-function addToTotal(total: NutrientSet, nutrients: NutrientSet, grams: number): NutrientSet {
-  const factor = grams / 100
-  const add = (a: number | null, b: number | null): number | null => {
-    if (a === null && b === null) return null
-    return (a ?? 0) + (b ?? 0) * factor
-  }
-
-  return {
-    kcalPer100g: add(total.kcalPer100g, nutrients.kcalPer100g),
-    proteinPer100g: add(total.proteinPer100g, nutrients.proteinPer100g),
-    carbsPer100g: add(total.carbsPer100g, nutrients.carbsPer100g),
-    fatPer100g: add(total.fatPer100g, nutrients.fatPer100g),
-    saturatedFatPer100g: add(total.saturatedFatPer100g, nutrients.saturatedFatPer100g),
-    transFatPer100g: add(total.transFatPer100g, nutrients.transFatPer100g),
-    unsaturatedFatPer100g: add(total.unsaturatedFatPer100g, nutrients.unsaturatedFatPer100g),
-    fiberPer100g: add(total.fiberPer100g, nutrients.fiberPer100g),
-    sugarPer100g: add(total.sugarPer100g, nutrients.sugarPer100g),
-    sodiumPer100g: add(total.sodiumPer100g, nutrients.sodiumPer100g),
-    cholesterolPer100g: add(total.cholesterolPer100g, nutrients.cholesterolPer100g),
-  }
-}
-
-function divideByServings(total: NutrientSet, servings: number): NutrientSet {
-  const div = (v: number | null, precision = 1): number | null =>
-    (v !== null ? Math.round(v / servings * precision) / precision : null)
-  return {
-    kcalPer100g: div(total.kcalPer100g),
-    proteinPer100g: div(total.proteinPer100g),
-    carbsPer100g: div(total.carbsPer100g),
-    fatPer100g: div(total.fatPer100g),
-    saturatedFatPer100g: div(total.saturatedFatPer100g),
-    transFatPer100g: div(total.transFatPer100g),
-    unsaturatedFatPer100g: div(total.unsaturatedFatPer100g),
-    fiberPer100g: div(total.fiberPer100g),
-    sugarPer100g: div(total.sugarPer100g),
-    sodiumPer100g: div(total.sodiumPer100g),
-    cholesterolPer100g: div(total.cholesterolPer100g),
-  }
+export function resolveServings(recipe: MealieRecipe): number | null {
+  // Structured servings is authoritative; a yield can describe loaves, grams or jars.
+  if (recipe.recipeServings != null && Number.isFinite(recipe.recipeServings) && recipe.recipeServings > 0) return recipe.recipeServings
+  if (/\b(kg|g|gramm|grams|ml|liters?|liter)\b/i.test(recipe.recipeYield ?? "")) return null
+  return parseYield(recipe.recipeYield)
 }
 
 export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResult> {
   const matchedIngredients: IngredientMatch[] = []
   const unmatchedNames: string[] = []
-  let totalNutrients = emptyNutrients()
-
+  let totals = emptyAmounts()
+  const warnings: string[] = []
   for (const ing of recipe.recipeIngredient) {
     const foodName = ing.food?.name
     const quantity = ing.quantity
-
-    if (!foodName || quantity == null || quantity <= 0) {
+    if (!foodName || quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
+      warnings.push(`Skipped invalid or unquantified ingredient: ${foodName || ing.display}`)
       continue
     }
-
-    let grams = convertToGrams(quantity, ing.unit)
+    const context = interpretIngredient(ing, recipe.recipeInstructions)
+    const unit = resolveUnitName(ing.unit)
+    let grams = convertToGrams(quantity, ing.unit, context)
     let llmEstimated = false
-
-    if (grams === null) {
-      const unitName = resolveUnitName(ing.unit)
-      if (unitName) {
-        const llmGrams = await estimateGrams(quantity, unitName, foodName)
-        if (llmGrams !== null) {
-          grams = llmGrams
-          llmEstimated = true
-        }
-      }
+    if (grams === null && unit && context.state !== "ambiguous") {
+      grams = await estimateGrams(quantity, unit, context.query)
+      llmEstimated = grams !== null
     }
-
-    if (grams === null) {
+    if (grams === null || !Number.isFinite(grams) || grams <= 0 || context.state === "ambiguous") {
       unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null })
+      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null, context, reason: context.state === "ambiguous" ? context.reason : "unknown weight" })
+      logger.debug({ ...context, quantity, unit, grams }, "Ingredient could not be estimated")
       continue
     }
-
-    const result = await lookupNutrients(foodName, ing.unit?.name)
-
-    if (!result.matched || result.nutrients === null) {
-      const llmNutrients = await estimateNutrients(foodName)
-      if (llmNutrients !== null) {
-        totalNutrients = addToTotal(totalNutrients, llmNutrients, grams)
-        matchedIngredients.push({ name: foodName, grams, matched: true, nutrients: llmNutrients, llmEstimated: true })
-        continue
+    let nutrients: NutrientSet | null = null
+    let source: IngredientMatch["source"] = "OFF"
+    let productName: string | null = null
+    let confidence = "high"
+    let reason = "table salt mass calculation"
+    if (context.canonicalName === "salt" && context.state === "unspecified") {
+      nutrients = genericNutrients(context)
+      source = "deterministic"
+    } else {
+      const off = await lookupNutrients(foodName, ing.unit?.name, context)
+      nutrients = off.matched ? off.nutrients : null
+      productName = off.productName
+      confidence = off.confidence ?? "medium"
+      reason = off.reason ?? "OFF lookup"
+      if (!nutrients) {
+        nutrients = genericNutrients(context)
+        source = "generic"
+        confidence = "medium"
+        reason += "; state-specific USDA reference fallback"
       }
+      if (!nutrients) {
+        nutrients = await estimateNutrients(context.query, context)
+        source = "LLM"
+        confidence = "low"
+        reason += "; no generic profile, LLM fallback"
+        llmEstimated = true
+      }
+    }
+    if (!nutrients || validateProfile(nutrients).length) {
       unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null })
+      matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null, context, reason })
+      logger.debug({ ...context, quantity, unit, grams, source, reason }, "No valid nutrient profile")
       continue
     }
-
-    totalNutrients = addToTotal(totalNutrients, result.nutrients, grams)
-    matchedIngredients.push({ name: foodName, grams, matched: true, nutrients: result.nutrients, llmEstimated })
+    const contribution = amountsFromProfile(nutrients, grams)
+    totals = addAmounts(totals, contribution)
+    matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, source, context, productName, confidence, reason })
+    logger.debug({ originalName: foodName, normalizedQuery: context.query, state: context.state, stateReason: context.reason,
+      quantity, unit, grams, source, productName, confidence, reason, kcalPer100g: nutrients.kcalPer100g,
+      sodiumMgPer100g: nutrients.sodiumPer100g, kcalContribution: contribution.kcal, sodiumMgContribution: contribution.sodiumMg,
+    }, "Ingredient nutrition contribution")
   }
-
-  const servings = parseYield(recipe.recipeYield) ?? recipe.recipeServings
-  const perServingNutrients = servings && servings > 0 ? divideByServings(totalNutrients, servings) : emptyNutrients()
-
+  const servings = resolveServings(recipe)
+  const yieldServings = parseYield(recipe.recipeYield)
+  if (servings && yieldServings && servings !== yieldServings) warnings.push("recipeServings takes precedence over conflicting recipeYield")
+  if (!servings) warnings.push("No valid serving count; nutrition will not be written")
+  if (unmatchedNames.length) warnings.push(`Partial estimate: ${unmatchedNames.join(", ")}`)
+  const perServing = servings ? divideAmounts(totals, servings) : emptyAmounts()
+  warnings.push(...recipeWarnings(perServing))
+  for (const warning of warnings) logger.warn({ slug: recipe.slug, warning }, "Recipe nutrition warning")
   const result: EstimateResult = {
-    slug: recipe.slug,
-    servings,
-    totalNutrients,
-    perServingNutrients,
-    matchedCount: matchedIngredients.filter((i) => i.matched).length,
-    unmatchedCount: unmatchedNames.length,
-    unmatchedIngredients: unmatchedNames,
-    matchedIngredients,
+    slug: recipe.slug, servings, totals, perServing, warnings,
+    totalNutrients: legacyAmounts(totals), perServingNutrients: legacyAmounts(perServing),
+    matchedCount: matchedIngredients.filter(i => i.matched).length,
+    unmatchedCount: unmatchedNames.length, unmatchedIngredients: unmatchedNames, matchedIngredients,
   }
-
-  logger.info(
-    {
-      slug: recipe.slug,
-      servings,
-      totalKcal: totalNutrients.kcalPer100g,
-      kcalPerServing: perServingNutrients.kcalPer100g,
-      matched: result.matchedCount,
-      unmatched: result.unmatchedCount,
-    },
-    "Estimated nutrition for recipe",
-  )
-
+  logger.info({ slug: recipe.slug, servings, totalKcal: totals.kcal, kcalPerServing: perServing.kcal,
+    totalSodiumMg: totals.sodiumMg, sodiumMgPerServing: perServing.sodiumMg, warnings,
+    matched: result.matchedCount, unmatched: result.unmatchedCount }, "Estimated nutrition for recipe")
   return result
 }
 
@@ -204,7 +167,7 @@ export function buildManualAckPatch(recipe: MealieRecipe, hash: string): Nutriti
 }
 
 function n(v: number | null): string {
-  return v != null ? v.toString() : ""
+  return v != null && Number.isFinite(v) ? (Math.round(v * 100) / 100).toString() : ""
 }
 
 export function buildNutritionPatch(
@@ -231,7 +194,7 @@ export function buildNutritionPatch(
     extras.calorie_estimator_total_kcal = totalKcal.toString()
   }
 
-  const servings = parseYield(recipeYield)
+  const servings = result.servings
   if (servings !== null) {
     extras.calorie_estimator_yield = servings.toString()
   }
@@ -241,7 +204,7 @@ export function buildNutritionPatch(
     if (val !== "") nutrition[key] = val
   }
 
-  add("calories", n(p.kcalPer100g))
+  add("calories", p.kcalPer100g === null ? "" : n(Math.round(p.kcalPer100g)))
   add("proteinContent", n(p.proteinPer100g))
   add("carbohydrateContent", n(p.carbsPer100g))
   add("fatContent", n(p.fatPer100g))
@@ -250,8 +213,9 @@ export function buildNutritionPatch(
   add("unsaturatedFatContent", n(p.unsaturatedFatPer100g))
   add("fiberContent", n(p.fiberPer100g))
   add("sugarContent", n(p.sugarPer100g))
-  add("sodiumContent", n(p.sodiumPer100g))
-  add("cholesterolContent", n(p.cholesterolPer100g))
+  add("sodiumContent", p.sodiumPer100g === null ? "" : n(Math.round(p.sodiumPer100g)))
+  add("cholesterolContent", p.cholesterolPer100g === null ? "" : n(Math.round(p.cholesterolPer100g)))
 
-  return { nutrition, extras }
+  if (result.warnings?.length) extras.calorie_estimator_warnings = JSON.stringify(result.warnings)
+  return { nutrition: sanitizeNutritionPatch(nutrition, result.slug), extras }
 }

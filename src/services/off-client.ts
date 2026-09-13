@@ -1,8 +1,10 @@
 import { validateProfile } from "./nutrition-validation.js"
-import { isSuitableOffMatch } from "./off-matching.js"
+import { scoreOffMatch } from "./off-matching.js"
+import { contextForName, nutrientCacheKey, type IngredientContext } from "./ingredient-context.js"
+import { knownGramsPerUnit } from "./generic-foods.js"
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
-import { getCachedNutrients, setCachedNutrients } from "../utils/cache.js"
+import { getCachedOffLookup, setCachedOffLookup } from "../utils/cache.js"
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet } from "../types.js"
 
@@ -10,9 +12,11 @@ export interface OffLookupResult {
   nutrients: NutrientSet | null
   matched: boolean
   productName: string | null
+  confidence?: "high" | "medium"
+  reason?: string
 }
 
-const OFF_NUTRIENT_FIELDS = ["product_name", "nutriments"].join(",")
+const OFF_NUTRIENT_FIELDS = ["product_name", "nutriments", "brands", "nutrition_data_per"].join(",")
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 
@@ -28,7 +32,7 @@ async function fetchWithRetry(url: string, query: string): Promise<Response | nu
     }
 
     try {
-      const res = await fetch(url, { headers: { "User-Agent": userAgent } })
+      const res = await fetch(url, { headers: { "User-Agent": userAgent }, signal: AbortSignal.timeout(15000) })
       if (res.ok || !RETRYABLE_STATUS.has(res.status)) {
         return res
       }
@@ -70,11 +74,11 @@ function extractNutrients(n: OffNutriments): NutrientSet {
   }
 }
 
-async function searchProduct(query: string): Promise<OffProduct | null> {
+async function searchProduct(query: string): Promise<OffProduct[]> {
   const params = new URLSearchParams({
     q: query,
     langs: config.openFoodFacts.language,
-    page_size: "1",
+    page_size: "10",
     fields: OFF_NUTRIENT_FIELDS,
   })
 
@@ -86,12 +90,12 @@ async function searchProduct(query: string): Promise<OffProduct | null> {
 
   if (!res) {
     logger.warn({ query }, "OFF search failed after retries")
-    return null
+    return []
   }
 
   if (!res.ok) {
     logger.warn({ status: res.status, query }, "OFF search returned error")
-    return null
+    return []
   }
 
   let data: OffSearchResult
@@ -99,55 +103,46 @@ async function searchProduct(query: string): Promise<OffProduct | null> {
     data = (await res.json()) as OffSearchResult
   } catch {
     logger.warn({ query }, "OFF returned non-JSON response")
-    return null
+    return []
   }
 
-  if (!data.hits || data.hits.length === 0) {
-    return null
+  if (!Array.isArray(data.hits) || data.hits.length === 0) {
+    return []
   }
 
-  return data.hits[0]
+  return data.hits.slice(0, 10)
 }
 
-export async function lookupNutrients(foodName: string, unitName?: string): Promise<OffLookupResult> {
-  // Older entries contain no product identity and cannot be validated retroactively.
-  const cacheKey = `nutrition-v3:off:${foodName}`
-  const cached = getCachedNutrients(cacheKey)
-  if (cached) {
-    logger.debug({ foodName }, "Cache hit for food")
-    return { nutrients: cached, matched: true, productName: foodName }
+export async function lookupNutrients(foodName: string, unitName?: string, suppliedContext?: IngredientContext): Promise<OffLookupResult> {
+  let searchTerm = foodName.trim()
+  if (unitName && searchTerm.toLowerCase().startsWith(`${unitName.toLowerCase()} `)) searchTerm = searchTerm.slice(unitName.length).trim()
+  const context = suppliedContext ?? contextForName(searchTerm)
+  if (context.state === "ambiguous") return { nutrients: null, matched: false, productName: null, reason: context.reason }
+  const cacheKey = nutrientCacheKey("off", context)
+  const cached = getCachedOffLookup(cacheKey)
+  if (cached && validateProfile(cached.nutrients).length === 0) {
+    return { ...cached, matched: true, reason: "validated state-specific OFF cache" }
   }
-
-  let searchTerm = foodName
-  if (unitName && searchTerm.toLowerCase().startsWith(unitName.toLowerCase())) {
-    searchTerm = searchTerm.slice(unitName.length).trim()
+  const products = await searchProduct(suppliedContext ? context.query : searchTerm)
+  const candidates: Array<{ nutrients: NutrientSet; product: OffProduct; score: number }> = []
+  for (const product of products) {
+    if (!product || !product.nutriments || typeof product.product_name !== "string") continue
+    const nutrients = extractNutrients(product.nutriments)
+    if (product.nutrition_data_per === "100ml") {
+      const density = knownGramsPerUnit(context, "milliliter")
+      if (density === null) continue // Cannot apply per-volume values to a mass without density.
+      for (const key of Object.keys(nutrients) as Array<keyof NutrientSet>) {
+        if (nutrients[key] !== null) nutrients[key] = nutrients[key]! / density
+      }
+    }
+    const reasons = validateProfile(nutrients)
+    const score = reasons.length ? 0 : scoreOffMatch(context, product.product_name, nutrients)
+    logger.debug({ query: context.query, productName: product.product_name, score, reasons }, "Scored OFF candidate")
+    if (score >= 80) candidates.push({ nutrients, product, score })
   }
-
-  const product = await searchProduct(searchTerm)
-
-  if (!product) {
-    logger.debug({ foodName }, "No OFF match found")
-    return { nutrients: null, matched: false, productName: null }
-  }
-
-  if (!isSuitableOffMatch(searchTerm, product.product_name)) {
-    logger.debug({ foodName, product: product.product_name }, "Rejecting unrelated or differently prepared OFF product")
-    return { nutrients: null, matched: false, productName: product.product_name ?? null }
-  }
-
-  if (!product.nutriments) {
-    logger.debug({ foodName, product: product.product_name }, "OFF match has no nutrient data")
-    return { nutrients: null, matched: false, productName: product.product_name }
-  }
-
-  const nutrients = extractNutrients(product.nutriments)
-
-  if (validateProfile(nutrients).length > 0) {
-    logger.debug({ foodName, product: product.product_name }, "OFF match has no kcal data")
-    return { nutrients: null, matched: false, productName: product.product_name }
-  }
-
-  logger.debug({ foodName, product: product.product_name }, "OFF match found")
-  setCachedNutrients(cacheKey, nutrients)
-  return { nutrients, matched: true, productName: product.product_name }
+  candidates.sort((a, b) => b.score - a.score)
+  const best = candidates[0]
+  if (!best) return { nutrients: null, matched: false, productName: null, reason: "no trustworthy OFF candidate" }
+  setCachedOffLookup(cacheKey, { nutrients: best.nutrients, productName: best.product.product_name, confidence: best.score >= 100 ? "high" : "medium" })
+  return { nutrients: best.nutrients, matched: true, productName: best.product.product_name, confidence: best.score >= 100 ? "high" : "medium", reason: "identity, state and nutrient validation passed" }
 }

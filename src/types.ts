@@ -1,3 +1,5 @@
+import type { IngredientContext } from "./services/ingredient-context.js"
+import type { RecipeNutrientTotals, PerServingNutrition } from "./services/nutrient-amounts.js"
 export interface MealieIngredient {
   quantity: number | null
   unit: MealieUnit | null
@@ -129,17 +131,28 @@ export interface NutrientSet {
   cholesterolPer100g: number | null
 }
 
+export type NutrientProfilePer100g = NutrientSet
+
 export interface IngredientMatch {
   name: string
   grams: number | null
   matched: boolean
   nutrients: NutrientSet | null
   llmEstimated?: boolean
+  source?: "OFF" | "deterministic" | "generic" | "LLM"
+  context?: IngredientContext
+  productName?: string | null
+  confidence?: string
+  reason?: string
 }
 
 export interface EstimateResult {
   slug: string
   servings: number | null
+  totals?: RecipeNutrientTotals
+  perServing?: PerServingNutrition
+  warnings?: string[]
+  /** Deprecated compatibility fields; use totals/perServing with explicit units. */
   totalNutrients: NutrientSet
   perServingNutrients: NutrientSet
   matchedCount: number
