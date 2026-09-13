@@ -161,11 +161,21 @@ export async function estimateNutrients(foodName: string, suppliedContext?: Ingr
       nutrients.unsaturatedFatPer100g = Math.round((nutrients.fatPer100g - s - t) * 10) / 10
     }
 
-    const validationErrors = validateProfile(nutrients)
+    let validationErrors = validateProfile(nutrients)
     validationErrors.push(...energyConsistencyErrors(nutrients, true).filter(error => !validationErrors.includes(error)))
     if (context.fatPercentage != null && nutrients.fatPer100g != null
       && Math.abs(nutrients.fatPer100g - context.fatPercentage) > Math.max(1.5, context.fatPercentage * 0.25)) {
       validationErrors.push("fat percentage disagrees with explicit descriptor")
+    }
+    const macroOnlyErrors = validationErrors.filter(error => error !== "energy disagrees with macros")
+    if (macroOnlyErrors.length === 0 && validationErrors.includes("energy disagrees with macros")) {
+      nutrients.kcalPer100g = Math.round((
+        (nutrients.proteinPer100g ?? 0) * 4
+        + (nutrients.carbsPer100g ?? 0) * 4
+        + (nutrients.fatPer100g ?? 0) * 9
+        + (nutrients.fiberPer100g ?? 0) * 2
+      ) * 10) / 10
+      validationErrors = validateProfile(nutrients)
     }
     if (validationErrors.length === 0) {
       setCachedLlmNutrients(cacheKey, nutrients)

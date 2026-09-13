@@ -1,14 +1,14 @@
 import crypto from "node:crypto"
 import { config } from "../config.js"
 import type { MealieIngredient, MealieRecipe } from "../types.js"
-import { interpretIngredient, isKnownFoodIdentity, normalizeFoodText, NUTRITION_VERSION, type FoodState, type IngredientContext } from "./ingredient-context.js"
+import { interpretIngredient, isKnownFoodIdentity, normalizeFoodText, normalizeIngredientDescriptors, NUTRITION_VERSION, type FoodState, type IngredientContext } from "./ingredient-context.js"
 import { isKnownUnitName, normalizeUnitName } from "./unit-converter.js"
 import { genericCatalog, matchGenericFood } from "./generic-foods.js"
 import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache.js"
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v2-descriptors"
+export const INTERPRETATION_VERSION = "interpretation-v3-state-identity"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -37,7 +37,10 @@ function semanticText(text: string): string {
 function compatibleCanonicalIdentity(localName: string, classifiedName: string): boolean {
   const local = interpretIngredient({ food: { id: "", name: localName, pluralName: null, aliases: [] } }, [], false).canonicalName
   const classified = interpretIngredient({ food: { id: "", name: classifiedName, pluralName: null, aliases: [] } }, [], false).canonicalName
-  return local === classified
+  if (local === classified) return true
+  const localBase = normalizeIngredientDescriptors(localName).baseName
+  const classifiedBase = normalizeIngredientDescriptors(classifiedName).baseName
+  return normalizeFoodText(localBase) === normalizeFoodText(classifiedBase)
 }
 const pending = new Map<string, Promise<SemanticInterpretation | null>>()
 

@@ -16,7 +16,7 @@ export interface IngredientContext {
   fatPercentage?: number
   descriptorNotes?: string[]
 }
-export const NUTRITION_VERSION = "nutrition-v10-energy-consistency"
+export const NUTRITION_VERSION = "nutrition-v11-normalized-energy"
 
 export function normalizeFoodText(text: unknown): string {
   if (typeof text !== "string") return ""
