@@ -56,11 +56,12 @@ describe("real recipe reference calculations", () => {
     const result = await estimateRecipe(input)
     expect(result.totals?.kcal).toBe(365)
   })
-  it("rejects a coconut drink and falls back to full-fat coconut milk", async () => {
+  it("uses generic full-fat coconut milk before any coconut drink candidate", async () => {
     vi.mocked(fetch).mockResolvedValue(response([hit("coconut milk drink", 20)]))
     const result = await estimateRecipe(recipe([ingredient("Kokosmilch", 200, "ml")]))
     expect(result.matchedIngredients[0].source).toBe("generic")
     expect(result.totals?.kcal).toBe(394)
+    expect(fetch).not.toHaveBeenCalled()
   })
   it.each([[1, 393], [2, 786]])("calculates %d g salt as %d mg sodium without network", async (grams, sodium) => {
     const result = await estimateRecipe(recipe([ingredient("Salz", grams)]))
@@ -161,8 +162,10 @@ describe("candidate selection and caches", () => {
   })
   it("converts per-100ml oil data to a per-100g profile with known density", async () => {
     vi.mocked(fetch).mockResolvedValue(response([{ ...hit("olive oil", 795.6), nutrition_data_per: "100ml" }]))
-    const result = await estimateRecipe(recipe([ingredient("Olivenöl", 100, "ml")]))
-    expect(result.totals?.kcal).toBeCloseTo(795.6)
+    const result = await lookupNutrients("Olivenöl")
+    expect(result.matched).toBe(true)
+    expect(result.nutrients?.kcalPer100g).toBeCloseTo(884)
+    expect(fetch).toHaveBeenCalledOnce()
   })
 })
 
@@ -229,4 +232,61 @@ it("retains matched product provenance on cache hits", async () => {
   const cached = await lookupNutrients("Basmati-Reis")
   expect(cached.productName).toBe("Organic Basmati rice")
   expect(fetch).toHaveBeenCalledTimes(1)
+})
+
+describe("generic-first source priority", () => {
+  it.each([
+    ["Basmati-Reis", 100, 365],
+    ["Wachtelbohnen", 500, 1735],
+    ["Pintobohnen gekocht", 100, 143],
+    ["Kidneybohnen", 100, 337],
+    ["Kidneybohnen gekocht", 100, 127],
+    ["Kidneybohnen aus der Dose", 100, 81],
+    ["Kidneybohnen abgetropft", 100, 124],
+    ["Reis gekocht", 100, 130],
+    ["Olivenöl", 100, 884],
+    ["Sonnenblumenöl", 100, 884],
+    ["Butter", 100, 717],
+    ["Zwiebel", 100, 40],
+    ["Knoblauch", 100, 149],
+    ["Kokosmilch", 100, 197],
+  ])("uses the exact generic state profile for %s before any OFF request or cache", async (name, quantity, kcal) => {
+    // Even a plausible, previously accepted OFF profile must not override the reference.
+    const context = contextForName(name)
+    const generic = genericNutrients(context)!
+    cache.set(nutrientCacheKey("off", context), {
+      nutrients: { ...generic, kcalPer100g: generic.kcalPer100g! * 1.1 },
+      productName: name, confidence: "high",
+    })
+    vi.mocked(fetch).mockResolvedValue(response([hit(name, generic.kcalPer100g! * 1.1)]))
+    const result = await estimateRecipe(recipe([ingredient(name, quantity)]))
+    expect(result.matchedIngredients[0].source).toBe("generic")
+    expect(result.matchedIngredients[0].reason).toContain("preferred before OFF")
+    expect(result.totals?.kcal).toBe(kcal)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it("uses OFF for a specifically named branded packaged product", async () => {
+    const name = "ExampleBrand Basmati rice cooked"
+    vi.mocked(fetch).mockResolvedValue(response([
+      hit("Basmati rice dry", 365),
+      hit(name, 145, 0.3),
+    ]))
+    const result = await estimateRecipe(recipe([ingredient(name, 100)]))
+    expect(result.matchedIngredients[0].source).toBe("OFF")
+    expect(result.matchedIngredients[0].productName).toBe(name)
+    expect(result.matchedIngredients[0].context?.state).toBe("cooked")
+    expect(result.totals?.kcal).toBe(145)
+    expect(result.totals?.sodiumMg).toBe(300)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+
+  it("uses OFF when a generic food has no profile for the requested state", async () => {
+    vi.mocked(fetch).mockResolvedValue(response([hit("rice frozen", 140)]))
+    const result = await estimateRecipe(recipe([ingredient("Reis tiefgekühlt", 100)]))
+    expect(result.matchedIngredients[0].source).toBe("OFF")
+    expect(result.matchedIngredients[0].context?.state).toBe("frozen")
+    expect(result.totals?.kcal).toBe(140)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
 })

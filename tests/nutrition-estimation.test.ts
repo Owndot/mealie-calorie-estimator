@@ -78,8 +78,9 @@ describe("OFF identity validation and recipe fallback", () => {
   ])("accepts %s -> %s without LLM", async (food, product) => {
     const kcal = genericNutrients(contextForName(food))?.kcalPer100g ?? 10
     offResponse(product, kcal)
-    const result = await estimateRecipe(recipe(food))
-    expect(result.totalNutrients.kcalPer100g).toBe(kcal)
+    const result = await lookupNutrients(food)
+    expect(result.matched).toBe(true)
+    expect(result.nutrients?.kcalPer100g).toBe(kcal)
     expect(estimateNutrients).not.toHaveBeenCalled()
     expect(setCachedOffLookup).toHaveBeenCalledOnce()
   })

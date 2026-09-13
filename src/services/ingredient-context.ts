@@ -9,7 +9,7 @@ export interface IngredientContext {
   reason: string
   confidence: "high" | "medium" | "low"
 }
-export const NUTRITION_VERSION = "nutrition-v4-mg-state"
+export const NUTRITION_VERSION = "nutrition-v5-generic-first"
 
 export function normalizeFoodText(text: string): string {
   return text.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "")

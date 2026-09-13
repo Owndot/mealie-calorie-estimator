@@ -30,7 +30,7 @@ const MILK_NUTRIMENTS = {
 
 describe("lookupNutrients", () => {
   it("returns cached value without calling API", async () => {
-    setCachedOffLookup("nutrition-v4-mg-state:off:flour:unspecified", { productName: "flour", confidence: "high", nutrients: {
+    setCachedOffLookup("nutrition-v5-generic-first:off:flour:unspecified", { productName: "flour", confidence: "high", nutrients: {
       kcalPer100g: 364, proteinPer100g: 10, carbsPer100g: 76, fatPer100g: 1,
       saturatedFatPer100g: 0.2, transFatPer100g: 0, unsaturatedFatPer100g: 0.8,
       fiberPer100g: 2.7, sugarPer100g: 0.4, sodiumPer100g: 2, cholesterolPer100g: 0,

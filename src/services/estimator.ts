@@ -93,18 +93,16 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     if (context.canonicalName === "salt" && context.state === "unspecified") {
       nutrients = genericNutrients(context)
       source = "deterministic"
+    } else if ((nutrients = genericNutrients(context)) !== null) {
+      source = "generic"
+      confidence = "medium"
+      reason = "exact canonical identity and state; USDA reference preferred before OFF"
     } else {
       const off = await lookupNutrients(foodName, ing.unit?.name, context)
       nutrients = off.matched ? off.nutrients : null
       productName = off.productName
       confidence = off.confidence ?? "medium"
       reason = off.reason ?? "OFF lookup"
-      if (!nutrients) {
-        nutrients = genericNutrients(context)
-        source = "generic"
-        confidence = "medium"
-        reason += "; state-specific USDA reference fallback"
-      }
       if (!nutrients) {
         nutrients = await estimateNutrients(context.query, context)
         source = "LLM"

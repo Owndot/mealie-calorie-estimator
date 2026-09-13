@@ -26,9 +26,9 @@ The old mismatch is established from code. The exact reported 20,913 mg recipe v
 ## Source selection
 
 1. Recognized plain table salt uses deterministic composition: 39,300 mg sodium per 100 g salt, zero kcal/macros. It bypasses OFF and LLM entirely.
-2. OFF searches up to ten candidates. Candidate identity, preparation state, profile plausibility and available generic reference checks must pass before selection. Exact state matches rank above compatible unqualified names. The highest-scoring trustworthy candidate wins.
-3. If OFF fails, use a state-specific bundled USDA profile when available.
-4. Otherwise use LLM nutrition with explicit units, validation, and a JSON-null failure option. Ambiguous/conflicting state is not sent for speculative nutrition.
+2. A generic ingredient with an exact canonical identity/state profile uses the bundled USDA reference **before any OFF request or cache lookup**. This includes the documented basmati/long-grain-rice and red-onion/onion proxies. Organic labels and simple preparation terms can normalize to generic identities; brand names and unknown product qualifiers are not stripped to force a generic match.
+3. Specific branded/packaged names, and ingredients without a canonical profile for the requested state, use OFF first. OFF searches up to ten candidates. Candidate identity, preparation state, profile plausibility and available generic reference checks must pass before selection. Exact state matches rank above compatible unqualified names. The highest-scoring trustworthy candidate wins.
+4. If no reference profile exists and OFF fails, use LLM nutrition with explicit units, validation, and a JSON-null failure option. Ambiguous/conflicting state is not sent for speculative nutrition. A missing cooked/canned/drained profile is never filled using a dry profile.
 
 Confidence labels are qualitative, not calibrated probabilities. Deterministic salt is separate from a high/medium OFF match, a medium generic reference/proxy and a low-confidence LLM fallback. A successful OFF match still cannot guarantee product composition; branded titles not recognized as the same food are conservatively rejected. There is no fuzzy substring acceptance of ready meals, sauces, or drinks as their component ingredients.
 
