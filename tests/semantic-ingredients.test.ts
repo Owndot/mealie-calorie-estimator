@@ -428,6 +428,31 @@ describe("interpretation cache and confidence safety", () => {
       return !body.messages?.[0]?.content?.includes("Interpret a recipe ingredient")
     })).toBe(true)
   })
+  it.each([
+    ["Weizenmehl", "g", "500 g Weizenmehl Teichners Beste"],
+    ["Weizenmehl", "Gramm", "500 Gramm Weizenmehl"],
+    ["Mehl", "g", "500 g Mehl"],
+    ["Weizenmehl", "gram", "501 gram Weizenmehl"],
+  ])("resolves exact Mealie flour payload %s/%s without classification", async (name, unitName, display) => {
+    const input = ingredient(name)
+    input.quantity = Number(display.match(/^\d+/)?.[0] ?? 500)
+    input.unit = {
+      id: `unit-${unitName}`, name: unitName, pluralName: null,
+      abbreviation: unitName === "g" ? "g" : null, standardQuantity: null, standardUnit: null,
+    }
+    input.display = display
+    input.originalText = display
+    input.original_text = display
+    input.title = display
+    const result = await estimateRecipe(recipe(input))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 1 })
+    expect(result.matchedIngredients[0]).toMatchObject({
+      source: "generic", grams: input.quantity,
+      context: { canonicalName: "flour", state: "unspecified", brand: null, interpretationSource: "deterministic" },
+    })
+    expect(result.matchedIngredients[0].nutrients?.kcalPer100g).toBe(364)
+    expect(fetch).not.toHaveBeenCalled()
+  })
   it("does not accept a brand inferred only from display metadata", async () => {
     vi.mocked(fetch).mockResolvedValue(response(interpretation("flour", "unspecified", {
       category: "other", generic: false, brand: "Teichners Beste",

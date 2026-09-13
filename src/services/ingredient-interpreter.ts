@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v6-local-resolution"
+export const INTERPRETATION_VERSION = "interpretation-v7-production-detail-routing"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -74,6 +74,9 @@ function hasUnresolvedIngredientDetails(
   ingredient: MealieIngredient,
   context: IngredientContext,
 ): boolean {
+  // Mealie's display/original-text fields are parser projections and may contain
+  // recipe headings, source text, or other metadata. They still feed descriptor
+  // extraction, but arbitrary residual text must not veto a unique local identity.
   const fields = [ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
   const canonicalDetails = new Set([context.canonicalName, context.originalName].map(normalizeFoodText))
@@ -95,7 +98,10 @@ function hasUnresolvedIngredientDetails(
     const interpreted = interpretIngredient({
       food: { id: "", name: residual, pluralName: null, aliases: [] },
     }, [], false)
-    return interpreted.canonicalName !== context.canonicalName
+    if (interpreted.canonicalName === context.canonicalName) return false
+    // Keep explicit preparation/qualification markers conservative; unrelated
+    // source or product text is not enough to force semantic classification.
+    return /\b(?:preparation|zubereitung|qualifier|qualifieren|zustand|state)\b/.test(residual)
   })
 }
 
@@ -148,7 +154,21 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const deterministicIdentity = ["salt", "water"].includes(context.canonicalName) && context.state === "unspecified"
   const localProfileIdentity = exact?.confidence === 1 && !brandHint && !unresolvedDetails
     && !requiresPreservationSemantics && !context.fatPercentage
-  if (deterministicIdentity || localProfileIdentity || canResolveLocally(context, exact, brandHint, unresolvedDetails, requiresPreservationSemantics)) {
+  const localResolution = deterministicIdentity || localProfileIdentity
+    || canResolveLocally(context, exact, brandHint, unresolvedDetails, requiresPreservationSemantics)
+  logger.debug({
+    originalName: context.originalName,
+    canonicalName: context.canonicalName,
+    state: context.state,
+    descriptorNotes,
+    brandHint,
+    unresolvedDetails,
+    requiresPreservationSemantics,
+    localProfile: exact ? { name: exact.name, state: exact.state, confidence: exact.confidence, profileId: exact.entry.fdcId } : null,
+    localResolution,
+    classificationRequired: !localResolution && Boolean(config.llm.enabled && config.llm.apiKey),
+  }, "Ingredient routing decision")
+  if (localResolution) {
     const interpreted = { ...context, canonicalName: exact?.name === "rice" && context.canonicalName === "basmati rice" ? "basmati rice" : exact?.name ?? context.canonicalName,
       state: exact?.state ?? context.state, query: [context.canonicalName, context.state === "unspecified" ? "" : context.state].filter(Boolean).join(" "),
       category: exact?.entry.category ?? "other", generic: true, brand: null,
