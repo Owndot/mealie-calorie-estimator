@@ -52,10 +52,13 @@ export function matchGenericFood(context: IngredientContext, allowDefault = fals
   const state = name === "coconut milk" && context.state === "canned" ? "unspecified" : context.state
   const candidates = genericCatalog.flatMap(item => {
     const confidence = Math.max(...[item.name, ...item.entry.synonyms].map(value => nameScore(name, value)))
+    const hasFreshHerbVariant = genericCatalog.some(candidate =>
+      candidate.name === item.name && candidate.state === "fresh" && candidate.entry.category === "herb")
     const defaultState = allowDefault && state === "unspecified" && (
       (["vegetable", "fruit", "nut_seed"].includes(item.entry.category) && item.state === "raw")
       || (["grain", "legume"].includes(item.entry.category) && item.state === "dry")
-      || (item.entry.category === "herb" && item.state === "fresh"))
+      || (item.entry.category === "herb" && item.state === "fresh")
+      || (item.entry.category === "spice" && item.state === "dry" && !hasFreshHerbVariant))
     return confidence >= 0.9 && (stateCompatible(state, item.state, item.entry.category) || defaultState)
       ? [{ ...item, confidence }] : []
   }).sort((a, b) => b.confidence - a.confidence)
@@ -70,7 +73,7 @@ export function genericNutrients(context: IngredientContext): NutrientSet | null
   if ((context.descriptorNotes ?? []).some(note => ["in oil", "in brine", "pickled"].includes(note))) return null
   if (context.canonicalName === "salt" && context.state === "unspecified") return { ...SALT }
   if (context.canonicalName === "water" && context.state === "unspecified") return { ...WATER }
-  const entry = genericEntry(context)
+  const entry = matchGenericFood(context, true)?.entry
   return entry ? { ...entry.nutrients } : null
 }
 

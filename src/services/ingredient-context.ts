@@ -17,7 +17,7 @@ export interface IngredientContext {
   descriptorNotes?: string[]
   genericComposite?: boolean
 }
-export const NUTRITION_VERSION = "nutrition-v13-generic-composites"
+export const NUTRITION_VERSION = "nutrition-v14-routing-precedence"
 
 export function normalizeFoodText(text: unknown): string {
   if (typeof text !== "string") return ""
@@ -46,7 +46,9 @@ const groups: Record<string, string[]> = {
   tomato: ["Tomate", "Tomaten", "tomatoes"], "tomato paste": ["Tomatenmark"],
   ginger: ["Ingwer"], eggplant: ["Aubergine", "Auberginen", "eggplants"],
   potato: ["Kartoffel", "Kartoffeln", "potatoes"], carrot: ["Karotte", "Karotten", "Möhre", "Möhren", "carrots"],
-  flour: ["Mehl", "Weizenmehl", "wheat flour"], cumin: ["Kreuzkümmel", "cumin seed"],
+  flour: ["Mehl", "Weizenmehl", "wheat flour"], sugar: ["Zucker", "sugar"],
+  basil: ["Basilikum", "basil"], oregano: ["Oregano", "oregano"],
+  cumin: ["Kreuzkümmel", "cumin seed"],
   "curry powder": ["Currypulver"], pepper: ["Pfeffer", "schwarzer Pfeffer", "black pepper"],
   thyme: ["Thymian"], parsley: ["Petersilie"], coriander: ["Koriander"],
   "coriander leaves": ["Korianderblätter", "cilantro", "coriander leaf"],

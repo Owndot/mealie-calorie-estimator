@@ -281,6 +281,46 @@ describe("interpretation cache and confidence safety", () => {
     await estimateRecipe(recipe(ingredient("Basmati-Reis")))
     expect(fetch).not.toHaveBeenCalled()
   })
+  it.each([
+    ["1 TL Salz", "teaspoon", 6],
+    ["1 Prise Salz", "pinch", 0.25],
+  ])("%s uses authoritative deterministic salt handling without classification", async (name, unit, grams) => {
+    const input = ingredient("Salz")
+    input.quantity = 1
+    input.unit!.name = unit
+    input.display = name
+    const result = await estimateRecipe(recipe(input))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [] })
+    expect(result.matchedIngredients[0]).toMatchObject({
+      source: "deterministic",
+      grams,
+      context: { canonicalName: "salt", interpretationSource: "deterministic" },
+    })
+    expect(result.matchedIngredients[0].nutrients?.sodiumPer100g).toBe(39300)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it.each([
+    ["Zucker", "sugar", "unspecified"],
+    ["Basilikum", "basil", "fresh"],
+    ["getrocknetes Basilikum", "basil", "dry"],
+    ["Oregano", "oregano", "dry"],
+  ])("%s resolves locally to the trusted %s profile without classification", async (name, canonicalName, state) => {
+    const result = await estimateRecipe(recipe(ingredient(name)))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [] })
+    expect(result.matchedIngredients[0]).toMatchObject({
+      source: "generic",
+      context: { canonicalName, state, interpretationSource: "deterministic" },
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it("does not accept a generic-composite classifier label for a simple food", async () => {
+    vi.mocked(fetch).mockResolvedValue(response({
+      canonicalFood: "salt", state: "unspecified", category: "spice", generic: true, brand: null,
+      confidence: 0.96, identityType: "generic-composite",
+    }))
+    const result = await interpretSemanticIngredient(ingredient("unknown salt"))
+    expect(result?.genericComposite).not.toBe(true)
+  })
 })
 
 describe("generic retrieval and source boundaries", () => {

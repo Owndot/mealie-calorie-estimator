@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v4-generic-composites"
+export const INTERPRETATION_VERSION = "interpretation-v5-routing-precedence"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -180,8 +180,9 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   if (parsed.brand && !normalizeFoodText(JSON.stringify(input)).includes(normalizeFoodText(parsed.brand))) return null
   const canonicalName = interpretIngredient({ food: { id: "", name: parsed.canonicalFood, pluralName: null, aliases: [] } }, [], false).canonicalName
   const effectiveState = explicitState && classifierStateIsUncertain ? context.state : parsed.state
-  const parsedComposite = parsed.identityType === "generic-composite"
-  const inferredComposite = parsed.identityType === "unknown" && genericCompositeCategory(context.originalName) !== null
+  const compositeCategory = genericCompositeCategory(context.originalName)
+  const parsedComposite = parsed.identityType === "generic-composite" && compositeCategory !== null
+  const inferredComposite = parsed.identityType === "unknown" && compositeCategory !== null
   const nutritionQualifiers = [
     /\b(light|low fat|reduced fat|fettarm\w*|fettreduziert\w*)\b/,
     /\b(low sodium|natriumarm\w*)\b/,
