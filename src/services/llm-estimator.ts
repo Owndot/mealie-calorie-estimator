@@ -1,6 +1,6 @@
 import { contextForName, nutrientCacheKey, type IngredientContext } from "./ingredient-context.js"
 import { convertToGrams, normalizeUnitName } from "./unit-converter.js"
-import { validateProfile } from "./nutrition-validation.js"
+import { energyConsistencyErrors, validateProfile } from "./nutrition-validation.js"
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
 import { getCachedLlmEstimate, setCachedLlmEstimate, getCachedLlmNutrients, setCachedLlmNutrients } from "../utils/cache.js"
@@ -88,7 +88,7 @@ function nutrientNumber(value: unknown): number | null {
   return Number.isFinite(number) && number >= 0 ? number : null
 }
 
-export async function estimateNutrients(foodName: string, suppliedContext?: IngredientContext): Promise<NutrientSet | null> {
+export async function estimateNutrients(foodName: string, suppliedContext?: IngredientContext, allowRetry = true): Promise<NutrientSet | null> {
   if (!config.llm.enabled || !config.llm.apiKey) return null
 
   const context = suppliedContext ?? contextForName(foodName)
@@ -102,7 +102,7 @@ export async function estimateNutrients(foodName: string, suppliedContext?: Ingr
   }
 
   const fatConstraint = context.fatPercentage != null ? ` The ingredient explicitly states ${context.fatPercentage}% fat; returned fat must be close to ${context.fatPercentage} g per 100 g (allowing normal label rounding).` : ""
-  const prompt = `Estimate nutrition for 100 g of the edible ingredient: ${JSON.stringify(foodName)}.${fatConstraint} Respect dry/raw, cooked, canned, drained, frozen and fresh state explicitly specified; do not substitute cooked values for dry staples. Use typical edible-form values, not serving values. Return ONLY a valid JSON object with keys kcal, protein, carbs, fat, saturatedFat, transFat, fiber, sugar, sodium, cholesterol. Units: kcal = kcal per 100 g; protein, carbs, fat, saturatedFat, transFat, fiber, sugar = grams per 100 g; sodium and cholesterol = milligrams (mg) per 100 g. Carbs means available carbohydrate excluding fiber. Each value must be a finite non-negative JSON number, or null if unknown. Return JSON null if the food/state is ambiguous or confidence is low. Do not invent values. No markdown or explanation.`
+  const prompt = `Estimate nutrition for 100 g of the edible ingredient: ${JSON.stringify(foodName)}.${fatConstraint}${allowRetry ? "" : " Correct the previous estimate: ensure kcal is consistent with protein*4 + available carbs*4 + fat*9, with fiber contributing approximately 2 kcal/g, and keep all values mutually plausible."} Respect dry/raw, cooked, canned, drained, frozen and fresh state explicitly specified; do not substitute cooked values for dry staples. Use typical edible-form values, not serving values. Return ONLY a valid JSON object with keys kcal, protein, carbs, fat, saturatedFat, transFat, fiber, sugar, sodium, cholesterol. Units: kcal = kcal per 100 g; protein, carbs, fat, saturatedFat, transFat, fiber, sugar = grams per 100 g; sodium and cholesterol = milligrams (mg) per 100 g. Carbs means available carbohydrate excluding fiber. Each value must be a finite non-negative JSON number, or null if unknown. Return JSON null if the food/state is ambiguous or confidence is low. Do not invent values. No markdown or explanation.`
 
   try {
     await waitForRateLimit(RateLimitType.Llm)
@@ -162,6 +162,7 @@ export async function estimateNutrients(foodName: string, suppliedContext?: Ingr
     }
 
     const validationErrors = validateProfile(nutrients)
+    validationErrors.push(...energyConsistencyErrors(nutrients, true).filter(error => !validationErrors.includes(error)))
     if (context.fatPercentage != null && nutrients.fatPer100g != null
       && Math.abs(nutrients.fatPer100g - context.fatPercentage) > Math.max(1.5, context.fatPercentage * 0.25)) {
       validationErrors.push("fat percentage disagrees with explicit descriptor")
@@ -172,6 +173,12 @@ export async function estimateNutrients(foodName: string, suppliedContext?: Ingr
       return nutrients
     }
 
+    const retryableEnergyIssue = validationErrors.includes("energy disagrees with macros")
+      || validationErrors.includes("fat percentage disagrees with explicit descriptor")
+    if (allowRetry && retryableEnergyIssue) {
+      logger.debug({ foodName, validationErrors }, "Retrying rejected LLM nutrient profile once")
+      return estimateNutrients(foodName, context, false)
+    }
     logger.warn({ foodName, validationErrors }, "Rejecting implausible LLM nutrient profile")
     return null
   } catch (err) {

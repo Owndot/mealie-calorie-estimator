@@ -175,6 +175,24 @@ describe("estimateNutrients", () => {
     expect(await estimateNutrients("Kochsahne 7%", contextForName("Kochsahne 7%"))).toBeNull()
     const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
     expect(body.messages[0].content).toContain("7% fat")
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("rejects materially inconsistent LLM energy and retries once", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 120, protein: 2, carbs: 4, fat: 7, fiber: 0 }) } }] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 87, protein: 2, carbs: 4, fat: 7, fiber: 0 }) } }] }) }))
+    const { estimateNutrients } = await import("../src/services/llm-estimator.js")
+    const result = await estimateNutrients("Kochsahne 7%", contextForName("Kochsahne 7%"))
+    expect(result?.kcalPer100g).toBe(87)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    const retryPrompt = JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string).messages[0].content
+    expect(retryPrompt).toContain("ensure kcal is consistent")
+  })
+  it("accepts high-fiber energy represented above macro 4/4/9", async () => {
+    const result = await respond({ kcal: 325, protein: 14.29, carbs: 2.63, fat: 14.01, fiber: 53.2, sugar: 2.76 })
+    expect(result).not.toBeNull()
   })
 })
 

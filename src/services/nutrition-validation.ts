@@ -1,5 +1,15 @@
 import type { NutrientSet } from "../types.js"
 
+export function energyConsistencyErrors(n: NutrientSet, strict = false): string[] {
+  if (n.kcalPer100g == null || n.proteinPer100g == null || n.carbsPer100g == null || n.fatPer100g == null) return []
+  const macroEnergy = n.proteinPer100g * 4 + n.carbsPer100g * 4 + n.fatPer100g * 9
+  const fiberEnergy = (n.fiberPer100g ?? 0) * 2
+  const tolerance = strict ? Math.max(20, macroEnergy * 0.2) : Math.max(100, macroEnergy * 0.4)
+  const lower = macroEnergy - tolerance
+  const upper = macroEnergy + fiberEnergy + tolerance
+  return n.kcalPer100g < lower || n.kcalPer100g > upper ? ["energy disagrees with macros"] : []
+}
+
 /** Bounds describe 100 g of food, not dietary targets. Includes salt, spices and organ meats. */
 export function validateProfile(n: NutrientSet): string[] {
   const reasons: string[] = []
@@ -13,12 +23,7 @@ export function validateProfile(n: NutrientSet): string[] {
   if (n.carbsPer100g != null && (n.sugarPer100g ?? 0) > n.carbsPer100g + 2) reasons.push("sugar exceeds carbohydrates")
   if ((n.carbsPer100g ?? 0) + (n.fiberPer100g ?? 0) > 105) reasons.push("carbohydrate and fiber exceed food mass")
   if ((n.proteinPer100g ?? 0) + (n.carbsPer100g ?? 0) + (n.fatPer100g ?? 0) > 105) reasons.push("macros exceed food mass")
-  if (n.kcalPer100g != null && n.proteinPer100g != null && n.carbsPer100g != null && n.fatPer100g != null) {
-    const energy = n.proteinPer100g * 4 + n.carbsPer100g * 4 + n.fatPer100g * 9 + (n.fiberPer100g ?? 0) * 2
-    // Wide allowance for fiber, alcohol, food-specific Atwater factors and label rounding.
-    if (Math.abs(n.kcalPer100g - energy) > Math.max(100, energy * 0.4)) reasons.push("energy disagrees with macros")
-  }
-  return reasons
+  return reasons.concat(energyConsistencyErrors(n))
 }
 
 import type { NutrientAmounts } from "./nutrient-amounts.js"

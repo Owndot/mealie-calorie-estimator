@@ -99,7 +99,7 @@ To regenerate, download the archive above and run `python3 scripts/import-usda.p
 
 ## Plausibility, caching and logging
 
-Profiles reject negative/non-finite values, impossible mass/energy bounds, absurd sodium/cholesterol, fat fractions exceeding total fat, clearly inconsistent sugar/carbohydrate or macro mass, and gross energy/macronutrient disagreement. Fiber energy, food-specific Atwater factors, alcohol and rounding receive broad tolerance; this is error detection rather than laboratory validation. Salt's 39.3% sodium is intentionally permitted.
+Profiles reject negative/non-finite values, impossible mass/energy bounds, absurd sodium/cholesterol, fat fractions exceeding total fat, clearly inconsistent sugar/carbohydrate or macro mass, and gross energy/macronutrient disagreement. Energy checks use protein*4 + available carbohydrate*4 + fat*9, with fiber allowed separately at approximately 2 kcal/g; LLM fallback profiles use a tighter tolerance and receive one corrective retry when rejected. Fiber energy, food-specific Atwater factors, alcohol and rounding receive reasonable tolerance; this is error detection rather than laboratory validation. Salt's 39.3% sodium is intentionally permitted.
 
 Recipe warnings flag more than 3000 kcal or 5000 mg sodium per serving, invalid inputs, partial estimates, serving conflicts and gross calorie/macronutrient disagreement. Warning-level values may be legitimate for a large batch or condiment, so they are not automatically discarded. Patch fields with clearly extreme/non-finite/negative values are omitted with a warning (hard ceilings: 10,000 kcal, 40,000 mg sodium, 10,000 mg cholesterol or 2,000 g of an individual macro per serving). Omitting a field does not erase an existing value in Mealie.
 
