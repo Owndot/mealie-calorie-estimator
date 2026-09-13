@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v9-independent-nutrient-routing"
+export const INTERPRETATION_VERSION = "interpretation-v10-structured-fallback"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]

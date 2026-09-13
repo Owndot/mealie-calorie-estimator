@@ -87,7 +87,7 @@ describe("interpretation cache and confidence safety", () => {
     const result = await estimateRecipe(input)
     expect(result.partial).toBe(true)
     expect(buildNutritionPatch(result, "hash", input.recipeYield, null).nutrition).toEqual({})
-    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(fetch).toHaveBeenCalledTimes(3)
     expect(validateInterpretation(value)).toBe(false)
   })
   it("retries malformed classification once and accepts the valid result", async () => {
@@ -468,6 +468,9 @@ describe("interpretation cache and confidence safety", () => {
       vi.mocked(fetch).mockImplementation(async (_url, options) => {
         const body = JSON.parse(options?.body as string)
         if (body.messages?.[0]?.role === "system") return new Response("null", { status: 200 })
+        if (String(body.messages?.[0]?.content).includes("Estimate the weight")) {
+          return new Response(JSON.stringify({ choices: [{ message: { content: "150" } }] }), { status: 200 })
+        }
         return response({ kcal: 120, protein: 5, carbs: 8, fat: 6, fiber: 1, sugar: 2, sodium: 300, cholesterol: 20 })
       })
       const input = ingredient(name)
@@ -561,6 +564,25 @@ describe("interpretation cache and confidence safety", () => {
     expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 3 })
     expect(result.matchedIngredients.every(item => item.matched && item.llmEstimated)).toBe(true)
     expect(result.matchedIngredients.every(item => item.context?.interpretationSource === "unresolved")).toBe(true)
+  })
+  it("uses structured quantity and unit when Mealie text projections omit the amount", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options?.body as string)
+      if (body.messages?.[0]?.role === "system") return new Response("null", { status: 200 })
+      if (String(body.messages?.[0]?.content).includes("Estimate the weight")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: "150" } }] }), { status: 200 })
+      }
+      return response({ kcal: 120, protein: 5, carbs: 8, fat: 6, fiber: 1, sugar: 2, sodium: 300, cholesterol: 20 })
+    })
+    const input = ingredient("griechischer Joghurt")
+    input.quantity = 0.5
+    input.unit = { id: "cup", name: "Tasse", pluralName: null, abbreviation: null, standardQuantity: null, standardUnit: null }
+    input.display = "griechischer Joghurt"
+    input.originalText = null
+    input.original_text = null
+    const result = await estimateRecipe(recipe(input))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 1 })
+    expect(result.matchedIngredients[0]).toMatchObject({ matched: true, source: "LLM", llmEstimated: true })
   })
   it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
     "still classifies locally unresolved %s",

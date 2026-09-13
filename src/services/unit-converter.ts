@@ -4,7 +4,7 @@ import type { IngredientContext } from "./ingredient-context.js"
 import type { MealieUnit } from "../types.js"
 
 const UNIT_ALIASES: Record<string, string[]> = {
-  cup: ["cups"],
+  cup: ["cups", "tasse", "tassen"],
   tablespoon: ["tablespoons", "tbsp", "el", "essl", "essloeffel"],
   teaspoon: ["teaspoons", "tsp", "tl", "teel", "teeloeffel"],
   milliliter: ["milliliters", "millilitre", "millilitres", "ml"],

@@ -6,19 +6,13 @@ import { recipeWarnings, sanitizeNutritionPatch, validateCompleteProfile, valida
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
-  NutrientSet, MealieNutrition, MealieIngredient,
+  NutrientSet, MealieNutrition,
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams, hasImpossibleVolumeStandard, resolveUnitName } from "./unit-converter.js"
 import { lookupNutrients } from "./off-client.js"
 import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
-
-function hasProductionQuantityProjection(ingredient: MealieIngredient): boolean {
-  return [ingredient.display, ingredient.originalText, ingredient.original_text]
-    .filter((value): value is string => typeof value === "string")
-    .some(value => /^\s*\d+(?:[.,]\d+)?\s+\S+/.test(value))
-}
 
 export function computeIngredientHash(recipe: MealieRecipe): string {
   // Hash only inputs read by the estimator, never API metadata or our own output.
@@ -107,9 +101,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       continue
     }
     const interpretedContext = await interpretSemanticIngredient(ing, recipe.recipeInstructions)
-    const context = interpretedContext ?? (hasProductionQuantityProjection(ing)
-      ? buildUnresolvedFoodContext(interpretIngredient(ing, recipe.recipeInstructions))
-      : null)
+    const context = interpretedContext ?? buildUnresolvedFoodContext(interpretIngredient(ing, recipe.recipeInstructions))
     logger.debug({
       originalName: foodName,
       interpretationStatus: interpretedContext ? "resolved" : context ? "safe-unresolved" : "rejected",
