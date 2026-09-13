@@ -37,11 +37,15 @@ function nameScore(a: string, b: string): number {
   return left.every((word, i) => word === right[i] || (Math.min(word.length, right[i].length) >= 6 && editDistance(word, right[i]) <= 1)) ? 0.9 : 0
 }
 function stateCompatible(requested: FoodState, actual: FoodState, category: string): boolean {
-  return requested === actual || (["raw", "fresh"].includes(requested) && ["raw", "fresh"].includes(actual)
-    && ["vegetable", "fruit", "herb"].includes(category))
+  if (requested === actual) return true
+  if (requested === "unspecified") return false
+  const freshLike = ["raw", "fresh"]
+  if (freshLike.includes(requested) && freshLike.includes(actual)
+    && ["vegetable", "fruit", "herb", "nut_seed"].includes(category)) return true
+  return false
 }
 export function matchGenericFood(context: IngredientContext, allowDefault = false): GenericMatch | null {
-  if (context.generic === false || context.brand || context.state === "ambiguous") return null
+  if (context.brand || context.state === "ambiguous") return null
   let name = context.canonicalName
   if (name === "basmati rice") name = "rice" // Long-grain white rice proxy.
   if (name === "red onion") name = "onion"
@@ -62,7 +66,7 @@ export function genericEntry(context: IngredientContext): GenericEntry | undefin
   return matchGenericFood(context)?.entry
 }
 export function genericNutrients(context: IngredientContext): NutrientSet | null {
-  if (context.generic === false || context.brand) return null
+  if (context.brand) return null
   if (context.canonicalName === "salt" && context.state === "unspecified") return { ...SALT }
   if (context.canonicalName === "water" && context.state === "unspecified") return { ...WATER }
   const entry = genericEntry(context)

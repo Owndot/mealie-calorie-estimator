@@ -14,7 +14,7 @@ export interface IngredientContext {
   reason: string
   confidence: "high" | "medium" | "low"
 }
-export const NUTRITION_VERSION = "nutrition-v7-semantic"
+export const NUTRITION_VERSION = "nutrition-v8-semantic"
 
 export function normalizeFoodText(text: string): string {
   return text.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "")

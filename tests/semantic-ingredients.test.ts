@@ -4,7 +4,7 @@ import { config } from "../src/config.js"
 import { initCache, clearLlmCache } from "../src/utils/cache.js"
 import { interpretSemanticIngredient, validateInterpretation } from "../src/services/ingredient-interpreter.js"
 import { contextForName } from "../src/services/ingredient-context.js"
-import { genericCatalog, matchGenericFood } from "../src/services/generic-foods.js"
+import { genericCatalog, genericNutrients, matchGenericFood } from "../src/services/generic-foods.js"
 import { validateProfile } from "../src/services/nutrition-validation.js"
 import { estimateRecipe, buildNutritionPatch } from "../src/services/estimator.js"
 import type { MealieIngredient, MealieRecipe } from "../src/types.js"
@@ -125,6 +125,16 @@ describe("generic retrieval and source boundaries", () => {
     expect(new Set(ids).size).toBe(4)
     expect(ids).not.toContain(undefined)
     expect(matchGenericFood({ ...contextForName("chickpeas"), state: "frozen" })).toBeNull()
+  })
+  it.each([
+    ["ginger", "fresh", "vegetable", "169231"],
+    ["coriander seeds", "unspecified", "spice", "170922"],
+    ["cumin", "unspecified", "spice", "170923"],
+    ["turmeric", "unspecified", "spice", "172231"],
+  ])("treats generic=false as advisory for a trusted local %s profile", (canonicalName, state, category, profileId) => {
+    const context = { ...contextForName(canonicalName), state: state as "fresh" | "unspecified", generic: false, brand: null, category }
+    expect(matchGenericFood(context)?.entry.fdcId).toBe(profileId)
+    expect(genericNutrients(context)?.kcalPer100g).toBeGreaterThan(0)
   })
   it("uses OFF for a classified branded packaged product", async () => {
     vi.mocked(fetch).mockImplementation(async url => String(url).includes("/search?")
