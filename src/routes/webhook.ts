@@ -39,6 +39,13 @@ async function processWebhook(slug: string): Promise<void> {
     const hash = computeIngredientHash(recipe)
     const existingHash = recipe.extras?.calorie_estimator_hash
 
+    const status = recipe.extras?.calorie_estimator_nutrition_status
+    if ((status === "partial-withheld" || status === "partial-written")
+      && recipe.extras?.calorie_estimator_attempt_hash === hash) {
+      logger.info({ slug, hash, status }, "Partial estimate already attempted for unchanged recipe; skipping")
+      return
+    }
+
     if (existingHash === hash) {
       if (tagsAreComplete(recipe)) {
         logger.info({ slug }, "Tags up to date, skipping")

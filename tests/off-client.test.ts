@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
 import { lookupNutrients } from "../src/services/off-client.js"
 import { initCache, setCachedOffLookup } from "../src/utils/cache.js"
+import { contextForName, nutrientCacheKey } from "../src/services/ingredient-context.js"
 import { config } from "../src/config.js"
 
 beforeAll(async () => {
@@ -30,7 +31,7 @@ const MILK_NUTRIMENTS = {
 
 describe("lookupNutrients", () => {
   it("returns cached value without calling API", async () => {
-    setCachedOffLookup("nutrition-v5-generic-first:off:flour:unspecified", { productName: "flour", confidence: "high", nutrients: {
+    setCachedOffLookup(nutrientCacheKey("off", contextForName("flour")), { productName: "flour", confidence: "high", nutrients: {
       kcalPer100g: 364, proteinPer100g: 10, carbsPer100g: 76, fatPer100g: 1,
       saturatedFatPer100g: 0.2, transFatPer100g: 0, unsaturatedFatPer100g: 0.8,
       fiberPer100g: 2.7, sugarPer100g: 0.4, sodiumPer100g: 2, cholesterolPer100g: 0,

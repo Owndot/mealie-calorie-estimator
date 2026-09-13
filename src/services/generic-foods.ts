@@ -9,6 +9,9 @@ const SALT: NutrientSet = {
   saturatedFatPer100g: 0, transFatPer100g: 0, unsaturatedFatPer100g: 0,
   fiberPer100g: 0, sugarPer100g: 0, sodiumPer100g: 39300, cholesterolPer100g: 0,
 }
+// Plain water: zero energy/macros; sodium defaults to zero when mineral content is unknown.
+// Branded/mineral/flavoured waters retain their own database/LLM lookup path.
+const WATER: NutrientSet = { ...SALT, sodiumPer100g: 0 }
 export function genericEntry(context: IngredientContext): GenericEntry | undefined {
   let name = context.canonicalName
   if (name === "basmati rice") name = "rice" // Explicit long-grain white rice proxy.
@@ -19,6 +22,7 @@ export function genericEntry(context: IngredientContext): GenericEntry | undefin
 }
 export function genericNutrients(context: IngredientContext): NutrientSet | null {
   if (context.canonicalName === "salt" && context.state === "unspecified") return { ...SALT }
+  if (context.canonicalName === "water" && context.state === "unspecified") return { ...WATER }
   const entry = genericEntry(context)
   return entry ? { ...entry.nutrients } : null
 }

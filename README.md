@@ -186,3 +186,5 @@ npm run build
 See [nutrition units, source data and preparation handling](docs/nutrition.md) for the sodium/cholesterol milligram contract, German aliases, dry/cooked/canned inference, generic-first USDA source priority, density conversions, validation limits and cache invalidation. `PINCH_GRAMS` is optional and defaults to `0.25` g. Existing configurations continue to work; state-specific caches and versioned recipe hashes bypass earlier mixed-unit estimates.
 
 `PARTIAL_ESTIMATE_POLICY=withhold` (default) preserves existing nutrition and tags when any ingredient cannot be estimated, and records partial status in extras. The optional `fill-empty` policy permits partial nutrition only when every existing nutrition field is empty; it never overwrites an existing value. See [partial-estimate safety](docs/nutrition.md#partial-estimate-write-safety).
+
+Partial webhooks are idempotent: an unchanged `calorie_estimator_attempt_hash` with `partial-withheld` or `partial-written` status skips lookup and patching. Edit estimator inputs or invoke `/estimate` or `/backfill` explicitly to retry. See [nutrition behavior](docs/nutrition.md#partial-webhook-idempotency).

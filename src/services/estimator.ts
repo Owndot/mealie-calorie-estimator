@@ -14,21 +14,27 @@ import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
 
 export function computeIngredientHash(recipe: MealieRecipe): string {
-  const parts: string[] = [NUTRITION_VERSION, "partial-safety-v1", `partial-policy:${config.estimate.partialPolicy}`, `pinch:${config.units.pinchGrams}`]
-
-  for (const ing of recipe.recipeIngredient) {
-    const qty = ing.quantity ?? 0
-    const unitName = ing.unit?.name ?? ""
-    const foodName = ing.food?.name ?? ""
-    parts.push(JSON.stringify([qty, unitName, foodName, ing.unit, ing.note, ing.originalText, ing.original_text, ing.display]))
-  }
-
-  parts.sort()
-  parts.push(JSON.stringify(recipe.recipeInstructions ?? []))
-  parts.push(`yield:${recipe.recipeYield ?? ""}`)
-  parts.push(`servings:${recipe.recipeServings ?? ""}`)
-  const hash = crypto.createHash("sha256").update(parts.join(",")).digest("hex")
-  return hash
+  // Hash only inputs read by the estimator, never API metadata or our own output.
+  // Project into fixed-order arrays so JSON object key order cannot cause retries.
+  const instructions = recipe.recipeInstructions ?? []
+  const ingredients = recipe.recipeIngredient.map(ing => JSON.stringify([
+    ing.quantity ?? null, ing.food?.name ?? "",
+    ing.unit?.name ?? "", ing.unit?.abbreviation ?? "",
+    ing.unit?.standardQuantity ?? null, ing.unit?.standardUnit ?? "",
+    ing.note ?? "", ing.originalText ?? "", ing.original_text ?? "", ing.display ?? "", ing.title ?? "",
+    instructions.filter(step => typeof step !== "string" && ing.referenceId
+      && step.ingredientReferences?.some(ref => ref.referenceId === ing.referenceId))
+      .map(step => typeof step === "string" ? step : step.text).sort(),
+  ])).sort()
+  const input = [
+    NUTRITION_VERSION, "input-hash-v2-partial-webhook",
+    config.estimate.partialPolicy, config.units.pinchGrams,
+    config.openFoodFacts.language, config.openFoodFacts.baseUrl, config.openFoodFacts.searchBaseUrl,
+    config.llm.enabled, config.llm.model, config.llm.baseUrl, config.llm.endpointUrl,
+    ingredients, instructions.map(step => typeof step === "string" ? step : step.text),
+    recipe.recipeYield ?? "", recipe.recipeServings ?? null,
+  ]
+  return crypto.createHash("sha256").update(JSON.stringify(input)).digest("hex")
 }
 
 export function shouldEstimate(recipe: MealieRecipe): boolean {
@@ -97,9 +103,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     let productName: string | null = null
     let confidence = "high"
     let reason = "table salt mass calculation"
-    if (context.canonicalName === "salt" && context.state === "unspecified") {
+    if (["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") {
       nutrients = genericNutrients(context)
       source = "deterministic"
+      reason = context.canonicalName === "water" ? "plain water zero-nutrient default" : reason
     } else if ((nutrients = genericNutrients(context)) !== null) {
       source = "generic"
       confidence = "medium"

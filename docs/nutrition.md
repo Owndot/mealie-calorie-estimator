@@ -127,3 +127,14 @@ Extras expose the attempted estimate independently of retained nutrition:
 - `calorie_estimator_attempt_hash`: records the attempted inputs. Partial attempts set the completed `calorie_estimator_hash` to an empty string so a later backfill can retry. Policy changes also change recipe hashes.
 
 When the missing ingredient resolves, a complete attempt writes nutrition normally and clears the partial flag, stale warnings and partial subtotal. A previously correct Mealie value is never replaced by a known partial estimate. The flag measures ingredient coverage; it does not assert that every micronutrient within a matched profile is known.
+
+
+## Partial webhook idempotency
+
+Webhooks skip `partial-withheld` and `partial-written` attempts when `calorie_estimator_attempt_hash` equals the current input hash. The skip occurs before nutrition lookup, LLM calls, tagging or patching, so an extras-only patch cannot trigger another estimate for the same input. The completed hash remains empty: explicit `/estimate` and `/backfill` requests can still retry partial attempts under the existing eligibility/manual-value rules. Input changes also permit retries. Cache expiry alone does not retry unchanged webhook input.
+
+The input hash uses fixed-order projections of quantities, food names, unit conversion fields, notes/original text/display/title, instruction text and ingredient-to-instruction links, servings and yield. It includes the nutrition/estimator semantics versions, pinch/partial policy, OFF language/source and LLM enablement/model/source. It excludes secrets, nutrition, extras, tags, timestamps, API IDs and unrelated metadata. Instruction links are represented by linked text rather than unstable IDs. Ingredient order and JSON object property order do not affect the hash. The former hash serialized entire unit/instruction objects, so metadata or property-order changes could alter it even when the recipe looked unchanged; byte-identical input and identical configuration were already deterministic.
+
+This release changes the hash format and nutrition version (`nutrition-v6-water`), so old attempts are reconsidered once on the next eligible event. Future changes to nutrient data or estimator semantics must bump the corresponding version. Instances processing the same recipes must run the same estimator version/configuration.
+
+Plain `water`/`Wasser` uses a deterministic zero-calorie, zero-macro profile and zero sodium default, with density 1 g/ml. Actual sodium depends on the water supply; this default is not a mineral analysis and does not apply to branded/mineral/flavoured products. Unitless Garam Masala remains unknown weight: spice-blend composition and spoon packing vary, and no teaspoon or piece weight is invented. An explicit unit allows the existing validated conversion/fallback path.
