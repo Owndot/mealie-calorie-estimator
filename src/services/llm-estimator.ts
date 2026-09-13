@@ -101,7 +101,8 @@ export async function estimateNutrients(foodName: string, suppliedContext?: Ingr
     return cached
   }
 
-  const prompt = `Estimate nutrition for 100 g of the edible ingredient: ${JSON.stringify(foodName)}. Respect dry/raw, cooked, canned, drained, frozen and fresh state explicitly specified; do not substitute cooked values for dry staples. Use typical edible-form values, not serving values. Return ONLY a valid JSON object with keys kcal, protein, carbs, fat, saturatedFat, transFat, fiber, sugar, sodium, cholesterol. Units: kcal = kcal per 100 g; protein, carbs, fat, saturatedFat, transFat, fiber, sugar = grams per 100 g; sodium and cholesterol = milligrams (mg) per 100 g. Carbs means available carbohydrate excluding fiber. Each value must be a finite non-negative JSON number, or null if unknown. Return JSON null if the food/state is ambiguous or confidence is low. Do not invent values. No markdown or explanation.`
+  const fatConstraint = context.fatPercentage != null ? ` The ingredient explicitly states ${context.fatPercentage}% fat; returned fat must be close to ${context.fatPercentage} g per 100 g (allowing normal label rounding).` : ""
+  const prompt = `Estimate nutrition for 100 g of the edible ingredient: ${JSON.stringify(foodName)}.${fatConstraint} Respect dry/raw, cooked, canned, drained, frozen and fresh state explicitly specified; do not substitute cooked values for dry staples. Use typical edible-form values, not serving values. Return ONLY a valid JSON object with keys kcal, protein, carbs, fat, saturatedFat, transFat, fiber, sugar, sodium, cholesterol. Units: kcal = kcal per 100 g; protein, carbs, fat, saturatedFat, transFat, fiber, sugar = grams per 100 g; sodium and cholesterol = milligrams (mg) per 100 g. Carbs means available carbohydrate excluding fiber. Each value must be a finite non-negative JSON number, or null if unknown. Return JSON null if the food/state is ambiguous or confidence is low. Do not invent values. No markdown or explanation.`
 
   try {
     await waitForRateLimit(RateLimitType.Llm)
@@ -161,6 +162,10 @@ export async function estimateNutrients(foodName: string, suppliedContext?: Ingr
     }
 
     const validationErrors = validateProfile(nutrients)
+    if (context.fatPercentage != null && nutrients.fatPer100g != null
+      && Math.abs(nutrients.fatPer100g - context.fatPercentage) > Math.max(1.5, context.fatPercentage * 0.25)) {
+      validationErrors.push("fat percentage disagrees with explicit descriptor")
+    }
     if (validationErrors.length === 0) {
       setCachedLlmNutrients(cacheKey, nutrients)
       logger.debug({ foodName, kcal: nutrients.kcalPer100g }, "LLM nutrient estimate obtained")

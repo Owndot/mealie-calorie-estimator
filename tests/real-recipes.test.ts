@@ -124,8 +124,19 @@ describe("state interpretation and aliases", () => {
     ["Kartoffeln gekocht", "potato", "cooked"],
     ["Reis gekocht", "rice", "cooked"],
     ["getrocknete Kidneybohnen", "kidney beans", "dry"],
+    ["Getrocknete Tomate in Öl", "tomato", "dry"],
+    ["sun-dried tomatoes in oil", "tomato", "dry"],
+    ["getrocknete Tomaten, abgetropft", "tomato", "drained"],
+    ["geröstete Tomaten in Öl", "tomato", "cooked"],
   ])("normalizes descriptor variant %s", (name, canonicalName, state) => {
     expect(contextForName(name)).toMatchObject({ canonicalName, state })
+  })
+  it.each([
+    ["Kochsahne 7%", 7],
+    ["Sahne 15% Fett", 15],
+    ["Milch 1,5%", 1.5],
+  ])("retains explicit fat descriptor for %s", (name, percentage) => {
+    expect(contextForName(name).fatPercentage).toBe(percentage)
   })
   it("keeps packaging and preparation notes separate from the base identity", () => {
     expect(normalizeIngredientDescriptors("Tomaten, gehackt in Öl")).toMatchObject({

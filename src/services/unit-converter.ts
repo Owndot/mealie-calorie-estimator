@@ -47,14 +47,31 @@ export function resolveUnitName(unit: MealieUnit | null): string | null {
   return candidates.find(name => GRAMS_PER_UNIT.has(name)) ?? candidates[0] ?? null
 }
 
+export function hasImpossibleVolumeStandard(unit: MealieUnit | null): boolean {
+  const input = resolveUnitName(unit)
+  if (!unit || (input !== "milliliter" && input !== "liter") || unit.standardQuantity == null || unit.standardUnit == null) return false
+  const standard = normalizeUnitName(unit.standardUnit)
+  if (standard !== "gram" && standard !== "kilogram") return false
+  const gramsPerInput = unit.standardQuantity * (standard === "kilogram" ? 1000 : 1)
+  return !Number.isFinite(gramsPerInput) || gramsPerInput < 0.2 || gramsPerInput > 3.5
+}
+
 export function convertToGrams(quantity: number, unit: MealieUnit | null, context?: IngredientContext): number | null {
   if (!Number.isFinite(quantity) || quantity <= 0) return null
+  const inputName = resolveUnitName(unit)
   if (unit?.standardQuantity != null && unit.standardUnit != null) {
     const standardUnit = normalizeUnitName(unit.standardUnit)
     if (Number.isFinite(unit.standardQuantity) && unit.standardQuantity > 0 && STANDARD_UNITS.has(standardUnit)) {
-      if (context && ["milliliter", "liter"].includes(standardUnit)) {
-        const weight = knownGramsPerUnit(context, standardUnit)
-        return weight === null ? null : quantity * unit.standardQuantity * weight
+      const inputIsVolume = inputName === "milliliter" || inputName === "liter"
+      const standardIsVolume = standardUnit === "milliliter" || standardUnit === "liter"
+      if (inputIsVolume && !standardIsVolume) {
+        const gramsPerInput = unit.standardQuantity * (standardUnit === "kilogram" ? 1000 : standardUnit === "gram" ? 1 : GRAMS_PER_UNIT.get(standardUnit)!)
+        if (!Number.isFinite(gramsPerInput) || gramsPerInput < 0.2 || gramsPerInput > 3.5) return null
+        return quantity * gramsPerInput
+      }
+      if (context && standardIsVolume) {
+        const weight = knownGramsPerUnit(context, standardUnit) ?? (standardUnit === "milliliter" ? 1 : 1000)
+        return quantity * unit.standardQuantity * weight
       }
       return unit.standardQuantity * GRAMS_PER_UNIT.get(standardUnit)! * quantity
     }
@@ -66,6 +83,11 @@ export function convertToGrams(quantity: number, unit: MealieUnit | null, contex
     if (piece !== null) return quantity * piece
   }
   if (name === "pinch") return quantity * config.units.pinchGrams
+  if (context && (name === "milliliter" || name === "liter")) {
+    const density = knownGramsPerUnit(context, name) ?? (name === "milliliter" ? 1 : 1000)
+    const grams = quantity * density
+    return Number.isFinite(grams) && grams <= quantity * (name === "milliliter" ? 3.5 : 3500) ? grams : null
+  }
   if (context && name && ["teaspoon", "tablespoon", "milliliter", "liter", "cup", "piece", "clove"].includes(name)) {
     const known = knownGramsPerUnit(context, name)
     return known === null ? null : quantity * known

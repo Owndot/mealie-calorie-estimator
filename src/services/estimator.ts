@@ -9,7 +9,7 @@ import type {
   NutrientSet, MealieNutrition,
 } from "../types.js"
 import { config } from "../config.js"
-import { convertToGrams, resolveUnitName } from "./unit-converter.js"
+import { convertToGrams, hasImpossibleVolumeStandard, resolveUnitName } from "./unit-converter.js"
 import { lookupNutrients } from "./off-client.js"
 import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
@@ -97,7 +97,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     let grams = convertToGrams(quantity, ing.unit, context)
     let llmEstimated = false
     let weightEstimated = false
-    if (grams === null && unit && context.state !== "ambiguous") {
+    if (grams === null && unit && !hasImpossibleVolumeStandard(ing.unit) && context.state !== "ambiguous") {
       grams = await estimateGrams(quantity, unit, context.query)
       llmEstimated = grams !== null
       weightEstimated = llmEstimated
@@ -119,7 +119,9 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       nutrients = genericNutrients(context)
       source = "deterministic"
       reason = context.canonicalName === "water" ? "plain water zero-nutrient default" : reason
-    } else if ((nutrients = genericNutrients(context)) !== null) {
+    } else if ((nutrients = genericNutrients(context)) !== null
+      && (context.fatPercentage == null || nutrients.fatPer100g == null
+        || Math.abs(nutrients.fatPer100g - context.fatPercentage) <= Math.max(1.5, context.fatPercentage * 0.25))) {
       source = "generic"
       confidence = "medium"
       sourceConfidence = genericMatch ? Math.min(0.95, genericMatch.confidence) : 0.9

@@ -13,6 +13,8 @@ export interface IngredientContext {
   query: string
   reason: string
   confidence: "high" | "medium" | "low"
+  fatPercentage?: number
+  descriptorNotes?: string[]
 }
 export const NUTRITION_VERSION = "nutrition-v8-semantic"
 
@@ -57,6 +59,7 @@ const aliases = new Map(Object.entries(groups).flatMap(([key, names]) =>
 const descriptorRules: Array<{ state?: FoodState; note?: string; pattern: RegExp }> = [
   { state: "drained", pattern: /\b(abgetropft\w*|abgegossen\w*|abtropfgewicht|drained)\b/g },
   { state: "canned", pattern: /\b(a\s+d\s+(?:(?:der|dem)\s+)?dose[n]?|aus\s+(?:der|dem)\s+dose[n]?|aus\s+dose[n]?|dose[n]?|konserve[n]?|canned|tinned)\b/g },
+  { state: "dry", note: "sun-dried", pattern: /\b(sun\s*[- ]?dried)\b/g },
   { state: "dry", pattern: /\b(trocken\w*|getrocknet\w*|dried|dry|uncooked)\b/g },
   { state: "cooked", pattern: /\b(gekocht\w*|vorgekocht\w*|cooked|boiled)\b/g },
   { state: "raw", pattern: /\b(roh\w*|raw)\b/g },
@@ -65,7 +68,10 @@ const descriptorRules: Array<{ state?: FoodState; note?: string; pattern: RegExp
   { note: "chopped", pattern: /\b(gehackt\w*|chopped)\b/g },
   { note: "diced", pattern: /\b(gewurfelt\w*|diced)\b/g },
   { note: "peeled", pattern: /\b(geschalt\w*|peeled)\b/g },
-  { note: "in oil", pattern: /\b(in\s+(?:dem\s+)?(?:ol|oel))\b/g },
+  { note: "in oil", pattern: /\b(in\s+(?:dem\s+)?(?:ol|oil|oel))\b/g },
+  { note: "in oil", pattern: /\b(in\s+(?:ol|oil|oel)\w*\s+eingelegt)\b/g },
+  { note: "in brine", pattern: /\b(in\s+(?:lake|brine))\b/g },
+  { state: "cooked", note: "roasted", pattern: /\b(gerostet\w*|roasted)\b/g },
 ]
 const prep = /\b(fein|grob|finely|roughly|bio|organic|biologisch\w*|gewurfelt\w*|gehackt\w*|geschnitten\w*|gerieben\w*|gemahlen\w*|geschalt\w*|diced|chopped|sliced|grated|ground|peeled)\b/g
 const staples = new Set(["pinto beans", "kidney beans", "rice", "basmati rice"])
@@ -96,8 +102,11 @@ export function interpretIngredient(
   const originalName = typeof ingredient.food?.name === "string" ? ingredient.food.name : ""
   const nameDescriptor = normalizeIngredientDescriptors(originalName)
   const name = nameDescriptor.baseName
-  const detailDescriptors = normalizeIngredientDescriptors([originalName, ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display].filter(value => typeof value === "string").join(" "))
+  const rawDetail = [originalName, ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display].filter(value => typeof value === "string").join(" ")
+  const detailDescriptors = normalizeIngredientDescriptors(rawDetail)
   const detail = detailDescriptors.normalized
+  const fatMatch = rawDetail.match(/\b(\d+(?:[.,]\d+)?)\s*%(?:\s*(?:fett|fat))?/i)
+  const fatPercentage = fatMatch ? Number(fatMatch[1].replace(",", ".")) : undefined
   let identity = name.replace(prep, " ")
   identity = identity.replace(/\b(vollfett\w*|full fat)\b/g, " ")
   identity = identity.replace(/\b(aus der|aus dem|in der|from the|in a)\b/g, " ").trim().replace(/\s+/g, " ")
@@ -110,7 +119,7 @@ export function interpretIngredient(
   let state: FoodState = states[0] ?? "unspecified"
   let reason = states.length ? "explicit ingredient state" : "no explicit state"
   let confidence: IngredientContext["confidence"] = states.length ? "high" : "low"
-  if ((states.includes("dry") && states.some(s => ["cooked", "canned", "drained"].includes(s))) || /\b(nicht|not)\s+(gekocht|cooked|getrocknet|dried)\b/.test(detail)) {
+  if ((states.includes("dry") && states.some(s => ["cooked", "canned"].includes(s))) || /\b(nicht|not)\s+(gekocht|cooked|getrocknet|dried)\b/.test(detail)) {
     state = "ambiguous"; reason = "conflicting preparation states"; confidence = "low"
   }
   if (canonicalName === "coriander") {
@@ -136,7 +145,7 @@ export function interpretIngredient(
   }
   if (staples.has(canonicalName) && state === "raw") { state = "dry"; reason = "raw mature staple means dry" }
   const query = [canonicalName, state === "unspecified" ? "" : state].filter(Boolean).join(" ")
-  return { originalName, canonicalName, state, query, reason, confidence }
+  return { originalName, canonicalName, state, query, reason, confidence, fatPercentage, descriptorNotes: detailDescriptors.notes }
 }
 
 export function contextForName(name: string): IngredientContext {

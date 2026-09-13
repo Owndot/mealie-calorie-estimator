@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { convertToGrams, normalizeUnitName, resolveUnitName } from "../src/services/unit-converter.js"
+import { contextForName } from "../src/services/ingredient-context.js"
 import type { MealieUnit } from "../src/types.js"
 
 function unit(overrides: Partial<MealieUnit> = {}): MealieUnit {
@@ -89,6 +90,24 @@ describe("unit normalization", () => {
     ["ounces", 28.35], ["lbs", 453.592], ["dashes", 0.3], ["cloves", 5],
   ])("retains the English %s conversion", (name, grams) => {
     expect(convertToGrams(1, unit({ name, abbreviation: null }))).toBe(grams)
+  })
+  it("uses a safe near-water density for generic liquids", () => {
+    for (const [quantity, food] of [[160, "Kochsahne 7%"], [200, "Sahne 15%"], [100, "Milch 1,5%"], [250, "Gemüsebrühe"]] as const) {
+      const grams = convertToGrams(quantity, unit({ name: "ml" }), contextForName(food))
+      expect(grams).toBeGreaterThanOrEqual(quantity * 0.2)
+      expect(grams).toBeLessThanOrEqual(quantity * 3.5)
+    }
+  })
+  it("never turns an ordinary liquid volume into several kilograms", () => {
+    for (const quantity of [100, 160, 200, 250, 500]) {
+      const grams = convertToGrams(quantity, unit({ name: "ml" }), contextForName("generic liquid"))
+      expect(grams).not.toBeNull()
+      expect(grams!).toBeLessThan(2000)
+    }
+  })
+  it("rejects dimensionally impossible volume standards", () => {
+    expect(convertToGrams(160, unit({ name: "ml", standardQuantity: 100, standardUnit: "g" }), contextForName("cooking cream"))).toBeNull()
+    expect(convertToGrams(250, unit({ name: "ml", standardQuantity: 1.2, standardUnit: "g" }), contextForName("milk"))).toBeCloseTo(300)
   })
 
   it("uses a recognized abbreviation when the display name is unknown", () => {

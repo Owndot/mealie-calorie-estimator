@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
 import { estimateGrams } from "../src/services/llm-estimator.js"
 import { initCache, clearLlmCache } from "../src/utils/cache.js"
 import { config } from "../src/config.js"
+import { contextForName } from "../src/services/ingredient-context.js"
 
 beforeAll(async () => {
   await initCache()
@@ -162,6 +163,18 @@ describe("estimateNutrients", () => {
     expect(result?.carbsPer100g).toBeLessThan(result!.fiberPer100g!)
     const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
     expect(body.messages[0].content).toContain("Carbs means available carbohydrate excluding fiber")
+  })
+  it("rejects nutrient fallback that contradicts an explicit fat percentage", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 300, protein: 3, carbs: 5, fat: 30, fiber: 0, sugar: 5 }) } }] }),
+    }))
+    const { estimateNutrients } = await import("../src/services/llm-estimator.js")
+    expect(await estimateNutrients("Kochsahne 7%", contextForName("Kochsahne 7%"))).toBeNull()
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
+    expect(body.messages[0].content).toContain("7% fat")
   })
 })
 
