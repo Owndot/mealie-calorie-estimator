@@ -128,8 +128,20 @@ describe("state interpretation and aliases", () => {
     ["sun-dried tomatoes in oil", "tomato", "dry"],
     ["getrocknete Tomaten, abgetropft", "tomato", "drained"],
     ["geröstete Tomaten in Öl", "tomato", "cooked"],
+    ["Artischocken in Öl", "artischocken", "unspecified"],
+    ["Oliven in Lake", "oliven", "unspecified"],
+    ["eingelegte Gurken", "gurken", "unspecified"],
+    ["roasted peppers in brine", "peppers", "cooked"],
   ])("normalizes descriptor variant %s", (name, canonicalName, state) => {
     expect(contextForName(name)).toMatchObject({ canonicalName, state })
+  })
+  it("keeps preservation semantics in the nutrient query without changing the primary state", () => {
+    const oil = contextForName("Getrocknete Tomate in Öl")
+    const plain = contextForName("getrocknete Tomaten")
+    expect(oil).toMatchObject({ canonicalName: "tomato", state: "dry", descriptorNotes: ["in oil"] })
+    expect(oil.query).toContain("in oil")
+    expect(plain.query).not.toContain("in oil")
+    expect(oil.query).not.toBe(plain.query)
   })
   it.each([
     ["Kochsahne 7%", 7],

@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v1"
+export const INTERPRETATION_VERSION = "interpretation-v2-descriptors"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -72,6 +72,8 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const context = interpretIngredient(ingredient, instructions)
   if (context.state === "ambiguous") return null
   const exact = matchGenericFood(context, true)
+  const preservationNotes = (context.descriptorNotes ?? []).filter(note => ["in oil", "in brine", "pickled"].includes(note))
+  const requiresPreservationSemantics = preservationNotes.length > 0
   const details = [ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
     .filter(Boolean).map(value => normalizeFoodText(value!.replace(/[\p{L}.]+/gu, word => isKnownUnitName(word) ? " " : word))).join(" ")
   const name = normalizeFoodText(context.originalName)
@@ -81,7 +83,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const brandHint = /\b(brand|marke|hersteller)\b|[®™]/i.test([ingredient.food?.name, ingredient.note, ingredient.originalText, ingredient.display].join(" "))
   const unresolvedDetails = remainingDetails.length > 0
 
-  if (!brandHint && !unresolvedDetails && (exact?.confidence === 1 || isKnownFoodIdentity(context.canonicalName))) {
+  if (!brandHint && !unresolvedDetails && !requiresPreservationSemantics && (exact?.confidence === 1 || isKnownFoodIdentity(context.canonicalName))) {
     const interpreted = { ...context, canonicalName: exact?.name === "rice" && context.canonicalName === "basmati rice" ? "basmati rice" : exact?.name ?? context.canonicalName,
       state: exact?.state ?? context.state, query: [context.canonicalName, context.state === "unspecified" ? "" : context.state].filter(Boolean).join(" "),
       category: exact?.entry.category ?? "other", generic: true, brand: null,
@@ -157,13 +159,13 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   if (nutritionQualifiers.some(pattern => pattern.test(inputText) && !pattern.test(canonicalName))) return null
   const result: IngredientContext = { ...context, canonicalName, state: parsed.state, generic: parsed.generic, brand: parsed.brand,
     category: parsed.category, interpretationConfidence: parsed.confidence, interpretationSource: "LLM",
-    query: [parsed.brand, canonicalName, parsed.state === "unspecified" ? "" : parsed.state].filter(Boolean).join(" "),
+    query: [parsed.brand, canonicalName, parsed.state === "unspecified" ? "" : parsed.state, ...preservationNotes].filter(Boolean).join(" "),
     reason: "validated semantic classification", confidence: "high" }
   if (!explicitState && result.state === "unspecified") {
     const match = matchGenericFood(result, true)
     if (match) {
       result.state = match.state
-      result.query = [result.brand, result.canonicalName, result.state === "unspecified" ? "" : result.state].filter(Boolean).join(" ")
+      result.query = [result.brand, result.canonicalName, result.state === "unspecified" ? "" : result.state, ...preservationNotes].filter(Boolean).join(" ")
       if (match.state !== "unspecified") result.reason += "; generic edible-state default"
     }
   }

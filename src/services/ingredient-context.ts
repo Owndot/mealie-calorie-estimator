@@ -16,7 +16,7 @@ export interface IngredientContext {
   fatPercentage?: number
   descriptorNotes?: string[]
 }
-export const NUTRITION_VERSION = "nutrition-v8-semantic"
+export const NUTRITION_VERSION = "nutrition-v9-descriptor-semantics"
 
 export function normalizeFoodText(text: unknown): string {
   if (typeof text !== "string") return ""
@@ -71,6 +71,7 @@ const descriptorRules: Array<{ state?: FoodState; note?: string; pattern: RegExp
   { note: "in oil", pattern: /\b(in\s+(?:dem\s+)?(?:ol|oil|oel))\b/g },
   { note: "in oil", pattern: /\b(in\s+(?:ol|oil|oel)\w*\s+eingelegt)\b/g },
   { note: "in brine", pattern: /\b(in\s+(?:lake|brine))\b/g },
+  { note: "pickled", pattern: /\b(eingelegt\w*|pickled|preserved)\b/g },
   { state: "cooked", note: "roasted", pattern: /\b(gerostet\w*|roasted)\b/g },
 ]
 const prep = /\b(fein|grob|finely|roughly|bio|organic|biologisch\w*|gewurfelt\w*|gehackt\w*|geschnitten\w*|gerieben\w*|gemahlen\w*|geschalt\w*|diced|chopped|sliced|grated|ground|peeled)\b/g
@@ -144,7 +145,7 @@ export function interpretIngredient(
     }
   }
   if (staples.has(canonicalName) && state === "raw") { state = "dry"; reason = "raw mature staple means dry" }
-  const query = [canonicalName, state === "unspecified" ? "" : state].filter(Boolean).join(" ")
+  const query = [canonicalName, state === "unspecified" ? "" : state, ...detailDescriptors.notes].filter(Boolean).join(" ")
   return { originalName, canonicalName, state, query, reason, confidence, fatPercentage, descriptorNotes: detailDescriptors.notes }
 }
 
@@ -152,7 +153,7 @@ export function contextForName(name: string): IngredientContext {
   return interpretIngredient({ food: { id: "", name, pluralName: null, aliases: [] } })
 }
 export function nutrientCacheKey(source: "off" | "llm", context: IngredientContext): string {
-  return `${NUTRITION_VERSION}:${source}:${context.canonicalName}:${context.state}:${context.brand ?? ""}:${context.generic ?? "unknown"}`
+  return `${NUTRITION_VERSION}:${source}:${context.canonicalName}:${context.state}:${(context.descriptorNotes ?? []).join(",")}:${context.fatPercentage ?? ""}:${context.brand ?? ""}:${context.generic ?? "unknown"}`
 }
 
 export function isKnownFoodIdentity(name: string): boolean {

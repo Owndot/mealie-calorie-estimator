@@ -169,6 +169,22 @@ describe("interpretation cache and confidence safety", () => {
     expect(result.matchedIngredients.map(item => item.context?.canonicalName)).toEqual(["paprika", "lemon", "spearmint", "red lentils", "olive oil"])
     expect(result.matchedIngredients.every(item => item.source === "generic")).toBe(true)
   })
+  it("keeps preserved dried tomatoes meaningful and does not reject the ingredient", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options!.body as string)
+      if (body.messages[0].role === "system") return response(interpretation("tomato", "dry", { category: "vegetable" }))
+      return response({ kcal: 180, protein: 4, carbs: 12, fat: 10, fiber: 8, sugar: 8, sodium: 200, cholesterol: 0, saturatedFat: 1, transFat: 0 })
+    })
+    const preserved = ingredient("Getrocknete Tomate in Öl")
+    preserved.quantity = 60
+    const result = await estimateRecipe(recipe(preserved))
+    expect(result.partial).toBe(false)
+    expect(result.matchedIngredients[0]).toMatchObject({
+      source: "LLM",
+      context: { canonicalName: "tomato", state: "dry", descriptorNotes: ["in oil"] },
+    })
+    expect(result.matchedIngredients[0].context?.query).toContain("in oil")
+  })
   it("does not override an explicit canned state with dry nutrition", async () => {
     vi.mocked(fetch).mockResolvedValue(response(interpretation("chickpeas", "dry", { category: "legume" })))
     expect(await interpretSemanticIngredient(ingredient("unknown pulses aus der Dose"))).toBeNull()
