@@ -159,3 +159,6 @@ it("treats whitespace-only existing fields as empty for the opt-in policy", asyn
   await estimateAndTag(recipe("Walnüsse", empty), "attempt")
   expect(vi.mocked(patchRecipe).mock.calls[0][1].nutrition?.calories).toBe("365")
 })
+
+// These existing cases exercise the optional tagging behavior.
+config.estimate.autoTags = true

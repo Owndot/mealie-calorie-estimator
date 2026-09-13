@@ -18,12 +18,14 @@ function scheduleSave(): void {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true })
       }
-      fs.writeFileSync(config.cache.dbPath, Buffer.from(data))
+      fs.writeFileSync(`${config.cache.dbPath}.tmp`, Buffer.from(data))
+      fs.renameSync(`${config.cache.dbPath}.tmp`, config.cache.dbPath)
     } catch (err) {
       logger.error({ err }, "Failed to save cache database")
     }
     saveTimer = null
   }, 5000)
+  saveTimer.unref()
 }
 
 export async function initCache(): Promise<void> {
@@ -69,6 +71,10 @@ export async function initCache(): Promise<void> {
 
   db.run(`CREATE TABLE IF NOT EXISTS ingredient_interpretation_cache (
     lookup_key TEXT PRIMARY KEY, interpretation TEXT NOT NULL, updated_at INTEGER NOT NULL
+  )`)
+
+  db.run(`CREATE TABLE IF NOT EXISTS resolved_food_cache (
+    lookup_key TEXT PRIMARY KEY, food TEXT NOT NULL, updated_at INTEGER NOT NULL
   )`)
 
   const cutoff = Date.now() - config.openFoodFacts.cacheTtlMs
@@ -170,6 +176,7 @@ export function clearLlmCache(): void {
   db.run("DELETE FROM llm_estimate_cache")
   db.run("DELETE FROM llm_nutrient_cache")
   db.run("DELETE FROM ingredient_interpretation_cache")
+  db.run("DELETE FROM resolved_food_cache")
   scheduleSave()
 }
 
@@ -234,4 +241,30 @@ export function getCachedInterpretation(key: string): unknown | undefined {
 }
 export function setCachedInterpretation(key: string, value: unknown): void {
   if (isInitialized) upsert("ingredient_interpretation_cache", "lookup_key", key, "interpretation", JSON.stringify(value))
+}
+
+export interface CachedResolvedFood {
+  normalizedName: string
+  aliases: string[]
+  nutrients: NutrientSet
+  source: "OFF" | "generic" | "deterministic" | "LLM"
+  confidence: number
+  timestamp: number
+  productName: string | null
+  profileId?: string
+}
+export function getCachedResolvedFood(key: string): CachedResolvedFood | undefined {
+  if (!isInitialized) return undefined
+  const raw = getRow<string>("resolved_food_cache", "lookup_key", key, "food")
+  if (raw === undefined) return undefined
+  try { return JSON.parse(raw) as CachedResolvedFood } catch { return undefined }
+}
+export function setCachedResolvedFood(key: string, food: CachedResolvedFood): void {
+  if (isInitialized) upsert("resolved_food_cache", "lookup_key", key, "food", JSON.stringify(food))
+}
+export function flushCache(): void {
+  if (!isInitialized) return
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null }
+  fs.writeFileSync(`${config.cache.dbPath}.tmp`, Buffer.from(db.export()))
+  fs.renameSync(`${config.cache.dbPath}.tmp`, config.cache.dbPath)
 }

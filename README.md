@@ -17,52 +17,19 @@ mealie-calorie-estimator
     Automatic nutrition estimation for recipes hosted on a <a href="https://mealie.io/">Mealie</a> instance
 </p>
 
-## Features
+## Architecture and automatic workflow
 
-<!-- List features as bullet points -->
+Mealie recipe-created/updated webhook → authenticated recipe fetch → **one whole-recipe LLM normalization request** → SQLite cache → Open Food Facts for product foods → bundled USDA generic database → last-resort LLM nutrient estimate → deterministic arithmetic → nutrition PATCH to the same Mealie recipe.
 
-- Estimates nutrition from [Open Food Facts](https://world.openfoodfacts.org/) (configurable language)
-- Optional LLM fallback for unmatched foods and custom units (Dose, Glas, Päckchen, Bund)
-- Built-in unit conversion (g, kg, tbsp, tsp, cup, oz, lb)
-- Skips re-estimation via a SHA256 ingredient hash and preserves manually entered calories
-- Webhook, on-demand, and bulk backfill entry points
-- **Auto-tags** recipes with calorie range and digestibility tags
+The existing Fastify service, webhook setup, household tokens, manual-calorie protection, update hashes, on-demand endpoint and backfill are retained. Enable `LLM_ENABLED=true` with your configured OpenAI-compatible model to normalize German ingredient language, estimated package/piece quantities and food states. No per-recipe manual action is needed. If normalization fails, the existing ingredient interpreter attempts recovery.
 
-## Purpose
+LLMs normalize ingredients and provide last-resort per-100-g profiles; **all recipe arithmetic happens in code**. Each nutrient is multiplied by ingredient grams / 100, summed, then divided once by actual servings. A 2400 kcal recipe with `8 servings` becomes 300 kcal per serving; it never becomes an 8 g recipe. Original ingredients and yield are not rewritten.
 
-This small service enriches [Mealie](https://mealie.io/) (self-hosted recipe manager) with nutritional data by:
+SQLite caches names, aliases, per-100-g nutrients, source, confidence and timestamps. Compose mounts a persistent cache volume. Cached LLM estimates retain their original confidence. OFF scores product identity, brand, state, category and nutritional completeness; failures advance to other providers. The bundled 171-profile USDA database keeps OFF from being the only source. A provider interface permits additional databases.
 
-1. **Listening for webhooks** triggered when a recipe is created or updated.
-2. **Resolving ingredients** — deterministic normalization or optional LLM classification identifies the food/state. Generic ingredients use 171 USDA reference profiles before packaged-product lookup; branded foods use Open Food Facts. Validated LLM nutrition is the final fallback.
-3. **Patching nutrition** back into Mealie's nutrition fields.
+Each ingredient reports provenance and estimated-quantity flags. Low confidence alone does not block valid nutrition. Unresolved ingredients are logged while the remaining calculation continues; the default partial policy preserves existing Mealie values. Nutrition and estimator metadata are updated by default; optional prior auto-tagging requires `AUTO_TAGS_ENABLED=true`.
 
-Unit conversion uses a built-in table for common units. Custom units are estimated via LLM when enabled. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved.
-
-### Auto-Tagging
-
-Every estimated recipe gets up to two auto-tags applied in Mealie: one for calorie range and one for digestibility.
-
-**Calorie tags** (per serving):
-
-| Tag | Range (kcal) |
-|---|---|
-| `Calories:Light` | < 350 |
-| `Calories:Moderate` | 350 – 600 |
-| `Calories:Hearty` | 600 – 850 |
-| `Calories:Heavy` | > 850 |
-
-**Digestibility tags** (based on macronutrient ratios):
-
-| Tag | Criteria |
-|---|---|
-| `Digest:Easy` | fat < 30% of calories AND kcal ≤ 600 |
-| `Digest:Slow` | fat ≥ 40% of calories |
-| `Digest:Moderate` | anything in between (e.g. fat 30–40%, or low-fat but calorie-dense) |
-| `Digest:Unknown` | missing fat or calorie data |
-
-The digestibility heuristic relies on per-serving fat and calorie data — high fat indicates slow digestion, low fat with moderate calories indicates a lighter meal.
-
-Tags are created automatically in Mealie when first needed. On re-estimation, old auto-tags are replaced but user-applied tags are preserved. If a recipe already has nutrition data but is missing auto-tags (e.g. after upgrading), they are added without re-estimating.
+See [the nutrition data contract](docs/nutrition.md) for validation, units, provider priority, partial-write behavior, cache limitations and test coverage.
 
 ## Installation
 
@@ -78,7 +45,7 @@ It's recommended to install it next to your Mealie instance using docker-compose
      mealie:
        # mealie configuration
      calorie-estimator:
-       image: timoreymann/mealie-calorie-estimator:latest
+       build: .
        container_name: mealie-calorie-estimator
        restart: unless-stopped
        depends_on:
@@ -89,10 +56,14 @@ It's recommended to install it next to your Mealie instance using docker-compose
          OFF_LANGUAGE: de
          LLM_ENABLED: ${LLM_ENABLED:-false}
          LLM_API_KEY: ${LLM_API_KEY:-}
+       volumes:
+         - calorie-cache:/app/data
+   volumes:
+     calorie-cache:
    ```
 2. Or run standalone
    ```bash
-   docker compose up -d
+   docker compose up --build -d calorie-estimator
    ```
 
 ### Environment Variables
@@ -107,11 +78,17 @@ It's recommended to install it next to your Mealie instance using docker-compose
 | `OFF_BASE_URL` | `https://world.openfoodfacts.org` | Open Food Facts base URL |
 | `OFF_MAX_RETRIES` | `3` | Retries for transient OFF search errors (429/5xx) |
 | `OFF_RETRY_BACKOFF_MS` | `500` | Base backoff between retries (doubles each attempt) |
-| `LLM_ENABLED` | `false` | Enable semantic ingredient classification, custom-unit estimates and nutrient fallback |
+| `LLM_ENABLED` | `false` | Enable whole-recipe normalization, quantity estimates and last-resort nutrient fallback |
 | `LLM_API_KEY` | — | API key for OpenAI-compatible endpoint |
 | `LLM_BASE_URL` | `https://api.mistral.ai/v1` | LLM API base URL |
 | `LLM_ENDPOINT_URL` | `/chat/completions` | LLM API endpoint path (supports OpenAI-compatible providers) |
 | `LLM_MODEL` | `mistral-small-latest` | Model name |
+| `LLM_NORMALIZE_RECIPE` | `true` | Normalize the full recipe first; false selects legacy recovery directly |
+| `AUTO_TAGS_ENABLED` | `false` | Opt into previous auto-tagging behavior |
+| `CACHE_DB_PATH` | `data/cache.db` | SQLite path; Compose uses `/app/data/cache.db` on its named volume |
+| `OFF_CACHE_TTL` | `86400` | Cache expiry in seconds |
+| `PARTIAL_ESTIMATE_POLICY` | `withhold` | Preserve nutrition for unresolved recipes; `fill-empty` permits partial writes to empty nutrition |
+| `PINCH_GRAMS` | `0.25` | Legacy pinch mass, bounded to 0.05–0.5 g |
 | `ESTIMATE_STRATEGY` | `all` | Estimation strategy: `all` (estimate every recipe) or `tagged` (only estimate recipes with the `ESTIMATE_TAG` tag) |
 | `ESTIMATE_TAG` | `estimate` | Tag name to check when `ESTIMATE_STRATEGY=tagged` |
 | `PORT` | `8000` | Server port |
@@ -162,31 +139,19 @@ Contributions are welcome, whether it's:
 - [Node.js](https://nodejs.org/) 22+
 - [Docker](https://docs.docker.com/get-docker/)
 
-### Test
-
-<!-- Add testing instructions -->
+### Build and test
 
 ```sh
-docker compose --profile test up -d
+npm ci
+npm run typecheck
 npm test
-```
-
-The test profile starts Mealie (SQLite), a mock Open Food Facts server, and the estimator.
-
-### Build
-
-<!-- Add building instructions -->
-
-```sh
 npm run build
+docker build --target test -t mealie-calorie-estimator:test .
+docker build -t mealie-calorie-estimator:local .
+# On Linux with Docker, verify automatic processing and cache persistence:
+node tests/docker-smoke.mjs mealie-calorie-estimator:local
 ```
 
-### Nutrition correctness and German ingredients
+Tests use fixtures/mocks and need no live API keys. The Docker `test` stage runs the full suite. The GitHub nutrition workflow also tests the production container against mock Mealie and LLM services, including a restart.
 
-See [nutrition units, source data and preparation handling](docs/nutrition.md) for the sodium/cholesterol milligram contract, German aliases, dry/cooked/canned inference, generic-first USDA source priority, density conversions, validation limits and cache invalidation. `PINCH_GRAMS` is optional and defaults to `0.25` g. Existing configurations continue to work; state-specific caches and versioned recipe hashes bypass earlier mixed-unit estimates.
-
-`PARTIAL_ESTIMATE_POLICY=withhold` (default) preserves existing nutrition and tags when any ingredient cannot be estimated, and records partial status in extras. The optional `fill-empty` policy permits partial nutrition only when every existing nutrition field is empty; it never overwrites an existing value. See [partial-estimate safety](docs/nutrition.md#partial-estimate-write-safety).
-
-Partial webhooks are idempotent: an unchanged `calorie_estimator_attempt_hash` with `partial-withheld` or `partial-written` status skips lookup and patching. Edit estimator inputs or invoke `/estimate` or `/backfill` explicitly to retry. See [nutrition behavior](docs/nutrition.md#partial-webhook-idempotency).
-
-German ingredient wording can be classified semantically with the existing LLM configuration, without adding an alias for each phrase. See [interpretation, caching and live evaluation](docs/nutrition.md#semantic-interpretation-caching-and-evaluation) for confidence rules, limitations and the 90-case evaluation corpus.
+For deployment, copy `.env.example` to `.env`, set the Mealie token and existing LLM settings, then run `docker compose up --build -d calorie-estimator`. Keep the estimator on the same Docker network as Mealie. The supplied test profile remains available for development with a real Mealie container; production does not require it.

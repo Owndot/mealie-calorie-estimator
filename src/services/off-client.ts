@@ -24,7 +24,7 @@ function validateOffNutrients(nutrients: NutrientSet, context: IngredientContext
   return [...new Set(reasons)]
 }
 
-const OFF_NUTRIENT_FIELDS = ["product_name", "nutriments", "brands", "nutrition_data_per"].join(",")
+const OFF_NUTRIENT_FIELDS = ["product_name", "nutriments", "brands", "categories_tags", "nutrition_data_per"].join(",")
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 
@@ -144,7 +144,13 @@ export async function lookupNutrients(foodName: string, unitName?: string, suppl
       }
     }
     const reasons = validateOffNutrients(nutrients, context)
-    const score = reasons.length ? 0 : scoreOffMatch(context, product.product_name, nutrients, product.brands)
+    const identityScore = reasons.length ? 0 : scoreOffMatch(context, product.product_name, nutrients, product.brands)
+    const categoryTokens: Record<string, string[]> = { dairy: ["dairies", "milks", "cheeses"], oil: ["oils"],
+      grain: ["cereals", "pastas", "rices"], vegetable: ["vegetables"], fruit: ["fruits"], sauce: ["sauces"], spice: ["spices"], legume: ["legumes", "pulses"] }
+    const tags = Array.isArray(product.categories_tags) ? product.categories_tags.filter(t => typeof t === "string") : []
+    const categoryMatch = (categoryTokens[context.category ?? ""] ?? []).some(token => tags.some(tag => tag.includes(token)))
+    const completeness = Object.values(nutrients).filter(value => value !== null).length / Object.keys(nutrients).length
+    const score = identityScore ? identityScore + (categoryMatch ? 2 : 0) + completeness : 0
     logger.debug({ query: context.query, productName: product.product_name, score, reasons }, "Scored OFF candidate")
     if (score >= 80) candidates.push({ nutrients, product, score })
   }

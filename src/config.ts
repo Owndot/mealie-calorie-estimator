@@ -52,6 +52,7 @@ export const config = {
   },
 
   llm: {
+    normalizeRecipe: (process.env.LLM_NORMALIZE_RECIPE || "true").toLowerCase() === "true",
     enabled: (process.env.LLM_ENABLED || "false").toLowerCase() === "true",
     baseUrl: process.env.LLM_BASE_URL || "https://api.mistral.ai/v1",
     endpointUrl: process.env.LLM_ENDPOINT_URL || "/chat/completions",
@@ -65,6 +66,7 @@ export const config = {
   },
 
   estimate: {
+    autoTags: (process.env.AUTO_TAGS_ENABLED || "false").toLowerCase() === "true",
     strategy: (process.env.ESTIMATE_STRATEGY || "all") as "all" | "tagged",
     tag: process.env.ESTIMATE_TAG || "estimate",
     partialPolicy: (process.env.PARTIAL_ESTIMATE_POLICY?.trim().toLowerCase() === "fill-empty" ? "fill-empty" : "withhold") as "withhold" | "fill-empty",

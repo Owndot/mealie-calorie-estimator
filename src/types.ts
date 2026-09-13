@@ -80,6 +80,7 @@ export interface OffSearchResult {
 export interface OffProduct {
   product_name: string
   nutriments?: OffNutriments
+  categories_tags?: string[]
   brands?: string
   nutrition_data_per?: string
   nutriscore_grade?: string
@@ -143,8 +144,11 @@ export interface IngredientMatch {
   sourceConfidence?: number
   finalMatchConfidence?: number
   profileId?: string
+  estimatedAmount?: boolean
+  originalSource?: string
+  resolvedAt?: number
   llmEstimated?: boolean
-  source?: "OFF" | "deterministic" | "generic" | "LLM"
+  source?: "OFF" | "deterministic" | "generic" | "LLM" | "local-cache"
   context?: IngredientContext
   productName?: string | null
   confidence?: string

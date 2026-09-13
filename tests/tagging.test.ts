@@ -1,3 +1,4 @@
+import { config } from "../src/config.js"
 import { describe, it, expect } from "vitest"
 import {
   getCalorieTag,
@@ -293,3 +294,6 @@ describe("tagsAreComplete", () => {
     expect(tagsAreComplete(recipe)).toBe(false)
   })
 })
+
+// These existing cases exercise the optional tagging behavior.
+config.estimate.autoTags = true

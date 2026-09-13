@@ -2,7 +2,7 @@ import Fastify from "fastify"
 import cors from "@fastify/cors"
 import { config } from "./config.js"
 import { logger } from "./utils/logger.js"
-import { initCache } from "./utils/cache.js"
+import { initCache, flushCache } from "./utils/cache.js"
 import { webhookRoutes } from "./routes/webhook.js"
 import { estimateRoutes } from "./routes/estimate.js"
 import { backfillRoutes } from "./routes/backfill.js"
@@ -11,6 +11,11 @@ async function main() {
   await initCache()
   const app = Fastify({
     logger: false,
+  })
+
+  for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, async () => {
+    await app.close()
+    flushCache()
   })
 
   await app.register(cors)

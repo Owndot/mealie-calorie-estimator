@@ -1,3 +1,4 @@
+import { config } from "../config.js"
 import type { NutrientSet, MealieNutrition, MealieTag, MealieRecipe } from "../types.js"
 import { getOrCreateTags, patchRecipe } from "./mealie-client.js"
 import { estimateRecipe, buildNutritionPatch, isPartialEstimate } from "./estimator.js"
@@ -89,6 +90,7 @@ export function mergeTags(
 }
 
 export function tagsAreComplete(recipe: MealieRecipe): boolean {
+  if (!config.estimate.autoTags) return true
   const slugs: string[] = JSON.parse(recipe.extras?.calorie_estimator_tags || "[]")
   if (slugs.length === 0) return false
   const current = new Set((recipe.tags || []).map(t => t.slug))
@@ -112,7 +114,7 @@ export async function estimateAndTag(
 ): Promise<{ calories: number | null; tagSlugs: string[] }> {
   const result = await estimateRecipe(recipe)
   const nutritionPatch = buildNutritionPatch(result, hash, recipe.recipeYield, recipe.nutrition)
-  if (isPartialEstimate(result)) {
+  if (isPartialEstimate(result) || !config.estimate.autoTags || result.servings === null) {
     const writesNutrition = Object.keys(nutritionPatch.nutrition).length > 0
     await patchRecipe(recipe.slug, {
       ...(writesNutrition ? { nutrition: nutritionPatch.nutrition } : {}),

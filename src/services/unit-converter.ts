@@ -10,6 +10,7 @@ const UNIT_ALIASES: Record<string, string[]> = {
   milliliter: ["milliliters", "millilitre", "millilitres", "ml"],
   liter: ["liters", "litre", "litres", "l"],
   gram: ["grams", "gramm", "gramms", "g"],
+  milligram: ["milligrams", "milligramm", "mg"],
   kilogram: ["kilograms", "kilogramm", "kg"],
   ounce: ["ounces", "oz"],
   pound: ["pounds", "lb", "lbs"],
@@ -27,12 +28,12 @@ const aliases = new Map(Object.entries(UNIT_ALIASES).flatMap(([canonical, varian
 // Legacy no-context callers retain volume approximations. Recipe estimation supplies context and requires known density.
 const GRAMS_PER_UNIT = new Map<string, number | null>([
   ["cup", 240], ["tablespoon", 15], ["teaspoon", 5],
-  ["milliliter", 1], ["liter", 1000], ["gram", 1], ["kilogram", 1000],
+  ["milliliter", 1], ["liter", 1000], ["gram", 1], ["milligram", 0.001], ["kilogram", 1000],
   ["ounce", 28.35], ["pound", 453.592], ["pinch", null],
   ["dash", 0.3], ["clove", 5], ["piece", null], ["slice", null],
 ])
 
-const STANDARD_UNITS = new Set(["gram", "kilogram", "milliliter", "liter", "ounce", "pound"])
+const STANDARD_UNITS = new Set(["milligram", "gram", "kilogram", "milliliter", "liter", "ounce", "pound"])
 
 export function normalizeUnitName(name: string): string {
   const key = name.normalize("NFC").toLowerCase().trim().replace(/\./g, "")

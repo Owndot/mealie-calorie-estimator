@@ -1,17 +1,19 @@
+import { normalizeRecipe, normalizedContext, normalizedGrams, ingredientText, NORMALIZATION_VERSION } from "./recipe-normalizer.js"
+import { resolveNutrition } from "./nutrition-providers.js"
 import { buildUnresolvedFoodContext, interpretSemanticIngredient, INTERPRETATION_VERSION } from "./ingredient-interpreter.js"
-import { contextForName, interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
-import { genericNutrients, matchGenericFood } from "./generic-foods.js"
+import { interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
+
 import { emptyAmounts, addAmounts, amountsFromProfile, divideAmounts, legacyAmounts } from "./nutrient-amounts.js"
 import { recipeWarnings, sanitizeNutritionPatch, validateCompleteProfile, validateProfile } from "./nutrition-validation.js"
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
-  NutrientSet, MealieNutrition,
+  MealieNutrition,
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams, hasImpossibleVolumeStandard, resolveUnitName } from "./unit-converter.js"
-import { lookupNutrients } from "./off-client.js"
-import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
+
+import { estimateGrams } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
 
 export function computeIngredientHash(recipe: MealieRecipe): string {
@@ -28,7 +30,7 @@ export function computeIngredientHash(recipe: MealieRecipe): string {
       .map(step => typeof step === "string" ? step : step.text).sort(),
   ])).sort()
   const input = [
-    NUTRITION_VERSION, INTERPRETATION_VERSION, "input-hash-v3-semantic",
+    NUTRITION_VERSION, INTERPRETATION_VERSION, NORMALIZATION_VERSION, config.llm.normalizeRecipe, config.estimate.autoTags, "input-hash-v4-pipeline",
     config.estimate.partialPolicy, config.units.pinchGrams,
     config.openFoodFacts.language, config.openFoodFacts.baseUrl, config.openFoodFacts.searchBaseUrl,
     config.llm.enabled, config.llm.model, config.llm.baseUrl, config.llm.endpointUrl,
@@ -71,149 +73,110 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   const unmatchedNames: string[] = []
   let totals = emptyAmounts()
   const warnings: string[] = []
-  for (const ing of recipe.recipeIngredient) {
-    const foodName = ing.food?.name
-    const quantity = ing.quantity
-    if (!foodName || quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
-      const tasteOnly = Boolean(foodName && /\b(?:nach\s+geschmack|nach\s+bedarf|to\s+taste|as\s+needed|as\s+desired)\b/i.test(
-        [foodName, ing.note, ing.display, ing.originalText, ing.original_text].filter(Boolean).join(" "),
-      ))
-      if (tasteOnly && foodName) {
-        const zero = emptyAmounts()
-        matchedIngredients.push({ name: foodName, grams: 0, matched: true, nutrients: {
-          kcalPer100g: 0, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0,
-          saturatedFatPer100g: 0, transFatPer100g: 0, unsaturatedFatPer100g: 0,
-          fiberPer100g: 0, sugarPer100g: 0, sodiumPer100g: 0, cholesterolPer100g: 0,
-        }, source: "deterministic", confidence: "medium", interpretationConfidence: 0.9,
-        sourceConfidence: 0.9, finalMatchConfidence: 0.9, reason: "to-taste seasoning omitted from quantified nutrition" })
-        totals = addAmounts(totals, zero)
-        warnings.push(`No measurable quantity for seasoning: ${foodName}`)
+  const normalized = await normalizeRecipe(recipe)
+  for (const [index, ing] of recipe.recipeIngredient.entries()) {
+    try {
+      const row = normalized?.[index]
+      const foodName = ing.food?.name || (row ? ingredientText(ing) : undefined)
+      const quantity = row ? normalizedGrams(row, ing).grams : ing.quantity
+      if (!foodName || quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
+        const tasteOnly = Boolean(foodName && /\b(?:nach\s+geschmack|nach\s+bedarf|to\s+taste|as\s+needed|as\s+desired)\b/i.test(
+          [foodName, ing.note, ing.display, ing.originalText, ing.original_text].filter(Boolean).join(" "),
+        ))
+        if (tasteOnly && foodName) {
+          const zero = emptyAmounts()
+          matchedIngredients.push({ name: foodName, grams: 0, matched: true, nutrients: {
+            kcalPer100g: 0, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0,
+            saturatedFatPer100g: 0, transFatPer100g: 0, unsaturatedFatPer100g: 0,
+            fiberPer100g: 0, sugarPer100g: 0, sodiumPer100g: 0, cholesterolPer100g: 0,
+          }, source: "deterministic", confidence: "medium", interpretationConfidence: 0.9,
+          sourceConfidence: 0.9, finalMatchConfidence: 0.9, reason: "to-taste seasoning omitted from quantified nutrition" })
+          totals = addAmounts(totals, zero)
+          warnings.push(`No measurable quantity for seasoning: ${foodName}`)
+          continue
+        }
+        // Empty section headings are not ingredients; unparsed ingredient text is.
+        const name = foodName || ing.display || ing.originalText || ing.original_text || ing.note
+        if (!name && ing.title) continue
+        const unmatchedName = name || "Unnamed ingredient"
+        const reason = "invalid or unquantified ingredient"
+        unmatchedNames.push(unmatchedName)
+        matchedIngredients.push({ name: unmatchedName, grams: null, matched: false, nutrients: null, interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason })
+        warnings.push(`Skipped ${reason}: ${unmatchedName}`)
         continue
       }
-      // Empty section headings are not ingredients; unparsed ingredient text is.
-      const name = foodName || ing.display || ing.originalText || ing.original_text || ing.note
-      if (!name && ing.title) continue
-      const unmatchedName = name || "Unnamed ingredient"
-      const reason = "invalid or unquantified ingredient"
-      unmatchedNames.push(unmatchedName)
-      matchedIngredients.push({ name: unmatchedName, grams: null, matched: false, nutrients: null, interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason })
-      warnings.push(`Skipped ${reason}: ${unmatchedName}`)
-      continue
-    }
-    const interpretedContext = await interpretSemanticIngredient(ing, recipe.recipeInstructions)
-    const context = interpretedContext ?? buildUnresolvedFoodContext(interpretIngredient(ing, recipe.recipeInstructions))
-    logger.debug({
-      originalName: foodName,
-      interpretationStatus: interpretedContext ? "resolved" : context ? "safe-unresolved" : "rejected",
-      interpretationSource: context?.interpretationSource,
-      canonicalName: context?.canonicalName,
-      state: context?.state,
-    }, "Ingredient interpretation status")
-    if (!context) {
-      unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null,
-        interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason: "ambiguous, contradictory, or non-food ingredient interpretation" })
-      logger.debug({ originalName: foodName, quantity, unit: ing.unit?.name, finalRejectionReason: "unsafe or non-food interpretation" }, "Ingredient rejected")
-      continue
-    }
-    const unit = resolveUnitName(ing.unit)
-    let grams = convertToGrams(quantity, ing.unit, context)
-    let llmEstimated = false
-    let weightEstimated = false
-    if (grams === null && unit && !hasImpossibleVolumeStandard(ing.unit) && context.state !== "ambiguous") {
-      grams = await estimateGrams(quantity, unit, context.query)
-      llmEstimated = grams !== null
-      weightEstimated = llmEstimated
-    }
-    if (grams === null || !Number.isFinite(grams) || grams <= 0 || context.state === "ambiguous") {
-      unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null, context, interpretationConfidence: context.interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: context.state === "ambiguous" ? context.reason : "unknown weight" })
-      logger.debug({ ...context, quantity, unit, grams, interpretationStatus: context.interpretationSource, weightResolutionStatus: "rejected", finalRejectionReason: "quantity or unit could not be resolved" }, "Ingredient could not be estimated")
-      continue
-    }
-    logger.debug({ originalName: foodName, grams, unit, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic" }, "Ingredient weight resolution status")
-    const genericMatch = matchGenericFood(context)
-    let nutrients: NutrientSet | null = null
-    let source: IngredientMatch["source"] = "OFF"
-    let productName: string | null = null
-    let confidence = "high"
-    let sourceConfidence = 1
-    let reason = "table salt mass calculation"
-    if (context.compoundNames?.length) {
-      const components = context.compoundNames.map(name => genericNutrients(contextForName(name))).filter((value): value is NutrientSet => value !== null)
-      if (components.length) {
-        nutrients = components.reduce((total, value) => {
-          for (const key of Object.keys(total) as Array<keyof NutrientSet>) {
-            total[key] = ((total[key] ?? 0) + (value[key] ?? 0) / components.length) as never
-          }
-          return total
-        }, { ...components[0] })
-        source = "generic"
-        confidence = "medium"
-        sourceConfidence = 0.9
-        reason = "compound seasoning split across trusted generic components"
+      const interpretedContext = row ? normalizedContext(row, ing) : await interpretSemanticIngredient(ing, recipe.recipeInstructions)
+      const context = interpretedContext ?? buildUnresolvedFoodContext(interpretIngredient(ing, recipe.recipeInstructions))
+      logger.debug({
+        originalName: foodName,
+        interpretationStatus: interpretedContext ? "resolved" : context ? "safe-unresolved" : "rejected",
+        interpretationSource: context?.interpretationSource,
+        canonicalName: context?.canonicalName,
+        state: context?.state,
+      }, "Ingredient interpretation status")
+      if (!context) {
+        unmatchedNames.push(foodName)
+        matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null,
+          interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason: "ambiguous, contradictory, or non-food ingredient interpretation" })
+        logger.debug({ originalName: foodName, quantity, unit: ing.unit?.name, finalRejectionReason: "unsafe or non-food interpretation" }, "Ingredient rejected")
+        continue
       }
-    }
-    if (!nutrients && context.generic !== false && !context.brand && ["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") {
-      nutrients = genericNutrients(context)
-      source = "deterministic"
-      reason = context.canonicalName === "water" ? "plain water zero-nutrient default" : reason
-    } else if ((nutrients = genericNutrients(context)) !== null
-      && (context.fatPercentage == null || nutrients.fatPer100g == null
-        || Math.abs(nutrients.fatPer100g - context.fatPercentage) <= Math.max(1.5, context.fatPercentage * 0.25))) {
-      source = "generic"
-      confidence = "medium"
-      sourceConfidence = genericMatch ? Math.min(0.95, genericMatch.confidence) : 0.9
-      productName = genericMatch?.entry.description ?? null
-      reason = "validated generic identity/state; USDA reference preferred before OFF"
-    } else {
-      // An unresolved context returned by the interpreter (for example with
-      // classification disabled) can still be used for a compatible OFF
-      // search. A context synthesized after a failed classifier has no
-      // trustworthy identity, so go directly to validated nutrient fallback.
-      if (interpretedContext !== null && (context.generic !== true || context.brand)) {
-        const off = await lookupNutrients(foodName, ing.unit?.name, context)
-        nutrients = off.matched ? off.nutrients : null
-        productName = off.productName
-        confidence = off.confidence ?? "medium"
-        sourceConfidence = confidence === "high" ? 0.95 : 0.8
-        reason = off.reason ?? "OFF lookup"
-      } else {
-        reason = "generic food without a trustworthy state-specific database profile; bypassing packaged-product search"
+      const unit = resolveUnitName(ing.unit)
+      let grams = row ? normalizedGrams(row, ing).grams : convertToGrams(quantity, ing.unit, context)
+      let llmEstimated = false
+      let weightEstimated = row ? normalizedGrams(row, ing).estimated : !["gram", "kilogram", "milligram", "ounce", "pound"].includes(unit ?? "")
+      if (grams === null && unit && !hasImpossibleVolumeStandard(ing.unit) && context.state !== "ambiguous") {
+        grams = await estimateGrams(quantity, unit, context.query)
+        llmEstimated = grams !== null
+        weightEstimated = llmEstimated
       }
-      if (!nutrients) {
-        nutrients = await estimateNutrients(context.query, context)
-        source = "LLM"
-        confidence = "low"
-        sourceConfidence = 0.6
-        reason += "; validated LLM nutrient fallback"
-        llmEstimated = true
+      if (grams === null || !Number.isFinite(grams) || grams <= 0 || context.state === "ambiguous") {
+        unmatchedNames.push(foodName)
+        matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null, context, interpretationConfidence: context.interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: context.state === "ambiguous" ? context.reason : "unknown weight" })
+        logger.debug({ ...context, quantity, unit, grams, interpretationStatus: context.interpretationSource, weightResolutionStatus: "rejected", finalRejectionReason: "quantity or unit could not be resolved" }, "Ingredient could not be estimated")
+        continue
       }
-    }
-    const interpretationConfidence = context.interpretationConfidence ?? 0.85
-    const weightConfidence = weightEstimated ? 0.7 : 1
-    const finalMatchConfidence = Math.min(interpretationConfidence, sourceConfidence, weightConfidence)
+      logger.debug({ originalName: foodName, grams, unit, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic" }, "Ingredient weight resolution status")
+      const resolved = await resolveNutrition(context)
+      const nutrients = resolved?.nutrients ?? null
+      const source = resolved?.source
+      const productName = resolved?.productName ?? null
+      const sourceConfidence = resolved?.confidence ?? 0
+      const confidence = sourceConfidence >= 0.9 ? "high" : sourceConfidence >= 0.75 ? "medium" : "low"
+      const reason = resolved?.reason ?? "no valid nutrient profile"
+      llmEstimated ||= source === "LLM" || resolved?.originalSource === "LLM"
+      if (weightEstimated) warnings.push(`Quantity estimated: ${foodName}`)
+      const interpretationConfidence = context.interpretationConfidence ?? 0.85
+      const weightConfidence = weightEstimated ? 0.7 : 1
+      const finalMatchConfidence = Math.min(interpretationConfidence, sourceConfidence, weightConfidence)
 
-    const validationErrors = source === "LLM" ? validateCompleteProfile(nutrients ?? {
-      kcalPer100g: null, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
-      saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
-      fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
-    }) : nutrients ? validateProfile(nutrients) : ["missing nutrient profile"]
-    if (!nutrients || validationErrors.length || finalMatchConfidence < 0.6) {
-      unmatchedNames.push(foodName)
-      matchedIngredients.push({       name: foodName, grams, matched: false, nutrients: null, context, interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: `${reason}; ${validationErrors.join(", ")}` })
-      logger.debug({ ...context, quantity, unit, grams, source, reason, nutrientResolutionStatus: nutrients ? "invalid" : "unresolved", finalRejectionReason: reason }, "No valid nutrient profile")
-      continue
+      const validationErrors = source === "LLM" ? validateCompleteProfile(nutrients ?? {
+        kcalPer100g: null, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
+        saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
+        fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
+      }) : nutrients ? validateProfile(nutrients) : ["missing nutrient profile"]
+      if (!nutrients || validationErrors.length) {
+        unmatchedNames.push(foodName)
+        matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null, context, interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: `${reason}; ${validationErrors.join(", ")}` })
+        logger.debug({ ...context, quantity, unit, grams, source, reason, nutrientResolutionStatus: nutrients ? "invalid" : "unresolved", finalRejectionReason: reason }, "No valid nutrient profile")
+        continue
+      }
+      logger.debug({ originalName: foodName, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic", nutrientResolutionStatus: source, finalRejectionReason: null }, "Ingredient resolution status")
+      const contribution = amountsFromProfile(nutrients, grams)
+      totals = addAmounts(totals, contribution)
+      matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, estimatedAmount: weightEstimated, originalSource: resolved?.originalSource, resolvedAt: resolved?.timestamp, source, context, productName, confidence, interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: resolved?.profileId, reason })
+      logger.debug({ originalName: foodName, canonicalFood: context.canonicalName, interpretationSource: context.interpretationSource, category: context.category, normalizedQuery: context.query, state: context.state, stateReason: context.reason,
+        quantity, unit, grams, source, productName, confidence, reason, kcalPer100g: nutrients.kcalPer100g,
+        sodiumMgPer100g: nutrients.sodiumPer100g, kcalContribution: contribution.kcal, sodiumMgContribution: contribution.sodiumMg, macroContributions: contribution, generic: context.generic, brand: context.brand,
+        interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: resolved?.profileId,
+      }, "Ingredient nutrition contribution")
+    } catch (error) {
+      const name = ingredientText(ing) || "Unnamed ingredient"
+      unmatchedNames.push(name)
+      matchedIngredients.push({ name, grams: null, matched: false, nutrients: null, reason: "ingredient processing failed" })
+      warnings.push(`Ingredient processing failed: ${name}`)
+      logger.warn({ error, name }, "Continuing after ingredient failure")
     }
-    logger.debug({ originalName: foodName, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic", nutrientResolutionStatus: source, finalRejectionReason: null }, "Ingredient resolution status")
-    const contribution = amountsFromProfile(nutrients, grams)
-    totals = addAmounts(totals, contribution)
-    matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, source, context, productName, confidence, interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: genericMatch?.entry.fdcId, reason })
-    logger.debug({ originalName: foodName, canonicalFood: context.canonicalName, interpretationSource: context.interpretationSource, category: context.category, normalizedQuery: context.query, state: context.state, stateReason: context.reason,
-      quantity, unit, grams, source, productName, confidence, reason, kcalPer100g: nutrients.kcalPer100g,
-      sodiumMgPer100g: nutrients.sodiumPer100g, kcalContribution: contribution.kcal, sodiumMgContribution: contribution.sodiumMg, macroContributions: contribution, generic: context.generic, brand: context.brand,
-      interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: genericMatch?.entry.fdcId,
-    }, "Ingredient nutrition contribution")
   }
   const servings = resolveServings(recipe)
   const yieldServings = parseYield(recipe.recipeYield)
@@ -231,6 +194,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   }
   logger.info({ slug: recipe.slug, servings, totalKcal: totals.kcal, kcalPerServing: perServing.kcal,
     totalSodiumMg: totals.sodiumMg, sodiumMgPerServing: perServing.sodiumMg, warnings,
+    sources: Object.fromEntries([...new Set(matchedIngredients.map(i => i.source).filter(Boolean))].map(source => [source, matchedIngredients.filter(i => i.source === source).length])),
     matched: result.matchedCount, unmatched: result.unmatchedCount, partial: result.partial }, "Estimated nutrition for recipe")
   return result
 }

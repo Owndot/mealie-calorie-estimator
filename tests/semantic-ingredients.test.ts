@@ -25,6 +25,8 @@ function interpretation(canonicalFood = "coriander seeds", state = "unspecified"
 beforeAll(initCache)
 beforeEach(() => {
   clearLlmCache()
+  // Exercise legacy recovery independently; whole-recipe normalization has its own suite.
+  config.llm.normalizeRecipe = false
   config.llm.enabled = true; config.llm.apiKey = "test-only"; config.llm.model = "semantic-test"
   vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external request"))
 })
@@ -128,6 +130,8 @@ describe("interpretation cache and confidence safety", () => {
     const branded = ingredient("cumin seeds"); branded.note = "Marke Example"
     expect(await interpretSemanticIngredient(branded)).toBeNull()
     clearLlmCache()
+  // Exercise legacy recovery independently; whole-recipe normalization has its own suite.
+  config.llm.normalizeRecipe = false
     const ambiguous = ingredient("mint")
     expect(await interpretSemanticIngredient(ambiguous)).toBeNull()
     expect(fetch).toHaveBeenCalledTimes(4)
@@ -274,6 +278,8 @@ describe("interpretation cache and confidence safety", () => {
     vi.mocked(fetch).mockImplementation(async () => response(interpretation()))
     await interpretSemanticIngredient(ingredient("Korianderkörner"))
     clearLlmCache()
+  // Exercise legacy recovery independently; whole-recipe normalization has its own suite.
+  config.llm.normalizeRecipe = false
     await interpretSemanticIngredient(ingredient("Korianderkörner"))
     expect(fetch).toHaveBeenCalledTimes(2)
   })
