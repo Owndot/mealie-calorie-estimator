@@ -138,7 +138,9 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const descriptorNotes = context.descriptorNotes ?? []
   const requiresPreservationSemantics = descriptorNotes.some(note => ["in oil", "in brine", "pickled"].includes(note))
   const name = normalizeFoodText(context.originalName)
-  const brandHint = /\b(brand|marke|hersteller)\b|[®™]/i.test([ingredient.food?.name, ingredient.note, ingredient.originalText, ingredient.display].join(" "))
+  const brandEvidence = [ingredient.food?.name, ingredient.note]
+    .filter((value): value is string => typeof value === "string").join(" ")
+  const brandHint = /\b(brand|marke|hersteller)\b|[®™]/i.test(brandEvidence)
   const unresolvedDetails = hasUnresolvedIngredientDetails(ingredient, context)
   const remainingDetails = unresolvedDetails ? normalizeFoodText([ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
     .filter(Boolean).join(" ")) : ""
@@ -220,7 +222,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const classifierStateIsUncertain = ["unspecified", "raw", "fresh"].includes(parsed.state)
   if (explicitState && descriptorNotes.length > 0 && !compatibleCanonicalIdentity(context.canonicalName, parsed.canonicalFood)) return null
   if (explicitState && parsed.state !== context.state && !compatibleFresh && !classifierStateIsUncertain) return null
-  if (parsed.brand && !normalizeFoodText(JSON.stringify(input)).includes(normalizeFoodText(parsed.brand))) return null
+  if (parsed.brand && !normalizeFoodText(brandEvidence).includes(normalizeFoodText(parsed.brand))) return null
   const canonicalName = interpretIngredient({ food: { id: "", name: parsed.canonicalFood, pluralName: null, aliases: [] } }, [], false).canonicalName
   const effectiveState = explicitState && classifierStateIsUncertain ? context.state : parsed.state
   const compositeCategory = genericCompositeCategory(context.originalName)

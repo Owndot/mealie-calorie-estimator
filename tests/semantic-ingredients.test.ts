@@ -386,6 +386,57 @@ describe("interpretation cache and confidence safety", () => {
     expect(result.matchedIngredients[0].source).toBe("generic")
     expect(fetch).not.toHaveBeenCalled()
   })
+  it("completes pizza dough with local staple routing and no fabricated brand", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options?.body as string)
+      if (body.messages) return response({ kcal: 330, protein: 8, carbs: 65, fat: 2, fiber: 2, sugar: 1, sodium: 500, cholesterol: 0 })
+      return new Response(JSON.stringify({ hits: [] }), { status: 200 })
+    })
+    const names = [
+      ["Weizenmehl", 500],
+      ["Wasser", 325],
+      ["Meersalz", 15],
+      ["Hefe", 0.5],
+    ] as const
+    const ingredients = names.map(([name, quantity]) => {
+      const input = ingredient(name)
+      input.quantity = quantity
+      input.display = `${quantity} g ${name}`
+      input.originalText = input.display
+      return input
+    })
+    const result = await estimateRecipe({
+      ...recipe(ingredients[0]),
+      recipeIngredient: ingredients,
+      recipeServings: 3,
+      recipeYield: "3 Portionen",
+    })
+    expect(result.partial).toBe(false)
+    expect(result.unmatchedCount).toBe(0)
+    expect(result.totalNutrients.kcalPer100g).toBeGreaterThan(1500)
+    expect(result.matchedIngredients.find(item => item.name === "Weizenmehl")).toMatchObject({
+      source: "generic",
+      context: { canonicalName: "flour", brand: null, interpretationSource: "deterministic" },
+    })
+    expect(result.matchedIngredients.find(item => item.name === "Meersalz")).toMatchObject({
+      source: "deterministic",
+      context: { canonicalName: "salt" },
+    })
+    expect(fetch).toHaveBeenCalled()
+    expect(vi.mocked(fetch).mock.calls.every(([, options]) => {
+      const body = JSON.parse(options?.body as string)
+      return !body.messages?.[0]?.content?.includes("Interpret a recipe ingredient")
+    })).toBe(true)
+  })
+  it("does not accept a brand inferred only from display metadata", async () => {
+    vi.mocked(fetch).mockResolvedValue(response(interpretation("flour", "unspecified", {
+      category: "other", generic: false, brand: "Teichners Beste",
+    })))
+    const input = ingredient("unbekanntes Mehl")
+    input.display = "500 g unbekanntes Mehl Teichners Beste"
+    input.originalText = input.display
+    expect(await interpretSemanticIngredient(input)).toBeNull()
+  })
   it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
     "still classifies locally unresolved %s",
     async name => {

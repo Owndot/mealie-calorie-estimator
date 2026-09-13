@@ -158,6 +158,14 @@ describe("German recipe units", () => {
     expect(result.matchedIngredients[0].grams).toBe(400)
     expect(estimateGrams).not.toHaveBeenCalled()
   })
+
+  it("converts a flour cup from the trusted local portion", async () => {
+    offResponse("flour", 364)
+    const result = await estimateRecipe(recipe("Mehl", "cup", 1))
+    expect(result.matchedIngredients[0].grams).toBeGreaterThan(100)
+    expect(result.matchedIngredients[0].grams).toBeLessThan(150)
+    expect(estimateGrams).not.toHaveBeenCalled()
+  })
 })
 
 it("converts OFF sodium and cholesterol grams to Mealie milligrams once", async () => {
