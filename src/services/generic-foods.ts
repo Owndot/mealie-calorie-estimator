@@ -67,6 +67,7 @@ export function genericEntry(context: IngredientContext): GenericEntry | undefin
 }
 export function genericNutrients(context: IngredientContext): NutrientSet | null {
   if (context.brand) return null
+  if ((context.descriptorNotes ?? []).some(note => ["in oil", "in brine", "pickled"].includes(note))) return null
   if (context.canonicalName === "salt" && context.state === "unspecified") return { ...SALT }
   if (context.canonicalName === "water" && context.state === "unspecified") return { ...WATER }
   const entry = genericEntry(context)

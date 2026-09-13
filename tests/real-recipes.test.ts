@@ -143,6 +143,12 @@ describe("state interpretation and aliases", () => {
     expect(plain.query).not.toContain("in oil")
     expect(oil.query).not.toBe(plain.query)
   })
+  it("separates cache identities by state and preservation descriptors", () => {
+    expect(nutrientCacheKey("llm", contextForName("Getrocknete Tomate in Öl")))
+      .not.toBe(nutrientCacheKey("llm", contextForName("getrocknete Tomaten")))
+    expect(nutrientCacheKey("off", contextForName("Oliven in Lake")))
+      .not.toBe(nutrientCacheKey("off", contextForName("Oliven")))
+  })
   it.each([
     ["Kochsahne 7%", 7],
     ["Sahne 15% Fett", 15],

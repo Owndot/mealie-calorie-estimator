@@ -202,6 +202,23 @@ describe("interpretation cache and confidence safety", () => {
     vi.mocked(fetch).mockResolvedValue(response(interpretation("chickpeas", "dry", { category: "legume" })))
     expect(await interpretSemanticIngredient(ingredient("unknown pulses aus der Dose"))).toBeNull()
   })
+  it("keeps semantic classification separate from USDA nutrient routing", async () => {
+    vi.mocked(fetch).mockResolvedValue(response(interpretation("coriander seeds", "unspecified", { category: "spice" })))
+    const result = await estimateRecipe(recipe(ingredient("Korianderkörner")))
+    expect(result).toMatchObject({ partial: false, matchedCount: 1 })
+    expect(result.matchedIngredients[0]).toMatchObject({ source: "generic", context: { interpretationSource: "LLM", canonicalName: "coriander seeds" } })
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+  it("does not let generic USDA erase an oil-preservation descriptor", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options!.body as string)
+      if (body.messages[0].role === "system") return response(interpretation("tomato", "dry", { category: "vegetable" }))
+      return response({ kcal: 180, protein: 4, carbs: 12, fat: 10, fiber: 8, sugar: 8, sodium: 200, cholesterol: 0, saturatedFat: 1, transFat: 0 })
+    })
+    const result = await estimateRecipe(recipe(ingredient("Getrocknete Tomate in Öl")))
+    expect(result.matchedIngredients[0]).toMatchObject({ source: "LLM", context: { descriptorNotes: ["in oil"] } })
+    expect(result.matchedIngredients[0].source).not.toBe("generic")
+  })
   it("clears interpretation cache together with LLM caches", async () => {
     vi.mocked(fetch).mockImplementation(async () => response(interpretation()))
     await interpretSemanticIngredient(ingredient("Korianderkörner"))

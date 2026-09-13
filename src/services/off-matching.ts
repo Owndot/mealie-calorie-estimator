@@ -14,6 +14,8 @@ export function scoreOffMatch(context: IngredientContext, productName: string, n
   }
   const candidate = interpretIngredient({ food: { id: "", name: candidateName, pluralName: null, aliases: [] } }, [], false)
   if (!context.canonicalName || candidate.canonicalName !== wantedName || context.state === "ambiguous" || candidate.state === "ambiguous") return 0
+  const requiredDescriptors = (context.descriptorNotes ?? []).filter(note => ["in oil", "in brine", "pickled"].includes(note))
+  if (requiredDescriptors.some(note => !(candidate.descriptorNotes ?? []).includes(note))) return 0
   const wanted = context.state
   const found = candidate.state
   if (wanted !== found && found !== "unspecified") {
