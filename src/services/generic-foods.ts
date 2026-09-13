@@ -90,6 +90,7 @@ export function knownGramsPerUnit(context: IngredientContext, unit: string): num
   if (!entry) return null
   if (unit === "piece" || unit === "clove") {
     const portion = entry.portions.find(p => unit === "clove" ? p.description === "clove" : p.description.startsWith("medium"))
+      ?? (unit === "piece" ? entry.portions.find(p => p.description === "clove") : undefined)
     return portion ? portion.grams / portion.amount : null
   }
   const ml = unit === "teaspoon" ? 5 : unit === "tablespoon" ? 15 : unit === "cup" ? 240 : unit === "milliliter" ? 1 : unit === "liter" ? 1000 : null

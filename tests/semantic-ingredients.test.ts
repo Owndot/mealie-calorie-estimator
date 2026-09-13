@@ -350,7 +350,9 @@ describe("interpretation cache and confidence safety", () => {
     ["Salz", "Teelöffel"],
     ["Salz", "Prise"],
     ["Oregano", "Teelöffel"],
+    ["getrockneter Oregano", "Teelöffel"],
     ["Basilikum", "Teelöffel"],
+    ["getrocknetes Basilikum", "Teelöffel"],
   ])("skips classification for German production metadata %s/%s", async (name, unit) => {
     const input = ingredient(name)
     input.quantity = 1
@@ -360,6 +362,15 @@ describe("interpretation cache and confidence safety", () => {
     const result = await estimateRecipe(recipe(input))
     expect(result.partial).toBe(false)
     expect(result.matchedIngredients[0].context?.interpretationSource).toBe("deterministic")
+    expect(fetch).not.toHaveBeenCalled()
+  })
+  it("uses a trusted catalog clove portion for garlic piece units", async () => {
+    const input = ingredient("garlic raw")
+    input.quantity = 1
+    input.unit = { id: "piece", name: "piece", abbreviation: null, pluralName: null, standardQuantity: null, standardUnit: null }
+    const result = await estimateRecipe(recipe(input))
+    expect(result.matchedIngredients[0].grams).toBe(3)
+    expect(result.matchedIngredients[0].source).toBe("generic")
     expect(fetch).not.toHaveBeenCalled()
   })
   it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
