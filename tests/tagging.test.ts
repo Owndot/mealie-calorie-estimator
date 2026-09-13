@@ -247,6 +247,14 @@ describe("mergeTags", () => {
     const result = mergeTags(recipe, [tag("Calories:Light", "calories-light")], [])
     expect(result).toHaveLength(1)
   })
+  it("deduplicates merged tags by stable id", () => {
+    const recipe = makeRecipe([tag("Digest:Slow", "digest-slow"), tag("Calories:Light", "calories-light")], [])
+    const result = mergeTags(recipe, [
+      tag("Calories:Light", "calories-light"),
+      tag("Digest:Slow", "digest-slow"),
+    ], [])
+    expect(result.map(t => t.slug)).toEqual(["digest-slow", "calories-light"])
+  })
 })
 
 describe("tagsAreComplete", () => {

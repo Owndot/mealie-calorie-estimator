@@ -79,7 +79,13 @@ export function mergeTags(
   oldSlugs: string[],
 ): MealieTag[] {
   const userTags = (recipe.tags || []).filter(t => !oldSlugs.includes(t.slug))
-  return [...userTags, ...autoTags]
+  const seen = new Set<string>()
+  return [...userTags, ...autoTags].filter(tag => {
+    const identity = tag.id || tag.slug
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
 }
 
 export function tagsAreComplete(recipe: MealieRecipe): boolean {

@@ -86,6 +86,8 @@ function hasUnresolvedIngredientDetails(
     residual = residual.split(" ").filter(token =>
       !isKnownUnitName(token) && !/^(?:teeloffel|essloffel|milliliter|millilitre|kilogramm|gramm|liter|litre)$/.test(token),
     ).join(" ")
+    const identityTokens = new Set([...canonicalDetails].flatMap(value => value.split(" ")))
+    residual = residual.split(" ").filter(token => !identityTokens.has(token)).join(" ")
     if (!residual) return false
     if (canonicalDetails.has(residual)) return false
     const interpreted = interpretIngredient({
@@ -139,7 +141,10 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const remainingDetails = unresolvedDetails ? normalizeFoodText([ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
     .filter(Boolean).join(" ")) : ""
 
-  if (canResolveLocally(context, exact, brandHint, unresolvedDetails, requiresPreservationSemantics)) {
+  const deterministicIdentity = ["salt", "water"].includes(context.canonicalName) && context.state === "unspecified"
+  const localProfileIdentity = exact?.confidence === 1 && !brandHint && !unresolvedDetails
+    && !requiresPreservationSemantics && !context.fatPercentage
+  if (deterministicIdentity || localProfileIdentity || canResolveLocally(context, exact, brandHint, unresolvedDetails, requiresPreservationSemantics)) {
     const interpreted = { ...context, canonicalName: exact?.name === "rice" && context.canonicalName === "basmati rice" ? "basmati rice" : exact?.name ?? context.canonicalName,
       state: exact?.state ?? context.state, query: [context.canonicalName, context.state === "unspecified" ? "" : context.state].filter(Boolean).join(" "),
       category: exact?.entry.category ?? "other", generic: true, brand: null,
