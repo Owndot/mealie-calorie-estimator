@@ -38,7 +38,6 @@ const pending = new Map<string, Promise<SemanticInterpretation | null>>()
 
 async function classify(key: string, input: unknown): Promise<SemanticInterpretation | null> {
   const cached = getCachedInterpretation(key)
-  if (cached === null) return null
   if (validateInterpretation(cached)) return cached
   const existing = pending.get(key)
   if (existing) return existing
@@ -57,7 +56,7 @@ async function classify(key: string, input: unknown): Promise<SemanticInterpreta
       const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
       const value: unknown = JSON.parse(body.choices?.[0]?.message?.content ?? "null")
       const result = validateInterpretation(value) ? value : null
-      setCachedInterpretation(key, result)
+      if (result) setCachedInterpretation(key, result)
       return result
     } catch (error) {
       // Do not persist network/server failures; an explicit retry can recover immediately.
@@ -111,8 +110,38 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
     [semanticText(input.name), semanticText(input.note), semanticText(input.originalText), semanticText(input.display),
       normalizeUnitName(input.unit), input.detectedState, input.instructions.map(semanticText)],
   ])).digest("hex")
-  const parsed = await classify(key, input)
-  if (!parsed) return null
+  let parsed = await classify(key, input)
+  if (!parsed) {
+    logger.debug({ originalName: context.originalName }, "Ingredient classification failed; retrying once")
+    parsed = await classify(`${key}:retry`, {
+      ...input,
+      retryInstructions: "Return only valid structured JSON. Identify the ordinary food ingredient, do not invent a brand, infer preparation state conservatively, and use a simple canonical English food name. If uncertain, lower confidence rather than hallucinating; return JSON null below the confidence threshold.",
+    })
+    if (parsed) {
+      setCachedInterpretation(key, parsed)
+      logger.debug({ originalName: context.originalName }, "Ingredient classification retry succeeded")
+    } else {
+      logger.debug({ originalName: context.originalName }, "Ingredient classification retry failed; attempting local recovery")
+      if (!brandHint) {
+        const originalTokens = normalizeFoodText(context.originalName).split(" ").map(word => word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word).sort().join(" ")
+        const candidates = genericCatalog.filter(item => [item.name, ...item.entry.synonyms].some(value =>
+          normalizeFoodText(value).split(" ").map(word => word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word).sort().join(" ") === originalTokens))
+        if (candidates.length === 1) {
+          const candidate = candidates[0]
+          const recovered = matchGenericFood({ ...context, canonicalName: candidate.name, category: candidate.entry.category, generic: true, brand: null }, true)
+          if (recovered && recovered.confidence === 1) {
+            logger.debug({ originalName: context.originalName, canonicalName: recovered.name, profileId: recovered.entry.fdcId }, "Recovered ingredient from trusted local generic database")
+            return {
+              ...context, canonicalName: recovered.name, state: recovered.state, query: [recovered.name, recovered.state === "unspecified" ? "" : recovered.state].filter(Boolean).join(" "),
+              category: recovered.entry.category, generic: true, brand: null, interpretationConfidence: 0.98, interpretationSource: "deterministic",
+              reason: "trusted local generic recovery after classification failure", confidence: "high",
+            }
+          }
+        }
+      }
+      return null
+    }
+  }
   const explicitState = context.reason === "explicit ingredient state" || context.reason === "ingredient-linked soaking instruction"
   const compatibleFresh = ["fresh", "raw"].includes(context.state) && ["fresh", "raw"].includes(parsed.state) && ["vegetable", "fruit", "herb"].includes(parsed.category)
   if (explicitState && parsed.state !== context.state && !compatibleFresh) return null

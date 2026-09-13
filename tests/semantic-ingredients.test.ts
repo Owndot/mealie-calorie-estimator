@@ -87,8 +87,87 @@ describe("interpretation cache and confidence safety", () => {
     const result = await estimateRecipe(input)
     expect(result.partial).toBe(true)
     expect(buildNutritionPatch(result, "hash", input.recipeYield, null).nutrition).toEqual({})
-    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledTimes(2)
     expect(validateInterpretation(value)).toBe(false)
+  })
+  it("retries malformed classification once and accepts the valid result", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response("{not-json", { status: 200 }))
+      .mockResolvedValueOnce(response(interpretation("cumin", "unspecified")))
+    const input = ingredient("cumin seeds")
+    input.display = "cumin seeds, preparation"
+    const result = await interpretSemanticIngredient(input)
+    expect(result).toMatchObject({ canonicalName: "cumin", interpretationSource: "LLM" })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    const retryBody = JSON.parse(vi.mocked(fetch).mock.calls[1][1]!.body as string)
+    expect(retryBody.messages[0].content).toContain("Do NOT estimate nutrients")
+    expect(retryBody.messages[1].content).toContain("retryInstructions")
+    await interpretSemanticIngredient(input)
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("retries low-confidence classification once, then leaves both failures unmatched", async () => {
+    vi.mocked(fetch).mockResolvedValue(response(interpretation("cumin", "unspecified", { confidence: 0.4 })))
+    expect(await interpretSemanticIngredient(ingredient("unknown herb"))).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("does not retry classification more than once", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("null", { status: 200 }))
+    expect(await interpretSemanticIngredient(ingredient("unknown herb"))).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("recovers a unique trusted local profile after both classification attempts fail", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("null", { status: 200 }))
+    const input = ingredient("cumin seeds")
+    input.display = "cumin seeds, unknown preparation"
+    const result = await interpretSemanticIngredient(input)
+    expect(result).toMatchObject({ canonicalName: "cumin", interpretationSource: "deterministic", generic: true })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("does not use local recovery for branded or ambiguous identities", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("null", { status: 200 }))
+    const branded = ingredient("cumin seeds"); branded.note = "Marke Example"
+    expect(await interpretSemanticIngredient(branded)).toBeNull()
+    clearLlmCache()
+    const ambiguous = ingredient("mint")
+    expect(await interpretSemanticIngredient(ambiguous)).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(4)
+  })
+  it("keeps incompatible preparation states blocked during local recovery", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("null", { status: 200 }))
+    const input = ingredient("cumin seeds")
+    input.note = "gekocht"
+    input.display = "cumin seeds, unknown preparation"
+    expect(await interpretSemanticIngredient(input)).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("resolves Minze through a transient retry to a trusted fresh herb profile", async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response("malformed", { status: 200 }))
+      .mockResolvedValueOnce(response(interpretation("spearmint", "fresh", { category: "herb" })))
+    const result = await estimateRecipe(recipe(ingredient("Minze")))
+    expect(result.partial).toBe(false)
+    expect(result.matchedIngredients[0]).toMatchObject({ source: "generic", profileId: "173475", context: { canonicalName: "spearmint", state: "fresh" } })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
+  it("covers the core Anatolian lentil soup identities without a partial estimate", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options!.body as string)
+      const input = JSON.parse(body.messages[1].content)
+      const values: Record<string, unknown> = {
+        paprika: interpretation("paprika", "unspecified"),
+        lemon: interpretation("lemon", "raw", { category: "fruit" }),
+        mint: interpretation("spearmint", "fresh", { category: "herb" }),
+        "red lentils": interpretation("red lentils", "dry", { category: "legume" }),
+        "olive oil": interpretation("olive oil", "unspecified", { category: "oil" }),
+      }
+      return response(values[input.name] ?? null)
+    })
+    const soup = recipe(ingredient("paprika"))
+    soup.recipeIngredient = ["paprika", "lemon", "mint", "red lentils", "olive oil"].map(name => ingredient(name))
+    const result = await estimateRecipe(soup)
+    expect(result.partial).toBe(false)
+    expect(result.matchedIngredients.map(item => item.context?.canonicalName)).toEqual(["paprika", "lemon", "spearmint", "red lentils", "olive oil"])
+    expect(result.matchedIngredients.every(item => item.source === "generic")).toBe(true)
   })
   it("does not override an explicit canned state with dry nutrition", async () => {
     vi.mocked(fetch).mockResolvedValue(response(interpretation("chickpeas", "dry", { category: "legume" })))
