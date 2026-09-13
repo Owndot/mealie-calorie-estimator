@@ -462,6 +462,63 @@ describe("interpretation cache and confidence safety", () => {
     input.originalText = input.display
     expect(await interpretSemanticIngredient(input)).toBeNull()
   })
+  it.each(["Thunfisch a. d. Dosen", "Dillgurke", "griechischer Joghurt", "canned tuna", "dill pickle", "greek yogurt"])(
+    "uses validated nutrient fallback for ordinary unresolved food %s",
+    async name => {
+      vi.mocked(fetch).mockImplementation(async (_url, options) => {
+        const body = JSON.parse(options?.body as string)
+        if (body.messages?.[0]?.role === "system") return new Response("null", { status: 200 })
+        return response({ kcal: 120, protein: 5, carbs: 8, fat: 6, fiber: 1, sugar: 2, sodium: 300, cholesterol: 20 })
+      })
+      const input = ingredient(name)
+      input.quantity = 100
+      input.display = `100 g ${name}`
+      input.originalText = input.display
+      const result = await estimateRecipe(recipe(input))
+      expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 1 })
+      expect(result.matchedIngredients[0]).toMatchObject({ source: "LLM", llmEstimated: true })
+    },
+  )
+  it("splits quantified compound seasonings across trusted components", async () => {
+    const input = ingredient("Salz und Pfeffer")
+    input.quantity = 2
+    input.unit = { id: "pinch", name: "Prise", abbreviation: null, pluralName: null, standardQuantity: null, standardUnit: null }
+    input.display = "2 Prisen Salz und Pfeffer"
+    input.originalText = input.display
+    const result = await estimateRecipe(recipe(input))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 1 })
+    expect(result.matchedIngredients[0].source).toBe("generic")
+  })
+  it("omits an unquantified to-taste seasoning without making the recipe partial", async () => {
+    const input = ingredient("Salz und Pfeffer nach Geschmack")
+    input.quantity = null
+    input.unit = null
+    input.display = input.food!.name
+    input.originalText = input.display
+    const result = await estimateRecipe(recipe(input))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 1 })
+    expect(result.matchedIngredients[0].grams).toBe(0)
+  })
+  it("completes a tuna egg salad with ordinary unresolved food categories", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options?.body as string)
+      if (body.messages?.[0]?.role === "system") return new Response("null", { status: 200 })
+      return response({ kcal: 120, protein: 10, carbs: 4, fat: 6, fiber: 1, sugar: 2, sodium: 300, cholesterol: 40 })
+    })
+    const names = ["Thunfisch a. d. Dosen", "Dillgurke", "griechischer Joghurt", "Salz und Pfeffer nach Geschmack"]
+    const ingredients = names.map(name => {
+      const input = ingredient(name)
+      input.quantity = name.includes("Geschmack") ? null : 100
+      input.unit = name.includes("Geschmack") ? null : { id: "g", name: "g", pluralName: null, abbreviation: "g", standardQuantity: null, standardUnit: null }
+      input.display = input.quantity == null ? name : `${input.quantity} g ${name}`
+      input.originalText = input.display
+      return input
+    })
+    const result = await estimateRecipe({ ...recipe(ingredients[0]), recipeIngredient: ingredients, recipeServings: 2, recipeYield: "2 Portionen" })
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 4 })
+    expect(result.matchedIngredients.filter(item => item.llmEstimated)).toHaveLength(3)
+    expect(result.matchedIngredients.find(item => item.name.includes("Salz"))?.grams).toBe(0)
+  })
   it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
     "still classifies locally unresolved %s",
     async name => {

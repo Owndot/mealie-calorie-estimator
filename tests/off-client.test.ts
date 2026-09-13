@@ -53,6 +53,17 @@ describe("lookupNutrients", () => {
     expect(calledUrl).toContain("q=Milch")
     expect(calledUrl).toContain("langs=de")
   })
+  it("rejects an identity-perfect but incomplete zero-energy OFF profile", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse({
+      "energy-kcal_100g": 0,
+      "proteins_100g": null,
+      "carbohydrates_100g": null,
+      "fat_100g": null,
+    }, "Dijon Mustard"))
+    const result = await lookupNutrients("Dijon Mustard")
+    expect(result.matched).toBe(false)
+    expect(result.nutrients).toBeNull()
+  })
 
   it("keeps OFF carbohydrates in the available-carbohydrate convention and does not subtract fiber again", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({

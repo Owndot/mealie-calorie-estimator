@@ -16,8 +16,9 @@ export interface IngredientContext {
   fatPercentage?: number
   descriptorNotes?: string[]
   genericComposite?: boolean
+  compoundNames?: string[]
 }
-export const NUTRITION_VERSION = "nutrition-v14-routing-precedence"
+export const NUTRITION_VERSION = "nutrition-v15-off-profile-validation"
 
 export function normalizeFoodText(text: unknown): string {
   if (typeof text !== "string") return ""
@@ -79,6 +80,7 @@ const descriptorRules: Array<{ state?: FoodState; note?: string; pattern: RegExp
   { state: "cooked", note: "roasted", pattern: /\b(gerostet\w*|roasted)\b/g },
 ]
 const prep = /\b(fein|grob|finely|roughly|bio|organic|biologisch\w*|gewurfelt\w*|gehackt\w*|geschnitten\w*|gerieben\w*|gemahlen\w*|geschalt\w*|diced|chopped|sliced|grated|ground|peeled)\b/g
+const tasteQualifier = /\b(?:nach\s+geschmack|nach\s+bedarf|to\s+taste|as\s+needed|as\s+desired)\b/g
 const staples = new Set(["pinto beans", "kidney beans", "rice", "basmati rice"])
 const freshFoods = new Set(["onion", "red onion", "garlic", "ginger", "eggplant", "tomato", "potato", "carrot"])
 
@@ -112,10 +114,13 @@ export function interpretIngredient(
   const detail = detailDescriptors.normalized
   const fatMatch = rawDetail.match(/\b(\d+(?:[.,]\d+)?)\s*%(?:\s*(?:fett|fat))?/i)
   const fatPercentage = fatMatch ? Number(fatMatch[1].replace(",", ".")) : undefined
-  let identity = name.replace(prep, " ")
+  let identity = name.replace(prep, " ").replace(tasteQualifier, " ")
+  const compoundNames = identity.split(/\s+(?:und|and)\s+|,\s*/).map(value => value.trim()).filter(Boolean)
+  if (compoundNames.length < 2 || compoundNames.some(value => value.split(" ").length > 3)) compoundNames.length = 0
   identity = identity.replace(/\b(vollfett\w*|full fat)\b/g, " ")
   identity = identity.replace(/\b(aus der|aus dem|in der|from the|in a)\b/g, " ").trim().replace(/\s+/g, " ")
   let canonicalName = aliases.get(identity) ?? identity
+  if (compoundNames.length) canonicalName = aliases.get(compoundNames[0]) ?? compoundNames[0]
   // Nutrition-changing qualifiers in notes must not disappear when the food name is generic.
   const qualifiers = detail.match(/\b(light|fettarm\w*|fettreduziert\w*|low fat|reduced fat|low sodium|natriumarm\w*|salted|gesalzen\w*|sweetened|gesusst\w*|krautersalz|kalium\w*)\b/g)
   if (qualifiers?.length && !qualifiers.some(q => identity.includes(q))) canonicalName += ` ${[...new Set(qualifiers)].join(" ")}`
@@ -152,7 +157,8 @@ export function interpretIngredient(
   }
   if (staples.has(canonicalName) && state === "raw") { state = "dry"; reason = "raw mature staple means dry" }
   const query = [canonicalName, state === "unspecified" ? "" : state, ...detailDescriptors.notes].filter(Boolean).join(" ")
-  return { originalName, canonicalName, state, query, reason, confidence, fatPercentage, descriptorNotes: detailDescriptors.notes }
+  return { originalName, canonicalName, state, query, reason, confidence, fatPercentage, descriptorNotes: detailDescriptors.notes,
+    ...(compoundNames.length ? { compoundNames } : {}) }
 }
 
 export function contextForName(name: string): IngredientContext {

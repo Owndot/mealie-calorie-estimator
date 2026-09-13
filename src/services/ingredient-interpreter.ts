@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v7-production-detail-routing"
+export const INTERPRETATION_VERSION = "interpretation-v8-semantic-fallback"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -240,7 +240,8 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const explicitState = context.reason === "explicit ingredient state" || context.reason === "ingredient-linked soaking instruction"
   const compatibleFresh = ["fresh", "raw"].includes(context.state) && ["fresh", "raw"].includes(parsed.state) && ["vegetable", "fruit", "herb"].includes(parsed.category)
   const classifierStateIsUncertain = ["unspecified", "raw", "fresh"].includes(parsed.state)
-  if (explicitState && descriptorNotes.length > 0 && !compatibleCanonicalIdentity(context.canonicalName, parsed.canonicalFood)) return null
+  if (explicitState && descriptorNotes.length > 0 && isKnownFoodIdentity(context.canonicalName)
+    && !compatibleCanonicalIdentity(context.canonicalName, parsed.canonicalFood)) return null
   if (explicitState && parsed.state !== context.state && !compatibleFresh && !classifierStateIsUncertain) return null
   if (parsed.brand && !normalizeFoodText(brandEvidence).includes(normalizeFoodText(parsed.brand))) return null
   const canonicalName = interpretIngredient({ food: { id: "", name: parsed.canonicalFood, pluralName: null, aliases: [] } }, [], false).canonicalName

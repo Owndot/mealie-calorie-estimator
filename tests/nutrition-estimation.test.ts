@@ -36,8 +36,13 @@ function recipe(name: string, unitName = "g", quantity = 100): MealieRecipe {
 }
 
 function offResponse(productName?: string, kcal = 10, sodium = 0) {
+  const fat = Math.min(100, kcal / 9)
+  const carbs = Math.max(0, (kcal - fat * 9) / 4)
   vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
-    hits: [{ product_name: productName, nutriments: { "energy-kcal_100g": kcal, "sodium_100g": sodium } }],
+    hits: [{ product_name: productName, nutriments: {
+      "energy-kcal_100g": kcal, "proteins_100g": 0, "carbohydrates_100g": carbs,
+      "fat_100g": fat, "saturated-fat_100g": 0, "sodium_100g": sodium,
+    } }],
   })))
 }
 
@@ -170,7 +175,10 @@ describe("German recipe units", () => {
 
 it("converts OFF sodium and cholesterol grams to Mealie milligrams once", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hits: [{
-    product_name: "Testfood", nutriments: { "energy-kcal_100g": 100, "sodium_100g": 0.4, "cholesterol_100g": 0.05 },
+    product_name: "Testfood", nutriments: {
+      "energy-kcal_100g": 100, "proteins_100g": 0, "carbohydrates_100g": 25,
+      "fat_100g": 0, "saturated-fat_100g": 0, "sodium_100g": 0.4, "cholesterol_100g": 0.05,
+    },
   }] })))
   const result = await estimateRecipe(recipe("Testfood", "g", 200))
   expect(result.totalNutrients.sodiumPer100g).toBe(800)

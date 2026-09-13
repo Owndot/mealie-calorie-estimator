@@ -18,12 +18,24 @@ export function validateProfile(n: NutrientSet): string[] {
     const limit = key === "kcalPer100g" ? 950 : key === "sodiumPer100g" ? 40000 : key === "cholesterolPer100g" ? 3500 : 100
     if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > limit) reasons.push(`invalid ${key}`)
   }
+
   if (n.kcalPer100g == null) reasons.push("missing energy")
   if (n.fatPer100g != null && (n.saturatedFatPer100g ?? 0) + (n.transFatPer100g ?? 0) > n.fatPer100g + 0.5) reasons.push("fat fractions exceed total fat")
   if (n.carbsPer100g != null && (n.sugarPer100g ?? 0) > n.carbsPer100g + 2) reasons.push("sugar exceeds carbohydrates")
   if ((n.carbsPer100g ?? 0) + (n.fiberPer100g ?? 0) > 105) reasons.push("carbohydrate and fiber exceed food mass")
   if ((n.proteinPer100g ?? 0) + (n.carbsPer100g ?? 0) + (n.fatPer100g ?? 0) > 105) reasons.push("macros exceed food mass")
   return reasons.concat(energyConsistencyErrors(n))
+}
+
+export function validateCompleteProfile(n: NutrientSet): string[] {
+  const reasons = validateProfile(n)
+  for (const key of ["kcalPer100g", "proteinPer100g", "carbsPer100g", "fatPer100g"] as const) {
+    if (n[key] == null) reasons.push(`missing ${key}`)
+  }
+  if (n.kcalPer100g === 0 && (n.proteinPer100g ?? 0) + (n.carbsPer100g ?? 0) + (n.fatPer100g ?? 0) > 0) {
+    reasons.push("zero energy contradicts non-zero macros")
+  }
+  return [...new Set(reasons)]
 }
 
 import type { NutrientAmounts } from "./nutrient-amounts.js"

@@ -1,4 +1,4 @@
-import { validateProfile } from "./nutrition-validation.js"
+import { validateCompleteProfile, validateProfile } from "./nutrition-validation.js"
 import { scoreOffMatch } from "./off-matching.js"
 import { contextForName, nutrientCacheKey, type IngredientContext } from "./ingredient-context.js"
 import { knownGramsPerUnit } from "./generic-foods.js"
@@ -14,6 +14,14 @@ export interface OffLookupResult {
   productName: string | null
   confidence?: "high" | "medium"
   reason?: string
+}
+
+function validateOffNutrients(nutrients: NutrientSet, context: IngredientContext): string[] {
+  const reasons = validateCompleteProfile(nutrients)
+  if (nutrients.kcalPer100g === 0 && !["salt", "water"].includes(context.canonicalName)) {
+    reasons.push("zero energy for non-zero-energy food")
+  }
+  return [...new Set(reasons)]
 }
 
 const OFF_NUTRIENT_FIELDS = ["product_name", "nutriments", "brands", "nutrition_data_per"].join(",")
@@ -120,7 +128,7 @@ export async function lookupNutrients(foodName: string, unitName?: string, suppl
   if (context.state === "ambiguous") return { nutrients: null, matched: false, productName: null, reason: context.reason }
   const cacheKey = nutrientCacheKey("off", context)
   const cached = getCachedOffLookup(cacheKey)
-  if (cached && validateProfile(cached.nutrients).length === 0) {
+  if (cached && validateOffNutrients(cached.nutrients, context).length === 0) {
     return { ...cached, matched: true, reason: "validated state-specific OFF cache" }
   }
   const products = await searchProduct(suppliedContext ? context.query : searchTerm)
@@ -135,7 +143,7 @@ export async function lookupNutrients(foodName: string, unitName?: string, suppl
         if (nutrients[key] !== null) nutrients[key] = nutrients[key]! / density
       }
     }
-    const reasons = validateProfile(nutrients)
+    const reasons = validateOffNutrients(nutrients, context)
     const score = reasons.length ? 0 : scoreOffMatch(context, product.product_name, nutrients, product.brands)
     logger.debug({ query: context.query, productName: product.product_name, score, reasons }, "Scored OFF candidate")
     if (score >= 80) candidates.push({ nutrients, product, score })

@@ -23,7 +23,14 @@ export function ingredient(name: string, quantity: number, unitName: string | nu
 export function recipe(ingredients: MealieIngredient[], servings = 1): MealieRecipe {
   return { name: "Regression", slug: "regression", recipeIngredient: ingredients, recipeYield: `${servings} Portionen`, recipeServings: servings, tags: [], extras: {}, nutrition: null }
 }
-const hit = (name: string, kcal: number, sodium = 0) => ({ product_name: name, nutriments: { "energy-kcal_100g": kcal, "sodium_100g": sodium } })
+const hit = (name: string, kcal: number, sodium = 0) => {
+  const fat = Math.min(100, kcal / 9)
+  const carbs = Math.max(0, (kcal - fat * 9) / 4)
+  return { product_name: name, nutriments: {
+    "energy-kcal_100g": kcal, "proteins_100g": 0, "carbohydrates_100g": carbs,
+    "fat_100g": fat, "saturated-fat_100g": 0, "sodium_100g": sodium,
+  } }
+}
 const response = (hits: unknown[]) => new Response(JSON.stringify({ hits }))
 beforeEach(() => {
   cache.clear()

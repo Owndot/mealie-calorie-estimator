@@ -1,5 +1,5 @@
 import { interpretSemanticIngredient, INTERPRETATION_VERSION } from "./ingredient-interpreter.js"
-import { NUTRITION_VERSION } from "./ingredient-context.js"
+import { contextForName, interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
 import { genericNutrients, matchGenericFood } from "./generic-foods.js"
 import { emptyAmounts, addAmounts, amountsFromProfile, divideAmounts, legacyAmounts } from "./nutrient-amounts.js"
 import { recipeWarnings, sanitizeNutritionPatch, validateProfile } from "./nutrition-validation.js"
@@ -75,6 +75,21 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     const foodName = ing.food?.name
     const quantity = ing.quantity
     if (!foodName || quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
+      const tasteOnly = Boolean(foodName && /\b(?:nach\s+geschmack|nach\s+bedarf|to\s+taste|as\s+needed|as\s+desired)\b/i.test(
+        [foodName, ing.note, ing.display, ing.originalText, ing.original_text].filter(Boolean).join(" "),
+      ))
+      if (tasteOnly && foodName) {
+        const zero = emptyAmounts()
+        matchedIngredients.push({ name: foodName, grams: 0, matched: true, nutrients: {
+          kcalPer100g: 0, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0,
+          saturatedFatPer100g: 0, transFatPer100g: 0, unsaturatedFatPer100g: 0,
+          fiberPer100g: 0, sugarPer100g: 0, sodiumPer100g: 0, cholesterolPer100g: 0,
+        }, source: "deterministic", confidence: "medium", interpretationConfidence: 0.9,
+        sourceConfidence: 0.9, finalMatchConfidence: 0.9, reason: "to-taste seasoning omitted from quantified nutrition" })
+        totals = addAmounts(totals, zero)
+        warnings.push(`No measurable quantity for seasoning: ${foodName}`)
+        continue
+      }
       // Empty section headings are not ingredients; unparsed ingredient text is.
       const name = foodName || ing.display || ing.originalText || ing.original_text || ing.note
       if (!name && ing.title) continue
@@ -87,6 +102,25 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     }
     const context = await interpretSemanticIngredient(ing, recipe.recipeInstructions)
     if (!context) {
+      const fallbackContext = interpretIngredient(ing, recipe.recipeInstructions)
+      const parsedQuantityText = [ing.display, ing.originalText, ing.original_text]
+        .filter((value): value is string => typeof value === "string")
+        .some(value => /^\s*\d+(?:[.,]\d+)?\s+\S+/.test(value))
+      if (parsedQuantityText && fallbackContext.state !== "ambiguous" && config.llm.enabled && config.llm.apiKey) {
+        const fallbackNutrients = await estimateNutrients(fallbackContext.query, fallbackContext)
+        if (fallbackNutrients && validateProfile(fallbackNutrients).length === 0) {
+          const fallbackGrams = convertToGrams(quantity, ing.unit, fallbackContext)
+          if (fallbackGrams != null && Number.isFinite(fallbackGrams) && fallbackGrams > 0) {
+            const contribution = amountsFromProfile(fallbackNutrients, fallbackGrams)
+            totals = addAmounts(totals, contribution)
+            matchedIngredients.push({ name: foodName, grams: fallbackGrams, matched: true, nutrients: fallbackNutrients,
+              llmEstimated: true, source: "LLM", confidence: "low", context: fallbackContext,
+              interpretationConfidence: 0.7, sourceConfidence: 0.6, finalMatchConfidence: 0.6,
+              weightConfidence: 1, reason: "validated LLM nutrient fallback for unresolved ordinary food" })
+            continue
+          }
+        }
+      }
       unmatchedNames.push(foodName)
       matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null,
         interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason: "ambiguous or low-confidence ingredient interpretation" })
@@ -115,7 +149,22 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     let confidence = "high"
     let sourceConfidence = 1
     let reason = "table salt mass calculation"
-    if (context.generic !== false && !context.brand && ["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") {
+    if (context.compoundNames?.length) {
+      const components = context.compoundNames.map(name => genericNutrients(contextForName(name))).filter((value): value is NutrientSet => value !== null)
+      if (components.length) {
+        nutrients = components.reduce((total, value) => {
+          for (const key of Object.keys(total) as Array<keyof NutrientSet>) {
+            total[key] = ((total[key] ?? 0) + (value[key] ?? 0) / components.length) as never
+          }
+          return total
+        }, { ...components[0] })
+        source = "generic"
+        confidence = "medium"
+        sourceConfidence = 0.9
+        reason = "compound seasoning split across trusted generic components"
+      }
+    }
+    if (!nutrients && context.generic !== false && !context.brand && ["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") {
       nutrients = genericNutrients(context)
       source = "deterministic"
       reason = context.canonicalName === "water" ? "plain water zero-nutrient default" : reason
