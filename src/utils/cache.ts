@@ -67,11 +67,16 @@ export async function initCache(): Promise<void> {
     updated_at INTEGER NOT NULL
   )`)
 
+  db.run(`CREATE TABLE IF NOT EXISTS ingredient_interpretation_cache (
+    lookup_key TEXT PRIMARY KEY, interpretation TEXT NOT NULL, updated_at INTEGER NOT NULL
+  )`)
+
   const cutoff = Date.now() - config.openFoodFacts.cacheTtlMs
   db.run("DELETE FROM nutrient_cache WHERE updated_at < ?", [cutoff])
   db.run("DELETE FROM llm_estimate_cache WHERE updated_at < ?", [cutoff])
   db.run("DELETE FROM llm_nutrient_cache WHERE updated_at < ?", [cutoff])
 
+  db.run("DELETE FROM ingredient_interpretation_cache WHERE updated_at < ?", [cutoff])
   scheduleSave()
   isInitialized = true
 }
@@ -164,6 +169,7 @@ export function setCachedLlmEstimate(unitName: string, foodName: string, grams: 
 export function clearLlmCache(): void {
   db.run("DELETE FROM llm_estimate_cache")
   db.run("DELETE FROM llm_nutrient_cache")
+  db.run("DELETE FROM ingredient_interpretation_cache")
   scheduleSave()
 }
 
@@ -217,4 +223,15 @@ export function getCachedOffLookup(key: string): CachedOffLookup | undefined {
 
 export function setCachedOffLookup(key: string, value: CachedOffLookup): void {
   upsert("nutrient_cache", "food_name", normalizeKey(key), "nutrients", JSON.stringify(value))
+}
+
+// Interpretation results have a separate namespace/table and are always validated by the caller.
+export function getCachedInterpretation(key: string): unknown | undefined {
+  if (!isInitialized) return undefined
+  const raw = getRow<string>("ingredient_interpretation_cache", "lookup_key", key, "interpretation")
+  if (raw === undefined) return undefined
+  try { return JSON.parse(raw) } catch { return undefined }
+}
+export function setCachedInterpretation(key: string, value: unknown): void {
+  if (isInitialized) upsert("ingredient_interpretation_cache", "lookup_key", key, "interpretation", JSON.stringify(value))
 }

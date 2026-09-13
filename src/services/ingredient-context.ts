@@ -2,6 +2,11 @@ import type { MealieIngredient, MealieRecipe } from "../types.js"
 
 export type FoodState = "unspecified" | "dry" | "cooked" | "canned" | "drained" | "raw" | "frozen" | "fresh" | "ambiguous"
 export interface IngredientContext {
+  generic?: boolean
+  brand?: string | null
+  category?: string
+  interpretationConfidence?: number
+  interpretationSource?: "deterministic" | "LLM" | "unresolved"
   originalName: string
   canonicalName: string
   state: FoodState
@@ -9,7 +14,7 @@ export interface IngredientContext {
   reason: string
   confidence: "high" | "medium" | "low"
 }
-export const NUTRITION_VERSION = "nutrition-v6-water"
+export const NUTRITION_VERSION = "nutrition-v7-semantic"
 
 export function normalizeFoodText(text: string): string {
   return text.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "")
@@ -55,7 +60,8 @@ const staples = new Set(["pinto beans", "kidney beans", "rice", "basmati rice"])
 const freshFoods = new Set(["onion", "red onion", "garlic", "ginger", "eggplant", "tomato", "potato", "carrot"])
 
 function explicitStates(text: string): FoodState[] {
-  return statePatterns.filter(([, pattern]) => pattern.test(text)).map(([state]) => state)
+  const stateText = text.replace(/\b(frisch|freshly)\s+(gerieben\w*|gemahlen\w*|gehackt\w*|geschnitten\w*|grated|ground|chopped|sliced)\b/g, "$2")
+  return statePatterns.filter(([, pattern]) => pattern.test(stateText)).map(([state]) => state)
 }
 
 export function interpretIngredient(
@@ -112,5 +118,9 @@ export function contextForName(name: string): IngredientContext {
   return interpretIngredient({ food: { id: "", name, pluralName: null, aliases: [] } })
 }
 export function nutrientCacheKey(source: "off" | "llm", context: IngredientContext): string {
-  return `${NUTRITION_VERSION}:${source}:${context.canonicalName}:${context.state}`
+  return `${NUTRITION_VERSION}:${source}:${context.canonicalName}:${context.state}:${context.brand ?? ""}:${context.generic ?? "unknown"}`
+}
+
+export function isKnownFoodIdentity(name: string): boolean {
+  return Object.prototype.hasOwnProperty.call(groups, name)
 }

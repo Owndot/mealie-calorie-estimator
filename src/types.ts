@@ -138,6 +138,11 @@ export interface IngredientMatch {
   grams: number | null
   matched: boolean
   nutrients: NutrientSet | null
+  interpretationConfidence?: number
+  weightConfidence?: number
+  sourceConfidence?: number
+  finalMatchConfidence?: number
+  profileId?: string
   llmEstimated?: boolean
   source?: "OFF" | "deterministic" | "generic" | "LLM"
   context?: IngredientContext

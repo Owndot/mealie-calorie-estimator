@@ -1,10 +1,19 @@
 import type { NutrientSet } from "../types.js"
-import { contextForName, interpretIngredient, type IngredientContext } from "./ingredient-context.js"
+import { contextForName, interpretIngredient, normalizeFoodText, type IngredientContext } from "./ingredient-context.js"
 import { genericNutrients } from "./generic-foods.js"
 
-export function scoreOffMatch(context: IngredientContext, productName: string, nutrients?: NutrientSet): number {
-  const candidate = interpretIngredient({ food: { id: "", name: productName, pluralName: null, aliases: [] } }, [], false)
-  if (!context.canonicalName || candidate.canonicalName !== context.canonicalName || context.state === "ambiguous" || candidate.state === "ambiguous") return 0
+export function scoreOffMatch(context: IngredientContext, productName: string, nutrients?: NutrientSet, brands?: string): number {
+  let candidateName = productName
+  let wantedName = context.canonicalName
+  if (context.brand) {
+    const brand = normalizeFoodText(context.brand)
+    const hasBrand = (text: string) => (` ${normalizeFoodText(text)} `).includes(` ${brand} `)
+    if (!hasBrand(productName) && !hasBrand(brands ?? "")) return 0
+    candidateName = (` ${normalizeFoodText(productName)} `).replace(` ${brand} `, " ").trim()
+    wantedName = (` ${normalizeFoodText(wantedName)} `).replace(` ${brand} `, " ").trim()
+  }
+  const candidate = interpretIngredient({ food: { id: "", name: candidateName, pluralName: null, aliases: [] } }, [], false)
+  if (!context.canonicalName || candidate.canonicalName !== wantedName || context.state === "ambiguous" || candidate.state === "ambiguous") return 0
   const wanted = context.state
   const found = candidate.state
   if (wanted !== found && found !== "unspecified") {

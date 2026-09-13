@@ -1,5 +1,6 @@
-import { interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
-import { genericNutrients } from "./generic-foods.js"
+import { interpretSemanticIngredient, INTERPRETATION_VERSION } from "./ingredient-interpreter.js"
+import { NUTRITION_VERSION } from "./ingredient-context.js"
+import { genericNutrients, matchGenericFood } from "./generic-foods.js"
 import { emptyAmounts, addAmounts, amountsFromProfile, divideAmounts, legacyAmounts } from "./nutrient-amounts.js"
 import { recipeWarnings, sanitizeNutritionPatch, validateProfile } from "./nutrition-validation.js"
 import crypto from "node:crypto"
@@ -27,7 +28,7 @@ export function computeIngredientHash(recipe: MealieRecipe): string {
       .map(step => typeof step === "string" ? step : step.text).sort(),
   ])).sort()
   const input = [
-    NUTRITION_VERSION, "input-hash-v2-partial-webhook",
+    NUTRITION_VERSION, INTERPRETATION_VERSION, "input-hash-v3-semantic",
     config.estimate.partialPolicy, config.units.pinchGrams,
     config.openFoodFacts.language, config.openFoodFacts.baseUrl, config.openFoodFacts.searchBaseUrl,
     config.llm.enabled, config.llm.model, config.llm.baseUrl, config.llm.endpointUrl,
@@ -80,63 +81,87 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       const unmatchedName = name || "Unnamed ingredient"
       const reason = "invalid or unquantified ingredient"
       unmatchedNames.push(unmatchedName)
-      matchedIngredients.push({ name: unmatchedName, grams: null, matched: false, nutrients: null, reason })
+      matchedIngredients.push({ name: unmatchedName, grams: null, matched: false, nutrients: null, interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason })
       warnings.push(`Skipped ${reason}: ${unmatchedName}`)
       continue
     }
-    const context = interpretIngredient(ing, recipe.recipeInstructions)
+    const context = await interpretSemanticIngredient(ing, recipe.recipeInstructions)
+    if (!context) {
+      unmatchedNames.push(foodName)
+      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null,
+        interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason: "ambiguous or low-confidence ingredient interpretation" })
+      logger.debug({ originalName: foodName, quantity, unit: ing.unit?.name }, "Ingredient interpretation rejected; preserving partial safety")
+      continue
+    }
     const unit = resolveUnitName(ing.unit)
     let grams = convertToGrams(quantity, ing.unit, context)
     let llmEstimated = false
+    let weightEstimated = false
     if (grams === null && unit && context.state !== "ambiguous") {
       grams = await estimateGrams(quantity, unit, context.query)
       llmEstimated = grams !== null
+      weightEstimated = llmEstimated
     }
     if (grams === null || !Number.isFinite(grams) || grams <= 0 || context.state === "ambiguous") {
       unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null, context, reason: context.state === "ambiguous" ? context.reason : "unknown weight" })
+      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null, context, interpretationConfidence: context.interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: context.state === "ambiguous" ? context.reason : "unknown weight" })
       logger.debug({ ...context, quantity, unit, grams }, "Ingredient could not be estimated")
       continue
     }
+    const genericMatch = matchGenericFood(context)
     let nutrients: NutrientSet | null = null
     let source: IngredientMatch["source"] = "OFF"
     let productName: string | null = null
     let confidence = "high"
+    let sourceConfidence = 1
     let reason = "table salt mass calculation"
-    if (["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") {
+    if (context.generic !== false && !context.brand && ["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") {
       nutrients = genericNutrients(context)
       source = "deterministic"
       reason = context.canonicalName === "water" ? "plain water zero-nutrient default" : reason
     } else if ((nutrients = genericNutrients(context)) !== null) {
       source = "generic"
       confidence = "medium"
-      reason = "exact canonical identity and state; USDA reference preferred before OFF"
+      sourceConfidence = genericMatch ? Math.min(0.95, genericMatch.confidence) : 0.9
+      productName = genericMatch?.entry.description ?? null
+      reason = "validated generic identity/state; USDA reference preferred before OFF"
     } else {
-      const off = await lookupNutrients(foodName, ing.unit?.name, context)
-      nutrients = off.matched ? off.nutrients : null
-      productName = off.productName
-      confidence = off.confidence ?? "medium"
-      reason = off.reason ?? "OFF lookup"
+      if (context.generic !== true || context.brand) {
+        const off = await lookupNutrients(foodName, ing.unit?.name, context)
+        nutrients = off.matched ? off.nutrients : null
+        productName = off.productName
+        confidence = off.confidence ?? "medium"
+        sourceConfidence = confidence === "high" ? 0.95 : 0.8
+        reason = off.reason ?? "OFF lookup"
+      } else {
+        reason = "generic food without a trustworthy state-specific database profile; bypassing packaged-product search"
+      }
       if (!nutrients) {
         nutrients = await estimateNutrients(context.query, context)
         source = "LLM"
         confidence = "low"
-        reason += "; no generic profile, LLM fallback"
+        sourceConfidence = 0.6
+        reason += "; validated LLM nutrient fallback"
         llmEstimated = true
       }
     }
-    if (!nutrients || validateProfile(nutrients).length) {
+    const interpretationConfidence = context.interpretationConfidence ?? 0.85
+    const weightConfidence = weightEstimated ? 0.7 : 1
+    const finalMatchConfidence = Math.min(interpretationConfidence, sourceConfidence, weightConfidence)
+
+    if (!nutrients || validateProfile(nutrients).length || finalMatchConfidence < 0.6) {
       unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null, context, reason })
+      matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null, context, interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason })
       logger.debug({ ...context, quantity, unit, grams, source, reason }, "No valid nutrient profile")
       continue
     }
     const contribution = amountsFromProfile(nutrients, grams)
     totals = addAmounts(totals, contribution)
-    matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, source, context, productName, confidence, reason })
-    logger.debug({ originalName: foodName, normalizedQuery: context.query, state: context.state, stateReason: context.reason,
+    matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, source, context, productName, confidence, interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: genericMatch?.entry.fdcId, reason })
+    logger.debug({ originalName: foodName, canonicalFood: context.canonicalName, interpretationSource: context.interpretationSource, category: context.category, normalizedQuery: context.query, state: context.state, stateReason: context.reason,
       quantity, unit, grams, source, productName, confidence, reason, kcalPer100g: nutrients.kcalPer100g,
-      sodiumMgPer100g: nutrients.sodiumPer100g, kcalContribution: contribution.kcal, sodiumMgContribution: contribution.sodiumMg,
+      sodiumMgPer100g: nutrients.sodiumPer100g, kcalContribution: contribution.kcal, sodiumMgContribution: contribution.sodiumMg, macroContributions: contribution, generic: context.generic, brand: context.brand,
+      interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: genericMatch?.entry.fdcId,
     }, "Ingredient nutrition contribution")
   }
   const servings = resolveServings(recipe)

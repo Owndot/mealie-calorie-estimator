@@ -33,7 +33,7 @@ mealie-calorie-estimator
 This small service enriches [Mealie](https://mealie.io/) (self-hosted recipe manager) with nutritional data by:
 
 1. **Listening for webhooks** triggered when a recipe is created or updated.
-2. **Resolving ingredients** — each `food.name` is searched on Open Food Facts, with an optional LLM estimate per 100g when there is no match.
+2. **Resolving ingredients** — deterministic normalization or optional LLM classification identifies the food/state. Generic ingredients use 171 USDA reference profiles before packaged-product lookup; branded foods use Open Food Facts. Validated LLM nutrition is the final fallback.
 3. **Patching nutrition** back into Mealie's nutrition fields.
 
 Unit conversion uses a built-in table for common units. Custom units are estimated via LLM when enabled. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved.
@@ -107,7 +107,7 @@ It's recommended to install it next to your Mealie instance using docker-compose
 | `OFF_BASE_URL` | `https://world.openfoodfacts.org` | Open Food Facts base URL |
 | `OFF_MAX_RETRIES` | `3` | Retries for transient OFF search errors (429/5xx) |
 | `OFF_RETRY_BACKOFF_MS` | `500` | Base backoff between retries (doubles each attempt) |
-| `LLM_ENABLED` | `false` | Enable LLM fallback for custom units and unmatched foods |
+| `LLM_ENABLED` | `false` | Enable semantic ingredient classification, custom-unit estimates and nutrient fallback |
 | `LLM_API_KEY` | — | API key for OpenAI-compatible endpoint |
 | `LLM_BASE_URL` | `https://api.mistral.ai/v1` | LLM API base URL |
 | `LLM_ENDPOINT_URL` | `/chat/completions` | LLM API endpoint path (supports OpenAI-compatible providers) |
@@ -142,7 +142,7 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 
 <!-- Add bit of context why the project has been created -->
 
-Mealie stores nutrition only when entered by hand. Maintaining that for every recipe is tedious, so this service fills the gap automatically from Open Food Facts (and an optional LLM) while leaving manual entries untouched.
+Mealie stores nutrition only when entered by hand. Maintaining that for every recipe is tedious, so this service fills the gap automatically from USDA generic references, Open Food Facts and an optional LLM while leaving manual entries untouched.
 
 ## Contributing
 
@@ -188,3 +188,5 @@ See [nutrition units, source data and preparation handling](docs/nutrition.md) f
 `PARTIAL_ESTIMATE_POLICY=withhold` (default) preserves existing nutrition and tags when any ingredient cannot be estimated, and records partial status in extras. The optional `fill-empty` policy permits partial nutrition only when every existing nutrition field is empty; it never overwrites an existing value. See [partial-estimate safety](docs/nutrition.md#partial-estimate-write-safety).
 
 Partial webhooks are idempotent: an unchanged `calorie_estimator_attempt_hash` with `partial-withheld` or `partial-written` status skips lookup and patching. Edit estimator inputs or invoke `/estimate` or `/backfill` explicitly to retry. See [nutrition behavior](docs/nutrition.md#partial-webhook-idempotency).
+
+German ingredient wording can be classified semantically with the existing LLM configuration, without adding an alias for each phrase. See [interpretation, caching and live evaluation](docs/nutrition.md#semantic-interpretation-caching-and-evaluation) for confidence rules, limitations and the 90-case evaluation corpus.

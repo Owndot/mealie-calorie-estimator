@@ -1,8 +1,8 @@
 import data from "../nutrition-data/generic-foods.js"
 import type { NutrientSet } from "../types.js"
-import type { IngredientContext } from "./ingredient-context.js"
+import { normalizeFoodText, type FoodState, type IngredientContext } from "./ingredient-context.js"
 
-interface GenericEntry { fdcId: string; description: string; nutrients: NutrientSet; portions: Array<{ description: string; amount: number; grams: number }> }
+export interface GenericEntry { category: string; synonyms: string[]; fdcId: string; description: string; nutrients: NutrientSet; portions: Array<{ description: string; amount: number; grams: number }> }
 const foods: Record<string, GenericEntry> = data
 const SALT: NutrientSet = {
   kcalPer100g: 0, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0,
@@ -12,15 +12,57 @@ const SALT: NutrientSet = {
 // Plain water: zero energy/macros; sodium defaults to zero when mineral content is unknown.
 // Branded/mineral/flavoured waters retain their own database/LLM lookup path.
 const WATER: NutrientSet = { ...SALT, sodiumPer100g: 0 }
-export function genericEntry(context: IngredientContext): GenericEntry | undefined {
+export interface GenericMatch { key: string; name: string; state: FoodState; entry: GenericEntry; confidence: number }
+export const genericCatalog = Object.entries(foods).map(([key, entry]) => ({
+  key, name: key.split(":")[0], state: key.split(":")[1] as FoodState, entry,
+}))
+
+function tokens(name: string): string[] {
+  return normalizeFoodText(name).split(" ").map(word => word.length > 3 && word.endsWith("s") ? word.slice(0, -1) : word).sort()
+}
+function editDistance(a: string, b: string): number {
+  let row = Array.from({ length: b.length + 1 }, (_, i) => i)
+  for (let i = 0; i < a.length; i++) {
+    const next = [i + 1]
+    for (let j = 0; j < b.length; j++) next.push(Math.min(next[j] + 1, row[j + 1] + 1, row[j] + (a[i] === b[j] ? 0 : 1)))
+    row = next
+  }
+  return row[b.length]
+}
+function nameScore(a: string, b: string): number {
+  const left = tokens(a), right = tokens(b)
+  if (left.join(" ") === right.join(" ")) return 1
+  // All identity tokens must match; no substring matching of oil, drink, seed or sauce.
+  if (left.length !== right.length) return 0
+  return left.every((word, i) => word === right[i] || (Math.min(word.length, right[i].length) >= 6 && editDistance(word, right[i]) <= 1)) ? 0.9 : 0
+}
+function stateCompatible(requested: FoodState, actual: FoodState, category: string): boolean {
+  return requested === actual || (["raw", "fresh"].includes(requested) && ["raw", "fresh"].includes(actual)
+    && ["vegetable", "fruit", "herb"].includes(category))
+}
+export function matchGenericFood(context: IngredientContext, allowDefault = false): GenericMatch | null {
+  if (context.generic === false || context.brand || context.state === "ambiguous") return null
   let name = context.canonicalName
-  if (name === "basmati rice") name = "rice" // Explicit long-grain white rice proxy.
+  if (name === "basmati rice") name = "rice" // Long-grain white rice proxy.
   if (name === "red onion") name = "onion"
-  let state = context.state
-  if (name === "coconut milk" && state === "canned") state = "unspecified"
-  return foods[`${name}:${state}`]
+  const state = name === "coconut milk" && context.state === "canned" ? "unspecified" : context.state
+  const candidates = genericCatalog.flatMap(item => {
+    const confidence = Math.max(...[item.name, ...item.entry.synonyms].map(value => nameScore(name, value)))
+    const defaultState = allowDefault && state === "unspecified" && (
+      (["vegetable", "fruit", "nut_seed"].includes(item.entry.category) && item.state === "raw")
+      || (["grain", "legume"].includes(item.entry.category) && item.state === "dry")
+      || (item.entry.category === "herb" && item.state === "fresh"))
+    return confidence >= 0.9 && (stateCompatible(state, item.state, item.entry.category) || defaultState)
+      ? [{ ...item, confidence }] : []
+  }).sort((a, b) => b.confidence - a.confidence)
+  if (!candidates[0] || (candidates[1] && candidates[0].confidence - candidates[1].confidence < 0.05)) return null
+  return candidates[0]
+}
+export function genericEntry(context: IngredientContext): GenericEntry | undefined {
+  return matchGenericFood(context)?.entry
 }
 export function genericNutrients(context: IngredientContext): NutrientSet | null {
+  if (context.generic === false || context.brand) return null
   if (context.canonicalName === "salt" && context.state === "unspecified") return { ...SALT }
   if (context.canonicalName === "water" && context.state === "unspecified") return { ...WATER }
   const entry = genericEntry(context)

@@ -1,0 +1,893 @@
+{
+  "pinto beans:dry": {
+    "fdcId": "175199",
+    "category": "legume",
+    "synonyms": []
+  },
+  "pinto beans:cooked": {
+    "fdcId": "175200",
+    "category": "legume",
+    "synonyms": []
+  },
+  "pinto beans:canned": {
+    "fdcId": "175201",
+    "category": "legume",
+    "synonyms": []
+  },
+  "pinto beans:drained": {
+    "fdcId": "174286",
+    "category": "legume",
+    "synonyms": []
+  },
+  "kidney beans:dry": {
+    "fdcId": "173744",
+    "category": "legume",
+    "synonyms": []
+  },
+  "kidney beans:cooked": {
+    "fdcId": "175194",
+    "category": "legume",
+    "synonyms": []
+  },
+  "kidney beans:canned": {
+    "fdcId": "175195",
+    "category": "legume",
+    "synonyms": []
+  },
+  "kidney beans:drained": {
+    "fdcId": "174285",
+    "category": "legume",
+    "synonyms": []
+  },
+  "rice:dry": {
+    "fdcId": "169756",
+    "category": "grain",
+    "synonyms": []
+  },
+  "rice:cooked": {
+    "fdcId": "169757",
+    "category": "grain",
+    "synonyms": []
+  },
+  "butter:unspecified": {
+    "fdcId": "173430",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "olive oil:unspecified": {
+    "fdcId": "171413",
+    "category": "oil",
+    "synonyms": []
+  },
+  "sunflower oil:unspecified": {
+    "fdcId": "171025",
+    "category": "oil",
+    "synonyms": []
+  },
+  "coconut oil:unspecified": {
+    "fdcId": "171412",
+    "category": "oil",
+    "synonyms": []
+  },
+  "coconut milk:unspecified": {
+    "fdcId": "170173",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "onion:raw": {
+    "fdcId": "170000",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "garlic:raw": {
+    "fdcId": "169230",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "flour:unspecified": {
+    "fdcId": "169761",
+    "category": "grain",
+    "synonyms": []
+  },
+  "cumin:unspecified": {
+    "fdcId": "170923",
+    "category": "spice",
+    "synonyms": [
+      "cumin seeds"
+    ]
+  },
+  "curry powder:unspecified": {
+    "fdcId": "170924",
+    "category": "spice",
+    "synonyms": []
+  },
+  "thyme:dry": {
+    "fdcId": "170938",
+    "category": "herb",
+    "synonyms": []
+  },
+  "thyme:fresh": {
+    "fdcId": "173470",
+    "category": "herb",
+    "synonyms": []
+  },
+  "parsley:fresh": {
+    "fdcId": "170416",
+    "category": "herb",
+    "synonyms": []
+  },
+  "coriander leaves:fresh": {
+    "fdcId": "169997",
+    "category": "herb",
+    "synonyms": []
+  },
+  "coriander seeds:unspecified": {
+    "fdcId": "170922",
+    "category": "spice",
+    "synonyms": [
+      "coriander seed"
+    ]
+  },
+  "pepper:unspecified": {
+    "fdcId": "170931",
+    "category": "spice",
+    "synonyms": [
+      "black pepper"
+    ]
+  },
+  "ginger:raw": {
+    "fdcId": "169231",
+    "category": "vegetable",
+    "synonyms": [
+      "ginger root"
+    ]
+  },
+  "eggplant:raw": {
+    "fdcId": "169228",
+    "category": "vegetable",
+    "synonyms": [
+      "aubergine"
+    ]
+  },
+  "tomato:raw": {
+    "fdcId": "170457",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "parmesan:unspecified": {
+    "fdcId": "170848",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "tomato paste:unspecified": {
+    "fdcId": "170459",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "bay leaf:dry": {
+    "fdcId": "170917",
+    "category": "spice",
+    "synonyms": []
+  },
+  "caraway seeds:unspecified": {
+    "fdcId": "170918",
+    "category": "spice",
+    "synonyms": []
+  },
+  "cardamom:unspecified": {
+    "fdcId": "170919",
+    "category": "spice",
+    "synonyms": []
+  },
+  "celery seeds:unspecified": {
+    "fdcId": "170920",
+    "category": "spice",
+    "synonyms": []
+  },
+  "coriander leaves:dry": {
+    "fdcId": "170921",
+    "category": "spice",
+    "synonyms": []
+  },
+  "dill seeds:unspecified": {
+    "fdcId": "170925",
+    "category": "spice",
+    "synonyms": []
+  },
+  "ginger:dry": {
+    "fdcId": "170926",
+    "category": "spice",
+    "synonyms": [
+      "ginger root"
+    ]
+  },
+  "mace:unspecified": {
+    "fdcId": "170927",
+    "category": "spice",
+    "synonyms": []
+  },
+  "marjoram:dry": {
+    "fdcId": "170928",
+    "category": "spice",
+    "synonyms": []
+  },
+  "mustard seeds:unspecified": {
+    "fdcId": "170929",
+    "category": "spice",
+    "synonyms": []
+  },
+  "parsley:dry": {
+    "fdcId": "170930",
+    "category": "spice",
+    "synonyms": []
+  },
+  "cayenne pepper:unspecified": {
+    "fdcId": "170932",
+    "category": "spice",
+    "synonyms": []
+  },
+  "white pepper:unspecified": {
+    "fdcId": "170933",
+    "category": "spice",
+    "synonyms": []
+  },
+  "saffron:unspecified": {
+    "fdcId": "170934",
+    "category": "spice",
+    "synonyms": []
+  },
+  "sage:dry": {
+    "fdcId": "170935",
+    "category": "spice",
+    "synonyms": []
+  },
+  "savory:dry": {
+    "fdcId": "170936",
+    "category": "spice",
+    "synonyms": []
+  },
+  "tarragon:dry": {
+    "fdcId": "170937",
+    "category": "spice",
+    "synonyms": []
+  },
+  "allspice:unspecified": {
+    "fdcId": "171315",
+    "category": "spice",
+    "synonyms": []
+  },
+  "anise seeds:unspecified": {
+    "fdcId": "171316",
+    "category": "spice",
+    "synonyms": []
+  },
+  "basil:dry": {
+    "fdcId": "171317",
+    "category": "spice",
+    "synonyms": []
+  },
+  "chervil:dry": {
+    "fdcId": "171318",
+    "category": "spice",
+    "synonyms": []
+  },
+  "chili powder:unspecified": {
+    "fdcId": "171319",
+    "category": "spice",
+    "synonyms": []
+  },
+  "cinnamon:unspecified": {
+    "fdcId": "171320",
+    "category": "spice",
+    "synonyms": []
+  },
+  "cloves:unspecified": {
+    "fdcId": "171321",
+    "category": "spice",
+    "synonyms": []
+  },
+  "dill:dry": {
+    "fdcId": "171322",
+    "category": "spice",
+    "synonyms": []
+  },
+  "fennel seeds:unspecified": {
+    "fdcId": "171323",
+    "category": "spice",
+    "synonyms": []
+  },
+  "fenugreek seeds:unspecified": {
+    "fdcId": "171324",
+    "category": "spice",
+    "synonyms": []
+  },
+  "garlic powder:unspecified": {
+    "fdcId": "171325",
+    "category": "spice",
+    "synonyms": []
+  },
+  "nutmeg:unspecified": {
+    "fdcId": "171326",
+    "category": "spice",
+    "synonyms": []
+  },
+  "onion powder:unspecified": {
+    "fdcId": "171327",
+    "category": "spice",
+    "synonyms": []
+  },
+  "oregano:dry": {
+    "fdcId": "171328",
+    "category": "spice",
+    "synonyms": []
+  },
+  "paprika:unspecified": {
+    "fdcId": "171329",
+    "category": "spice",
+    "synonyms": []
+  },
+  "rosemary:dry": {
+    "fdcId": "171333",
+    "category": "spice",
+    "synonyms": []
+  },
+  "turmeric:unspecified": {
+    "fdcId": "172231",
+    "category": "spice",
+    "synonyms": []
+  },
+  "basil:fresh": {
+    "fdcId": "172232",
+    "category": "herb",
+    "synonyms": []
+  },
+  "dill:fresh": {
+    "fdcId": "172233",
+    "category": "herb",
+    "synonyms": []
+  },
+  "rosemary:fresh": {
+    "fdcId": "173473",
+    "category": "herb",
+    "synonyms": []
+  },
+  "peppermint:fresh": {
+    "fdcId": "173474",
+    "category": "herb",
+    "synonyms": []
+  },
+  "spearmint:fresh": {
+    "fdcId": "173475",
+    "category": "herb",
+    "synonyms": []
+  },
+  "chives:fresh": {
+    "fdcId": "169994",
+    "category": "herb",
+    "synonyms": []
+  },
+  "cucumber:raw": {
+    "fdcId": "168409",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "spinach:raw": {
+    "fdcId": "168462",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "sweet potato:raw": {
+    "fdcId": "168482",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "beetroot:raw": {
+    "fdcId": "169145",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "leek:raw": {
+    "fdcId": "169246",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "romaine lettuce:raw": {
+    "fdcId": "169247",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "iceberg lettuce:raw": {
+    "fdcId": "169248",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "white mushroom:raw": {
+    "fdcId": "169251",
+    "category": "vegetable",
+    "synonyms": [
+      "button mushroom",
+      "champignon"
+    ]
+  },
+  "white mushroom:cooked": {
+    "fdcId": "169252",
+    "category": "vegetable",
+    "synonyms": [
+      "button mushroom",
+      "champignon"
+    ]
+  },
+  "radish:raw": {
+    "fdcId": "169276",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "zucchini:raw": {
+    "fdcId": "169291",
+    "category": "vegetable",
+    "synonyms": [
+      "courgette"
+    ]
+  },
+  "zucchini:cooked": {
+    "fdcId": "169292",
+    "category": "vegetable",
+    "synonyms": [
+      "courgette"
+    ]
+  },
+  "fennel bulb:raw": {
+    "fdcId": "169385",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "cabbage:raw": {
+    "fdcId": "169975",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "cauliflower:raw": {
+    "fdcId": "169986",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "celery:raw": {
+    "fdcId": "169988",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "potato:raw": {
+    "fdcId": "170026",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "red bell pepper:raw": {
+    "fdcId": "170108",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "broccoli:raw": {
+    "fdcId": "170379",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "carrot:raw": {
+    "fdcId": "170393",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "green peas:raw": {
+    "fdcId": "170419",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "green peas:cooked": {
+    "fdcId": "170420",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "green peas:canned": {
+    "fdcId": "170421",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "green peas:drained": {
+    "fdcId": "170013",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "green peas:frozen": {
+    "fdcId": "170016",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "green bell pepper:raw": {
+    "fdcId": "170427",
+    "category": "vegetable",
+    "synonyms": []
+  },
+  "lemon:raw": {
+    "fdcId": "167746",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "raspberry:raw": {
+    "fdcId": "167755",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "strawberry:raw": {
+    "fdcId": "167762",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "kiwi:raw": {
+    "fdcId": "168153",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "lime:raw": {
+    "fdcId": "168155",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "orange:raw": {
+    "fdcId": "169097",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "pear:raw": {
+    "fdcId": "169118",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "pineapple:raw": {
+    "fdcId": "169124",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "mango:raw": {
+    "fdcId": "169910",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "apple:raw": {
+    "fdcId": "171688",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "avocado:raw": {
+    "fdcId": "171705",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "blueberry:raw": {
+    "fdcId": "171711",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "banana:raw": {
+    "fdcId": "173944",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "grape:raw": {
+    "fdcId": "174683",
+    "category": "fruit",
+    "synonyms": []
+  },
+  "quinoa:dry": {
+    "fdcId": "168874",
+    "category": "grain",
+    "synonyms": []
+  },
+  "quinoa:cooked": {
+    "fdcId": "168917",
+    "category": "grain",
+    "synonyms": []
+  },
+  "whole wheat flour:unspecified": {
+    "fdcId": "168893",
+    "category": "grain",
+    "synonyms": []
+  },
+  "couscous:dry": {
+    "fdcId": "169699",
+    "category": "grain",
+    "synonyms": []
+  },
+  "couscous:cooked": {
+    "fdcId": "169700",
+    "category": "grain",
+    "synonyms": []
+  },
+  "millet:dry": {
+    "fdcId": "169702",
+    "category": "grain",
+    "synonyms": []
+  },
+  "millet:cooked": {
+    "fdcId": "168871",
+    "category": "grain",
+    "synonyms": []
+  },
+  "oats:dry": {
+    "fdcId": "169705",
+    "category": "grain",
+    "synonyms": []
+  },
+  "barley:dry": {
+    "fdcId": "170284",
+    "category": "grain",
+    "synonyms": []
+  },
+  "barley:cooked": {
+    "fdcId": "170285",
+    "category": "grain",
+    "synonyms": []
+  },
+  "buckwheat:dry": {
+    "fdcId": "170286",
+    "category": "grain",
+    "synonyms": []
+  },
+  "bulgur:dry": {
+    "fdcId": "170688",
+    "category": "grain",
+    "synonyms": []
+  },
+  "bulgur:cooked": {
+    "fdcId": "170287",
+    "category": "grain",
+    "synonyms": []
+  },
+  "lentils:dry": {
+    "fdcId": "172420",
+    "category": "legume",
+    "synonyms": []
+  },
+  "lentils:cooked": {
+    "fdcId": "172421",
+    "category": "legume",
+    "synonyms": []
+  },
+  "red lentils:dry": {
+    "fdcId": "174284",
+    "category": "legume",
+    "synonyms": []
+  },
+  "black beans:dry": {
+    "fdcId": "173734",
+    "category": "legume",
+    "synonyms": []
+  },
+  "black beans:cooked": {
+    "fdcId": "173735",
+    "category": "legume",
+    "synonyms": []
+  },
+  "chickpeas:dry": {
+    "fdcId": "173756",
+    "category": "legume",
+    "synonyms": [
+      "garbanzo beans"
+    ]
+  },
+  "chickpeas:cooked": {
+    "fdcId": "173757",
+    "category": "legume",
+    "synonyms": [
+      "garbanzo beans"
+    ]
+  },
+  "chickpeas:canned": {
+    "fdcId": "175206",
+    "category": "legume",
+    "synonyms": [
+      "garbanzo beans"
+    ]
+  },
+  "chickpeas:drained": {
+    "fdcId": "173800",
+    "category": "legume",
+    "synonyms": [
+      "garbanzo beans"
+    ]
+  },
+  "white beans:dry": {
+    "fdcId": "175202",
+    "category": "legume",
+    "synonyms": []
+  },
+  "white beans:cooked": {
+    "fdcId": "175203",
+    "category": "legume",
+    "synonyms": []
+  },
+  "white beans:canned": {
+    "fdcId": "175204",
+    "category": "legume",
+    "synonyms": []
+  },
+  "mozzarella:unspecified": {
+    "fdcId": "170845",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "ricotta:unspecified": {
+    "fdcId": "170851",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "heavy cream:unspecified": {
+    "fdcId": "170859",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "gouda:unspecified": {
+    "fdcId": "171241",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "whole milk yogurt:unspecified": {
+    "fdcId": "171284",
+    "category": "dairy",
+    "synonyms": [
+      "plain whole milk yogurt"
+    ]
+  },
+  "whole milk:unspecified": {
+    "fdcId": "172217",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "cheddar:unspecified": {
+    "fdcId": "173414",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "cream cheese:unspecified": {
+    "fdcId": "173418",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "feta:unspecified": {
+    "fdcId": "173420",
+    "category": "dairy",
+    "synonyms": []
+  },
+  "cashews:raw": {
+    "fdcId": "170162",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "macadamia nuts:raw": {
+    "fdcId": "170178",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "pecans:raw": {
+    "fdcId": "170182",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "pistachios:raw": {
+    "fdcId": "170184",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "walnuts:raw": {
+    "fdcId": "170187",
+    "category": "nut_seed",
+    "synonyms": [
+      "walnut"
+    ]
+  },
+  "almonds:raw": {
+    "fdcId": "170567",
+    "category": "nut_seed",
+    "synonyms": [
+      "almond"
+    ]
+  },
+  "hazelnuts:raw": {
+    "fdcId": "170581",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "pine nuts:dry": {
+    "fdcId": "170591",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "chia seeds:dry": {
+    "fdcId": "170554",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "pumpkin seeds:dry": {
+    "fdcId": "170556",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "sunflower seeds:dry": {
+    "fdcId": "170562",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "sesame seeds:dry": {
+    "fdcId": "170150",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "flaxseed:unspecified": {
+    "fdcId": "169414",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "poppy seeds:unspecified": {
+    "fdcId": "171330",
+    "category": "nut_seed",
+    "synonyms": []
+  },
+  "tahini:unspecified": {
+    "fdcId": "170189",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "soy sauce:unspecified": {
+    "fdcId": "174277",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "mustard:unspecified": {
+    "fdcId": "172234",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "ketchup:unspecified": {
+    "fdcId": "168556",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "cider vinegar:unspecified": {
+    "fdcId": "173469",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "balsamic vinegar:unspecified": {
+    "fdcId": "172241",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "red wine vinegar:unspecified": {
+    "fdcId": "172240",
+    "category": "sauce",
+    "synonyms": []
+  },
+  "honey:unspecified": {
+    "fdcId": "169640",
+    "category": "other",
+    "synonyms": []
+  },
+  "sugar:unspecified": {
+    "fdcId": "169655",
+    "category": "other",
+    "synonyms": []
+  },
+  "brown sugar:unspecified": {
+    "fdcId": "168833",
+    "category": "other",
+    "synonyms": []
+  },
+  "cocoa powder:unspecified": {
+    "fdcId": "169593",
+    "category": "other",
+    "synonyms": []
+  },
+  "egg:raw": {
+    "fdcId": "171287",
+    "category": "other",
+    "synonyms": []
+  }
+}

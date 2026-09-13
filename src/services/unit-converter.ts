@@ -73,3 +73,7 @@ export function convertToGrams(quantity: number, unit: MealieUnit | null, contex
   const gramsPerUnit = name === null ? null : GRAMS_PER_UNIT.get(name)
   return gramsPerUnit == null ? null : quantity * gramsPerUnit
 }
+
+export function isKnownUnitName(name: string): boolean {
+  return GRAMS_PER_UNIT.has(normalizeUnitName(name))
+}

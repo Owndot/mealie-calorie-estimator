@@ -37,7 +37,7 @@ beforeEach(() => { vi.clearAllMocks(); config.estimate.partialPolicy = "withhold
 afterEach(() => { config.estimate.partialPolicy = originalPolicy })
 
 describe("partial-estimate safety", () => {
-  it.each(["Walnüsse", "Walnussöl", "Cheddar"])("withholds nutrition when 100 g %s has no profile", async name => {
+  it.each(["Walnüsse", "Walnussöl", "Unbekannte Käsemischung"])("withholds nutrition when 100 g %s has no profile", async name => {
     const input = recipe(name)
     const result = await estimateRecipe(input)
     expect(result.partial).toBe(true)

@@ -136,7 +136,7 @@ export async function lookupNutrients(foodName: string, unitName?: string, suppl
       }
     }
     const reasons = validateProfile(nutrients)
-    const score = reasons.length ? 0 : scoreOffMatch(context, product.product_name, nutrients)
+    const score = reasons.length ? 0 : scoreOffMatch(context, product.product_name, nutrients, product.brands)
     logger.debug({ query: context.query, productName: product.product_name, score, reasons }, "Scored OFF candidate")
     if (score >= 80) candidates.push({ nutrients, product, score })
   }

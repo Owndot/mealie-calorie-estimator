@@ -281,12 +281,11 @@ describe("generic-first source priority", () => {
     expect(fetch).toHaveBeenCalledOnce()
   })
 
-  it("uses OFF when a generic food has no profile for the requested state", async () => {
+  it("keeps a generic food unmatched when its state lacks a profile and LLM is disabled", async () => {
     vi.mocked(fetch).mockResolvedValue(response([hit("rice frozen", 140)]))
     const result = await estimateRecipe(recipe([ingredient("Reis tiefgekühlt", 100)]))
-    expect(result.matchedIngredients[0].source).toBe("OFF")
+    expect(result.partial).toBe(true)
     expect(result.matchedIngredients[0].context?.state).toBe("frozen")
-    expect(result.totals?.kcal).toBe(140)
-    expect(fetch).toHaveBeenCalledOnce()
+    expect(fetch).not.toHaveBeenCalled()
   })
 })
