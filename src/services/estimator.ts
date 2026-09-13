@@ -14,7 +14,7 @@ import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
 
 export function computeIngredientHash(recipe: MealieRecipe): string {
-  const parts: string[] = [NUTRITION_VERSION, `pinch:${config.units.pinchGrams}`]
+  const parts: string[] = [NUTRITION_VERSION, "partial-safety-v1", `partial-policy:${config.estimate.partialPolicy}`, `pinch:${config.units.pinchGrams}`]
 
   for (const ing of recipe.recipeIngredient) {
     const qty = ing.quantity ?? 0
@@ -68,7 +68,14 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     const foodName = ing.food?.name
     const quantity = ing.quantity
     if (!foodName || quantity == null || !Number.isFinite(quantity) || quantity <= 0) {
-      warnings.push(`Skipped invalid or unquantified ingredient: ${foodName || ing.display}`)
+      // Empty section headings are not ingredients; unparsed ingredient text is.
+      const name = foodName || ing.display || ing.originalText || ing.original_text || ing.note
+      if (!name && ing.title) continue
+      const unmatchedName = name || "Unnamed ingredient"
+      const reason = "invalid or unquantified ingredient"
+      unmatchedNames.push(unmatchedName)
+      matchedIngredients.push({ name: unmatchedName, grams: null, matched: false, nutrients: null, reason })
+      warnings.push(`Skipped ${reason}: ${unmatchedName}`)
       continue
     }
     const context = interpretIngredient(ing, recipe.recipeInstructions)
@@ -134,14 +141,14 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   warnings.push(...recipeWarnings(perServing))
   for (const warning of warnings) logger.warn({ slug: recipe.slug, warning }, "Recipe nutrition warning")
   const result: EstimateResult = {
-    slug: recipe.slug, servings, totals, perServing, warnings,
+    slug: recipe.slug, servings, totals, perServing, warnings, partial: unmatchedNames.length > 0,
     totalNutrients: legacyAmounts(totals), perServingNutrients: legacyAmounts(perServing),
     matchedCount: matchedIngredients.filter(i => i.matched).length,
     unmatchedCount: unmatchedNames.length, unmatchedIngredients: unmatchedNames, matchedIngredients,
   }
   logger.info({ slug: recipe.slug, servings, totalKcal: totals.kcal, kcalPerServing: perServing.kcal,
     totalSodiumMg: totals.sodiumMg, sodiumMgPerServing: perServing.sodiumMg, warnings,
-    matched: result.matchedCount, unmatched: result.unmatchedCount }, "Estimated nutrition for recipe")
+    matched: result.matchedCount, unmatched: result.unmatchedCount, partial: result.partial }, "Estimated nutrition for recipe")
   return result
 }
 
@@ -168,18 +175,37 @@ function n(v: number | null): string {
   return v != null && Number.isFinite(v) ? (Math.round(v * 100) / 100).toString() : ""
 }
 
+export function isPartialEstimate(result: EstimateResult): boolean {
+  return result.partial === true || result.unmatchedCount > 0 || result.unmatchedIngredients.length > 0
+    || result.matchedIngredients.some(ingredient => !ingredient.matched)
+}
+
 export function buildNutritionPatch(
   result: EstimateResult,
   hash: string,
   recipeYield: string | null,
+  existingNutrition?: MealieNutrition | null,
 ): NutritionPatch {
   const llmIngredients = result.matchedIngredients
     .filter((i) => i.llmEstimated)
     .map((i) => i.name)
 
+  const partial = isPartialEstimate(result)
+  const emptyExistingNutrition = existingNutrition === null || (existingNutrition !== undefined
+    && Object.values(existingNutrition).every(value => value == null || value.trim() === ""))
+  const withhold = partial && (config.estimate.partialPolicy !== "fill-empty" || !emptyExistingNutrition)
   const extras: Record<string, string> = {
-    calorie_estimator_hash: hash,
+    // Partial attempts must remain retryable, including when empty nutrition was filled.
+    calorie_estimator_hash: partial ? "" : hash,
+    calorie_estimator_attempt_hash: hash,
+    calorie_estimator_partial: String(partial),
+    calorie_estimator_partial_policy: config.estimate.partialPolicy,
+    calorie_estimator_nutrition_status: withhold ? "partial-withheld" : partial ? "partial-written" : "complete",
     calorie_estimator_unmatched: JSON.stringify(result.unmatchedIngredients),
+    calorie_estimator_unmatched_details: JSON.stringify(result.matchedIngredients.filter(ingredient => !ingredient.matched)
+      .map(({ name, grams, reason }) => ({ name, grams, reason }))),
+    calorie_estimator_warnings: JSON.stringify(result.warnings ?? []),
+    calorie_estimator_partial_total_kcal: partial ? n(result.totalNutrients.kcalPer100g) : "",
   }
 
   if (llmIngredients.length > 0) {
@@ -188,13 +214,18 @@ export function buildNutritionPatch(
 
   const p = result.perServingNutrients
   const totalKcal = result.totalNutrients.kcalPer100g
-  if (totalKcal !== null && totalKcal > 0) {
+  if (!partial && totalKcal !== null && totalKcal > 0) {
     extras.calorie_estimator_total_kcal = totalKcal.toString()
   }
 
   const servings = result.servings
-  if (servings !== null) {
+  if (!partial && servings !== null) {
     extras.calorie_estimator_yield = servings.toString()
+  }
+
+  if (withhold) {
+    logger.warn({ slug: result.slug, policy: config.estimate.partialPolicy, unmatched: result.unmatchedIngredients }, "Withholding partial nutrition; preserving existing Mealie values")
+    return { nutrition: {}, extras }
   }
 
   const nutrition: Partial<MealieNutrition> = {}
@@ -214,6 +245,7 @@ export function buildNutritionPatch(
   add("sodiumContent", p.sodiumPer100g === null ? "" : n(Math.round(p.sodiumPer100g)))
   add("cholesterolContent", p.cholesterolPer100g === null ? "" : n(Math.round(p.cholesterolPer100g)))
 
-  if (result.warnings?.length) extras.calorie_estimator_warnings = JSON.stringify(result.warnings)
-  return { nutrition: sanitizeNutritionPatch(nutrition, result.slug), extras }
+  const safeNutrition = sanitizeNutritionPatch(nutrition, result.slug)
+  if (partial && Object.keys(safeNutrition).length === 0) extras.calorie_estimator_nutrition_status = "partial-withheld"
+  return { nutrition: safeNutrition, extras }
 }

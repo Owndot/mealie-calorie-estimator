@@ -182,7 +182,7 @@ describe("buildNutritionPatch", () => {
     expect(patch.extras.calorie_estimator_total_kcal).toBe("500")
   })
 
-  it("handles zero total kcal", () => {
+  it("withholds zero total kcal when ingredients are unmatched", () => {
     const result: EstimateResult = {
       slug: "test",
       servings: 4,
@@ -196,7 +196,7 @@ describe("buildNutritionPatch", () => {
 
     const patch = buildNutritionPatch(result, "ghi789", "4 servings")
 
-    expect(patch.nutrition.calories).toBe("0")
+    expect(patch.nutrition.calories).toBeUndefined()
     expect(patch.extras.calorie_estimator_total_kcal).toBeUndefined()
     expect(patch.extras.calorie_estimator_unmatched).toBe(JSON.stringify(["salt", "pepper", "herbs"]))
   })

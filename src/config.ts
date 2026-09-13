@@ -67,6 +67,7 @@ export const config = {
   estimate: {
     strategy: (process.env.ESTIMATE_STRATEGY || "all") as "all" | "tagged",
     tag: process.env.ESTIMATE_TAG || "estimate",
+    partialPolicy: (process.env.PARTIAL_ESTIMATE_POLICY?.trim().toLowerCase() === "fill-empty" ? "fill-empty" : "withhold") as "withhold" | "fill-empty",
   },
 
   cache: {

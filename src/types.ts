@@ -152,6 +152,8 @@ export interface EstimateResult {
   totals?: RecipeNutrientTotals
   perServing?: PerServingNutrition
   warnings?: string[]
+  /** True if any ingredient lacks a usable quantity, weight or nutrient profile. */
+  partial?: boolean
   /** Deprecated compatibility fields; use totals/perServing with explicit units. */
   totalNutrients: NutrientSet
   perServingNutrients: NutrientSet

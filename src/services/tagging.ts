@@ -1,6 +1,6 @@
 import type { NutrientSet, MealieNutrition, MealieTag, MealieRecipe } from "../types.js"
 import { getOrCreateTags, patchRecipe } from "./mealie-client.js"
-import { estimateRecipe, buildNutritionPatch } from "./estimator.js"
+import { estimateRecipe, buildNutritionPatch, isPartialEstimate } from "./estimator.js"
 
 export function getCalorieTag(kcal: number | null): string | null {
   if (kcal === null) return null
@@ -105,12 +105,21 @@ export async function estimateAndTag(
   householdId?: string | null,
 ): Promise<{ calories: number | null; tagSlugs: string[] }> {
   const result = await estimateRecipe(recipe)
-  const nutritionPatch = buildNutritionPatch(result, hash, recipe.recipeYield)
+  const nutritionPatch = buildNutritionPatch(result, hash, recipe.recipeYield, recipe.nutrition)
+  if (isPartialEstimate(result)) {
+    const writesNutrition = Object.keys(nutritionPatch.nutrition).length > 0
+    await patchRecipe(recipe.slug, {
+      ...(writesNutrition ? { nutrition: nutritionPatch.nutrition } : {}),
+      extras: { ...recipe.extras, ...nutritionPatch.extras },
+    }, householdId)
+    // Existing tags describe retained nutrition; never replace them using a partial total.
+    return { calories: writesNutrition ? result.perServingNutrients.kcalPer100g : null, tagSlugs: [] }
+  }
   const { tags, tagSlugs } = await resolveAndMergeTags(recipe, result.perServingNutrients, householdId)
   await patchRecipe(recipe.slug, {
     ...nutritionPatch,
     tags,
-    extras: { ...nutritionPatch.extras, calorie_estimator_tags: JSON.stringify(tagSlugs) },
+    extras: { ...recipe.extras, ...nutritionPatch.extras, calorie_estimator_tags: JSON.stringify(tagSlugs) },
   }, householdId)
   return { calories: result.perServingNutrients.kcalPer100g, tagSlugs }
 }

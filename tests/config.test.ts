@@ -69,3 +69,13 @@ describe("pinch configuration", () => {
     },
   )
 })
+
+describe("partial estimate policy", () => {
+  it.each([["withhold", "withhold"], ["fill-empty", "fill-empty"], [" FILL-EMPTY ", "fill-empty"], ["allow", "withhold"], ["", "withhold"]])(
+    "parses %s safely", async (value, expected) => {
+      process.env.PARTIAL_ESTIMATE_POLICY = value
+      const { config } = await import("../src/config.js")
+      expect(config.estimate.partialPolicy).toBe(expected)
+    },
+  )
+})

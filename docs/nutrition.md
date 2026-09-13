@@ -101,8 +101,29 @@ With existing `LOG_LEVEL=debug`, ingredient logs show original name, normalized 
 
 ## Configuration and remaining limits
 
-One new optional variable: `PINCH_GRAMS`, recommended default **0.25**. Values from 0.05 through 0.5 g are accepted; invalid/out-of-range values revert to 0.25. Setting 0.4 restores the earlier pinch default. Existing token, model, endpoint, rate-limit, cache and deployment configuration is unchanged. No new dependency is required.
+Optional variable: `PINCH_GRAMS`, recommended default **0.25**. Values from 0.05 through 0.5 g are accepted; invalid/out-of-range values revert to 0.25. Setting 0.4 restores the earlier pinch default. Existing token, model, endpoint, rate-limit, cache and deployment configuration is unchanged. No new dependency is required.
 
 Reference nutrient and density values are population averages. Brands, salting, rinsing, cooking loss, variety, edible portion, spoon packing and can sizes vary. Frozen or uncommon preparations without a profile fall back conservatively. No automatic dry-to-cooked mass expansion is applied; input quantity always means the measured state. Instruction inference is limited to explicit, attributable clues and cannot resolve every recipe narrative.
 
-OFF can use differing carbohydrate conventions or incompletely identify a liquid's nutrition basis; only an explicitly identified per-100ml basis can be normalized confidently. LLM unit compliance is requested and bounded, but cannot be proven by a plausible number alone. Missing nutrient values/ingredients can make totals partial; warnings and per-ingredient nulls expose this, but the service does not model uncertainty intervals. No live self-hosted Mealie deployment was available for end-to-end UI verification; tests assert API patch fields and use verified upstream unit labels.
+OFF can use differing carbohydrate conventions or incompletely identify a liquid's nutrition basis; only an explicitly identified per-100ml basis can be normalized confidently. LLM unit compliance is requested and bounded, but cannot be proven by a plausible number alone. Missing individual nutrient fields can still make that nutrient total incomplete; per-ingredient nulls expose this, but the service does not model uncertainty intervals. Missing entire ingredient quantities, weights or profiles are governed by the partial-estimate policy below. No live self-hosted Mealie deployment was available for end-to-end UI verification; tests assert API patch fields and use verified upstream unit labels.
+
+
+## Partial-estimate write safety
+
+`PARTIAL_ESTIMATE_POLICY` has two supported values:
+
+- **`withhold` (default):** if any ingredient has an invalid/missing quantity, unknown weight, ambiguous state or unavailable nutrient profile, do not write any nutrition fields to Mealie. No negligible-mass exception is assumed, since small masses can still contribute meaningful sodium or other nutrients.
+- **`fill-empty` (explicit opt-in):** a partial result may be written only when **all** existing nutrition fields are null, empty or whitespace. Any existing value, including zero or a lone sodium value, protects the entire nutrition object. Unknown existing nutrition is treated as protected. This mode can show incomplete nutrition and should be enabled only when that is intentional.
+
+Both modes preserve existing nutrition whenever any value is present. Partial attempts never update calorie/digestibility tags, and a withheld patch omits the `nutrition` and `tags` keys entirely. Existing unrelated extras and previous complete total/yield metadata are retained. Empty section headings do not count as ingredients; unparsed ingredient text and unknown quantities do.
+
+Extras expose the attempted estimate independently of retained nutrition:
+
+- `calorie_estimator_partial`: `"true"` or `"false"`, describing ingredient coverage in the latest attempt.
+- `calorie_estimator_partial_policy`: the active policy.
+- `calorie_estimator_nutrition_status`: `"partial-withheld"`, `"partial-written"`, or `"complete"`. The existing no-servings warning still applies to complete ingredient coverage without a usable serving count.
+- `calorie_estimator_unmatched` and `calorie_estimator_unmatched_details`: missing ingredient names and known gram weights/reasons.
+- `calorie_estimator_partial_total_kcal`: the known subtotal for diagnostics only; it is not written under the complete-total key.
+- `calorie_estimator_attempt_hash`: records the attempted inputs. Partial attempts set the completed `calorie_estimator_hash` to an empty string so a later backfill can retry. Policy changes also change recipe hashes.
+
+When the missing ingredient resolves, a complete attempt writes nutrition normally and clears the partial flag, stale warnings and partial subtotal. A previously correct Mealie value is never replaced by a known partial estimate. The flag measures ingredient coverage; it does not assert that every micronutrient within a matched profile is known.
