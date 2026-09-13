@@ -99,7 +99,7 @@ function divideByServings(total: NutrientSet, servings: number): NutrientSet {
     unsaturatedFatPer100g: div(total.unsaturatedFatPer100g),
     fiberPer100g: div(total.fiberPer100g),
     sugarPer100g: div(total.sugarPer100g),
-    sodiumPer100g: div(total.sodiumPer100g, 1000),
+    sodiumPer100g: div(total.sodiumPer100g),
     cholesterolPer100g: div(total.cholesterolPer100g),
   }
 }

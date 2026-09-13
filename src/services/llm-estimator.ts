@@ -1,3 +1,4 @@
+import { validateProfile } from "./nutrition-validation.js"
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
 import { getCachedLlmEstimate, setCachedLlmEstimate, getCachedLlmNutrients, setCachedLlmNutrients } from "../utils/cache.js"
@@ -11,7 +12,7 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
     return null
   }
 
-  const cached = getCachedLlmEstimate(unitName, foodName)
+  const cached = getCachedLlmEstimate(`weight-v3:${unitName}`, foodName)
   if (cached !== undefined) {
     const totalGrams = cached * quantity
     logger.debug({ unitName, foodName, gramsPerUnit: cached, totalGrams }, "LLM estimate cache hit")
@@ -51,9 +52,9 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
     }
 
     const trimmed = content.trim()
-    const num = parseInt(trimmed, 10)
+    const num = Number(trimmed)
 
-    if (isNaN(num) || num <= 0) {
+    if (!Number.isFinite(num) || num <= 0 || num > 10000) {
       logger.warn({ unitName, foodName, llmResponse: trimmed }, "LLM returned invalid number")
       return null
     }
@@ -61,7 +62,7 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
     const gramsPerUnit = num
     const totalGrams = gramsPerUnit * quantity
 
-    setCachedLlmEstimate(unitName, foodName, gramsPerUnit)
+    setCachedLlmEstimate(`weight-v3:${unitName}`, foodName, gramsPerUnit)
     logger.debug({ unitName, foodName, gramsPerUnit, totalGrams }, "LLM estimate obtained")
 
     return totalGrams
@@ -80,13 +81,13 @@ function nutrientNumber(value: unknown): number | null {
 export async function estimateNutrients(foodName: string): Promise<NutrientSet | null> {
   if (!config.llm.enabled || !config.llm.apiKey) return null
 
-  const cached = getCachedLlmNutrients(foodName)
+  const cached = getCachedLlmNutrients(`nutrition-v3:llm:${foodName}`)
   if (cached) {
     logger.debug({ foodName }, "LLM nutrient cache hit")
     return cached
   }
 
-  const prompt = `Estimate nutritional values per 100g for "${foodName}". Return ONLY valid JSON with these keys (all numbers, no units): {"kcal":0,"protein":0,"carbs":0,"fat":0,"saturatedFat":0,"transFat":0,"fiber":0,"sugar":0,"sodium":0,"cholesterol":0}. Use typical values for the food. No explanation, no markdown.`
+  const prompt = `Estimate nutrition for 100 g of the edible ingredient: ${JSON.stringify(foodName)}. Respect dry/raw, cooked, canned, drained, frozen and fresh state explicitly specified; do not substitute cooked values for dry staples. Use typical edible-form values, not serving values. Return ONLY a valid JSON object with keys kcal, protein, carbs, fat, saturatedFat, transFat, fiber, sugar, sodium, cholesterol. Units: kcal = kcal per 100 g; protein, carbs, fat, saturatedFat, transFat, fiber, sugar = grams per 100 g; sodium and cholesterol = milligrams (mg) per 100 g. Carbs means available carbohydrate excluding fiber. Each value must be a finite non-negative JSON number, or null if unknown. Return JSON null if the food/state is ambiguous or confidence is low. Do not invent values. No markdown or explanation.`
 
   try {
     await waitForRateLimit(RateLimitType.Llm)
@@ -118,20 +119,24 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
       return null
     }
 
-    const json = JSON.parse(content.replace(/```json\n?|\n?```/g, ""))
+    const json: unknown = JSON.parse(content)
+    if (json === null || typeof json !== "object" || Array.isArray(json)) return null
+    const fields = json as Record<string, unknown>
+    const keys = ["kcal", "protein", "carbs", "fat", "saturatedFat", "transFat", "fiber", "sugar", "sodium", "cholesterol"]
+    if (keys.some(key => fields[key] != null && (typeof fields[key] !== "number" || !Number.isFinite(fields[key]) || (fields[key] as number) < 0))) return null
 
     const nutrients: NutrientSet = {
-      kcalPer100g: nutrientNumber(json.kcal),
-      proteinPer100g: nutrientNumber(json.protein),
-      carbsPer100g: nutrientNumber(json.carbs),
-      fatPer100g: nutrientNumber(json.fat),
-      saturatedFatPer100g: nutrientNumber(json.saturatedFat),
-      transFatPer100g: nutrientNumber(json.transFat),
+      kcalPer100g: nutrientNumber(fields.kcal),
+      proteinPer100g: nutrientNumber(fields.protein),
+      carbsPer100g: nutrientNumber(fields.carbs),
+      fatPer100g: nutrientNumber(fields.fat),
+      saturatedFatPer100g: nutrientNumber(fields.saturatedFat),
+      transFatPer100g: nutrientNumber(fields.transFat),
       unsaturatedFatPer100g: null,
-      fiberPer100g: nutrientNumber(json.fiber),
-      sugarPer100g: nutrientNumber(json.sugar),
-      sodiumPer100g: nutrientNumber(json.sodium),
-      cholesterolPer100g: nutrientNumber(json.cholesterol),
+      fiberPer100g: nutrientNumber(fields.fiber),
+      sugarPer100g: nutrientNumber(fields.sugar),
+      sodiumPer100g: nutrientNumber(fields.sodium),
+      cholesterolPer100g: nutrientNumber(fields.cholesterol),
     }
 
     if (nutrients.fatPer100g !== null) {
@@ -140,8 +145,8 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
       nutrients.unsaturatedFatPer100g = Math.round((nutrients.fatPer100g - s - t) * 10) / 10
     }
 
-    if (nutrients.kcalPer100g !== null && nutrients.kcalPer100g >= 0) {
-      setCachedLlmNutrients(foodName, nutrients)
+    if (validateProfile(nutrients).length === 0) {
+      setCachedLlmNutrients(`nutrition-v3:llm:${foodName}`, nutrients)
       logger.debug({ foodName, kcal: nutrients.kcalPer100g }, "LLM nutrient estimate obtained")
       return nutrients
     }

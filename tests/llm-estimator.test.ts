@@ -125,23 +125,23 @@ describe("estimateNutrients", () => {
   }
 
   it("preserves and caches zero kcal salt and zero-valued nutrients", async () => {
-    const result = await respond({ kcal: 0, sodium: 39.3, fat: 0, protein: "0" })
-    expect(result).toMatchObject({ kcalPer100g: 0, sodiumPer100g: 39.3, fatPer100g: 0, proteinPer100g: 0, unsaturatedFatPer100g: 0 })
+    const result = await respond({ kcal: 0, sodium: 39300, fat: 0, protein: 0 })
+    expect(result).toMatchObject({ kcalPer100g: 0, sodiumPer100g: 39300, fatPer100g: 0, proteinPer100g: 0, unsaturatedFatPer100g: 0 })
     const { estimateNutrients } = await import("../src/services/llm-estimator.js")
     expect(await estimateNutrients("Salz")).toEqual(result)
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   it.each([null, "", "invalid", -1, "Infinity", true, [], {}])("rejects invalid kcal %j", async kcal => {
-    expect(await respond({ kcal, sodium: 39.3 })).toBeNull()
+    expect(await respond({ kcal, sodium: 39300 })).toBeNull()
   })
 
   it("rejects missing kcal without confusing it with zero", async () => {
-    expect(await respond({ sodium: 39.3 })).toBeNull()
+    expect(await respond({ sodium: 39300 })).toBeNull()
   })
 
-  it("keeps unknown or invalid nutrients null", async () => {
-    const result = await respond({ kcal: 0, sodium: 39.3, fat: null, sugar: -1, protein: "Infinity" })
-    expect(result).toMatchObject({ fatPer100g: null, sugarPer100g: null, proteinPer100g: null, carbsPer100g: null })
+  it("rejects invalid nutrients rather than silently dropping them", async () => {
+    const result = await respond({ kcal: 0, sodium: 39300, fat: null, sugar: -1, protein: "Infinity" })
+    expect(result).toBeNull()
   })
 })

@@ -1,3 +1,4 @@
+import { validateProfile } from "./nutrition-validation.js"
 import { isSuitableOffMatch } from "./off-matching.js"
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
@@ -64,8 +65,8 @@ function extractNutrients(n: OffNutriments): NutrientSet {
     unsaturatedFatPer100g: unsaturated,
     fiberPer100g: n["fiber_100g"] ?? null,
     sugarPer100g: n["sugars_100g"] ?? null,
-    sodiumPer100g: n["sodium_100g"] ?? null,
-    cholesterolPer100g: n["cholesterol_100g"] ?? null,
+    sodiumPer100g: n["sodium_100g"] != null ? n["sodium_100g"] * 1000 : n["salt_100g"] != null ? n["salt_100g"] / 2.5 * 1000 : null,
+    cholesterolPer100g: n["cholesterol_100g"] != null ? n["cholesterol_100g"] * 1000 : null,
   }
 }
 
@@ -110,7 +111,7 @@ async function searchProduct(query: string): Promise<OffProduct | null> {
 
 export async function lookupNutrients(foodName: string, unitName?: string): Promise<OffLookupResult> {
   // Older entries contain no product identity and cannot be validated retroactively.
-  const cacheKey = `off-name-v2:${foodName}`
+  const cacheKey = `nutrition-v3:off:${foodName}`
   const cached = getCachedNutrients(cacheKey)
   if (cached) {
     logger.debug({ foodName }, "Cache hit for food")
@@ -141,7 +142,7 @@ export async function lookupNutrients(foodName: string, unitName?: string): Prom
 
   const nutrients = extractNutrients(product.nutriments)
 
-  if (nutrients.kcalPer100g === null) {
+  if (validateProfile(nutrients).length > 0) {
     logger.debug({ foodName, product: product.product_name }, "OFF match has no kcal data")
     return { nutrients: null, matched: false, productName: product.product_name }
   }

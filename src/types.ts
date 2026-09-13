@@ -6,6 +6,7 @@ export interface MealieIngredient {
   display: string
   title: string | null
   originalText: string | null
+  original_text?: string | null
   referenceId?: string | null
 }
 
@@ -52,6 +53,7 @@ export interface MealieRecipe {
   recipeYield: string | null
   recipeServings: number | null
   recipeIngredient: MealieIngredient[]
+  recipeInstructions?: Array<string | { text: string; ingredientReferences?: Array<{ referenceId: string }> }>
   nutrition: MealieNutrition | null
   tags: MealieTag[] | null
   extras: Record<string, string> | null
@@ -76,6 +78,8 @@ export interface OffSearchResult {
 export interface OffProduct {
   product_name: string
   nutriments?: OffNutriments
+  brands?: string
+  nutrition_data_per?: string
   nutriscore_grade?: string
 }
 
@@ -89,6 +93,7 @@ export interface OffNutriments {
   "fiber_100g": number | null
   "sugars_100g": number | null
   "sodium_100g": number | null
+  "salt_100g"?: number | null
   "cholesterol_100g": number | null
 }
 
@@ -109,6 +114,7 @@ export interface EventRecipeData {
   recipeSlug?: string
 }
 
+/** Per 100 g edible food: energy in kcal, macros in g, sodium and cholesterol in mg. */
 export interface NutrientSet {
   kcalPer100g: number | null
   proteinPer100g: number | null

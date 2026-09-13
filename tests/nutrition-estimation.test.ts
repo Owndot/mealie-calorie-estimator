@@ -18,7 +18,7 @@ vi.mock("../src/services/llm-estimator.js", () => ({
 const salt: NutrientSet = {
   kcalPer100g: 0, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0,
   saturatedFatPer100g: 0, transFatPer100g: 0, unsaturatedFatPer100g: 0,
-  fiberPer100g: 0, sugarPer100g: 0, sodiumPer100g: 39.3, cholesterolPer100g: 0,
+  fiberPer100g: 0, sugarPer100g: 0, sodiumPer100g: 39300, cholesterolPer100g: 0,
 }
 
 function recipe(name: string, unitName = "g", quantity = 100): MealieRecipe {
@@ -98,7 +98,7 @@ describe("OFF identity validation and recipe fallback", () => {
     vi.mocked(getCachedNutrients).mockImplementation(key => key === "Zwiebel" ? salt : undefined)
     offResponse("smalec")
     expect((await lookupNutrients("Zwiebel")).matched).toBe(false)
-    expect(getCachedNutrients).toHaveBeenCalledWith("off-name-v2:Zwiebel")
+    expect(getCachedNutrients).toHaveBeenCalledWith("nutrition-v3:off:Zwiebel")
   })
 
   it("validates the food after removing the unit prefix", async () => {
@@ -116,11 +116,11 @@ describe("zero kcal salt", () => {
     expect(result.matchedCount).toBe(1)
     expect(result.matchedIngredients[0].grams).toBe(0.4)
     expect(result.totalNutrients.kcalPer100g).toBe(0)
-    expect(result.totalNutrients.sodiumPer100g).toBeCloseTo(0.1572)
-    expect(result.perServingNutrients.sodiumPer100g).toBe(0.079)
+    expect(result.totalNutrients.sodiumPer100g).toBeCloseTo(157.2)
+    expect(result.perServingNutrients.sodiumPer100g).toBe(79)
     const patch = buildNutritionPatch(result, "test-hash", "2 servings")
     expect(patch.nutrition.calories).toBe("0")
-    expect(patch.nutrition.sodiumContent).toBe("0.079")
+    expect(patch.nutrition.sodiumContent).toBe("79")
   })
 })
 
@@ -159,4 +159,16 @@ describe("German recipe units", () => {
     expect(result.matchedIngredients[0].grams).toBe(400)
     expect(estimateGrams).not.toHaveBeenCalled()
   })
+})
+
+it("converts OFF sodium and cholesterol grams to Mealie milligrams once", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hits: [{
+    product_name: "Testfood", nutriments: { "energy-kcal_100g": 100, "sodium_100g": 0.4, "cholesterol_100g": 0.05 },
+  }] })))
+  const result = await estimateRecipe(recipe("Testfood", "g", 200))
+  expect(result.totalNutrients.sodiumPer100g).toBe(800)
+  expect(result.perServingNutrients.sodiumPer100g).toBe(400)
+  const patch = buildNutritionPatch(result, "units", "2 servings")
+  expect(patch.nutrition.sodiumContent).toBe("400")
+  expect(patch.nutrition.cholesterolContent).toBe("50")
 })
