@@ -326,6 +326,26 @@ describe("interpretation cache and confidence safety", () => {
       expect(fetch).not.toHaveBeenCalled()
     },
   )
+  it.each([
+    ["Salz", "teaspoon"],
+    ["Salz", "pinch"],
+    ["Oregano", "teaspoon"],
+    ["Basilikum", "teaspoon"],
+    ["Tomate", "g"],
+    ["Zucker", "teaspoon"],
+    ["Zwiebel", "piece"],
+    ["Tomatenmark", "g"],
+  ])("skips classification for production-shaped %s with %s metadata", async (name, unit) => {
+    const input = ingredient(name)
+    input.quantity = unit === "g" ? 800 : 1
+    input.unit = { id: unit, name: unit, abbreviation: null, pluralName: null, standardQuantity: null, standardUnit: null }
+    input.display = `${input.quantity} ${unit} ${name}`
+    input.originalText = input.display
+    const result = await estimateRecipe(recipe(input))
+    expect(result.partial).toBe(false)
+    expect(result.matchedIngredients[0].context?.interpretationSource).toBe("deterministic")
+    expect(fetch).not.toHaveBeenCalled()
+  })
   it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
     "still classifies locally unresolved %s",
     async name => {

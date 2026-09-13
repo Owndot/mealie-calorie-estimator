@@ -70,6 +70,31 @@ function canResolveLocally(
   return exact?.confidence === 1 || isKnownFoodIdentity(context.canonicalName)
 }
 
+function hasUnresolvedIngredientDetails(
+  ingredient: MealieIngredient,
+  context: IngredientContext,
+): boolean {
+  const fields = [ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+  const canonicalDetails = new Set([context.canonicalName, context.originalName].map(normalizeFoodText))
+  return fields.some(field => {
+    let residual = normalizeFoodText(field)
+      .replace(/^\s*\d+(?:[.,]\d+)?(?:\s*\/\s*\d+)?\s*/, "")
+      .replace(/\b(?:stuck|stücke|stuecke)\b/g, " ")
+      .replace(/\b(?:aus|der|dem|dose[n]?|konserve[n]?|canned|drained|abgetropft\w*|trocken\w*|getrocknet\w*|dried|dry|gekocht\w*|cooked|roh\w*|raw|frisch\w*|fresh|tiefgekuhlt\w*|frozen|bio|organic)\b/g, " ")
+      .replace(/\b\d+\b/g, " ").trim().replace(/\s+/g, " ")
+    residual = residual.split(" ").filter(token =>
+      !isKnownUnitName(token) && !/^(?:teeloffel|essloffel|milliliter|millilitre|kilogramm|gramm|liter|litre)$/.test(token),
+    ).join(" ")
+    if (!residual) return false
+    if (canonicalDetails.has(residual)) return false
+    const interpreted = interpretIngredient({
+      food: { id: "", name: residual, pluralName: null, aliases: [] },
+    }, [], false)
+    return interpreted.canonicalName !== context.canonicalName
+  })
+}
+
 async function classify(key: string, input: unknown): Promise<SemanticInterpretation | null> {
   const cached = getCachedInterpretation(key)
   if (validateInterpretation(cached)) return cached
@@ -108,14 +133,11 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const exact = matchGenericFood(context, true)
   const descriptorNotes = context.descriptorNotes ?? []
   const requiresPreservationSemantics = descriptorNotes.some(note => ["in oil", "in brine", "pickled"].includes(note))
-  const details = [ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
-    .filter(Boolean).map(value => normalizeFoodText(value!.replace(/[\p{L}.]+/gu, word => isKnownUnitName(word) ? " " : word))).join(" ")
   const name = normalizeFoodText(context.originalName)
-  const remainingDetails = details.split(name || "\0").join(" ")
-    .replace(/\b\d+\b/g, " ")
-    .replace(/\b(aus|der|dem|dose[n]?|konserve[n]?|canned|drained|abgetropft\w*|abtropfgewicht|trocken\w*|getrocknet\w*|dried|dry|gekocht\w*|cooked|roh\w*|raw|frisch\w*|fresh|tiefgekuhlt\w*|frozen|bio|organic|vollfett\w*|full|fat|fein|grob|finely|roughly|gewurfelt\w*|gehackt\w*|geschnitten\w*|gerieben\w*|gemahlen\w*|geschalt\w*|diced|chopped|sliced|grated|ground|peeled)\b/g, " ").trim()
   const brandHint = /\b(brand|marke|hersteller)\b|[®™]/i.test([ingredient.food?.name, ingredient.note, ingredient.originalText, ingredient.display].join(" "))
-  const unresolvedDetails = remainingDetails.length > 0
+  const unresolvedDetails = hasUnresolvedIngredientDetails(ingredient, context)
+  const remainingDetails = unresolvedDetails ? normalizeFoodText([ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
+    .filter(Boolean).join(" ")) : ""
 
   if (canResolveLocally(context, exact, brandHint, unresolvedDetails, requiresPreservationSemantics)) {
     const interpreted = { ...context, canonicalName: exact?.name === "rice" && context.canonicalName === "basmati rice" ? "basmati rice" : exact?.name ?? context.canonicalName,
