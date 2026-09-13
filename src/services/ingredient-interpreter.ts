@@ -34,6 +34,11 @@ function semanticText(text: string): string {
   // Exclude a leading recipe amount, but retain nutrition percentages such as 3.5% milk.
   return normalizeFoodText(text.replace(/^\s*\d+(?:[.,]\d+)?(?:\s*\/\s*\d+)?\s+(?!\s*%)/, ""))
 }
+function compatibleCanonicalIdentity(localName: string, classifiedName: string): boolean {
+  const local = interpretIngredient({ food: { id: "", name: localName, pluralName: null, aliases: [] } }, [], false).canonicalName
+  const classified = interpretIngredient({ food: { id: "", name: classifiedName, pluralName: null, aliases: [] } }, [], false).canonicalName
+  return local === classified
+}
 const pending = new Map<string, Promise<SemanticInterpretation | null>>()
 
 async function classify(key: string, input: unknown): Promise<SemanticInterpretation | null> {
@@ -72,8 +77,8 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const context = interpretIngredient(ingredient, instructions)
   if (context.state === "ambiguous") return null
   const exact = matchGenericFood(context, true)
-  const preservationNotes = (context.descriptorNotes ?? []).filter(note => ["in oil", "in brine", "pickled"].includes(note))
-  const requiresPreservationSemantics = preservationNotes.length > 0
+  const descriptorNotes = context.descriptorNotes ?? []
+  const requiresPreservationSemantics = descriptorNotes.some(note => ["in oil", "in brine", "pickled"].includes(note))
   const details = [ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display]
     .filter(Boolean).map(value => normalizeFoodText(value!.replace(/[\p{L}.]+/gu, word => isKnownUnitName(word) ? " " : word))).join(" ")
   const name = normalizeFoodText(context.originalName)
@@ -88,7 +93,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
       state: exact?.state ?? context.state, query: [context.canonicalName, context.state === "unspecified" ? "" : context.state].filter(Boolean).join(" "),
       category: exact?.entry.category ?? "other", generic: true, brand: null,
       interpretationConfidence: context.confidence === "low" && !exact ? 0.85 : 0.98, interpretationSource: "deterministic" as const }
-    interpreted.query = [interpreted.canonicalName, interpreted.state === "unspecified" ? "" : interpreted.state].filter(Boolean).join(" ")
+    interpreted.query = [interpreted.canonicalName, interpreted.state === "unspecified" ? "" : interpreted.state, ...descriptorNotes].filter(Boolean).join(" ")
     return interpreted
   }
   // Without an enabled classifier preserve the existing strict, literal OFF path.
@@ -134,7 +139,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
           if (recovered && recovered.confidence === 1) {
             logger.debug({ originalName: context.originalName, canonicalName: recovered.name, profileId: recovered.entry.fdcId }, "Recovered ingredient from trusted local generic database")
             return {
-              ...context, canonicalName: recovered.name, state: recovered.state, query: [recovered.name, recovered.state === "unspecified" ? "" : recovered.state].filter(Boolean).join(" "),
+              ...context, canonicalName: recovered.name, state: recovered.state, query: [recovered.name, recovered.state === "unspecified" ? "" : recovered.state, ...descriptorNotes].filter(Boolean).join(" "),
               category: recovered.entry.category, generic: true, brand: null, interpretationConfidence: 0.98, interpretationSource: "deterministic",
               reason: "trusted local generic recovery after classification failure", confidence: "high",
             }
@@ -146,9 +151,12 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   }
   const explicitState = context.reason === "explicit ingredient state" || context.reason === "ingredient-linked soaking instruction"
   const compatibleFresh = ["fresh", "raw"].includes(context.state) && ["fresh", "raw"].includes(parsed.state) && ["vegetable", "fruit", "herb"].includes(parsed.category)
-  if (explicitState && parsed.state !== context.state && !compatibleFresh) return null
+  const classifierStateIsUncertain = ["unspecified", "raw", "fresh"].includes(parsed.state)
+  if (explicitState && descriptorNotes.length > 0 && !compatibleCanonicalIdentity(context.canonicalName, parsed.canonicalFood)) return null
+  if (explicitState && parsed.state !== context.state && !compatibleFresh && !classifierStateIsUncertain) return null
   if (parsed.brand && !normalizeFoodText(JSON.stringify(input)).includes(normalizeFoodText(parsed.brand))) return null
   const canonicalName = interpretIngredient({ food: { id: "", name: parsed.canonicalFood, pluralName: null, aliases: [] } }, [], false).canonicalName
+  const effectiveState = explicitState && classifierStateIsUncertain ? context.state : parsed.state
   const nutritionQualifiers = [
     /\b(light|low fat|reduced fat|fettarm\w*|fettreduziert\w*)\b/,
     /\b(low sodium|natriumarm\w*)\b/,
@@ -157,15 +165,15 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   ]
   const inputText = normalizeFoodText([input.name, input.note, input.originalText, input.display].join(" "))
   if (nutritionQualifiers.some(pattern => pattern.test(inputText) && !pattern.test(canonicalName))) return null
-  const result: IngredientContext = { ...context, canonicalName, state: parsed.state, generic: parsed.generic, brand: parsed.brand,
+  const result: IngredientContext = { ...context, canonicalName, state: effectiveState, generic: parsed.generic, brand: parsed.brand,
     category: parsed.category, interpretationConfidence: parsed.confidence, interpretationSource: "LLM",
-    query: [parsed.brand, canonicalName, parsed.state === "unspecified" ? "" : parsed.state, ...preservationNotes].filter(Boolean).join(" "),
+    query: [parsed.brand, canonicalName, effectiveState === "unspecified" ? "" : effectiveState, ...descriptorNotes].filter(Boolean).join(" "),
     reason: "validated semantic classification", confidence: "high" }
   if (!explicitState && result.state === "unspecified") {
     const match = matchGenericFood(result, true)
     if (match) {
       result.state = match.state
-      result.query = [result.brand, result.canonicalName, result.state === "unspecified" ? "" : result.state, ...preservationNotes].filter(Boolean).join(" ")
+      result.query = [result.brand, result.canonicalName, result.state === "unspecified" ? "" : result.state, ...descriptorNotes].filter(Boolean).join(" ")
       if (match.state !== "unspecified") result.reason += "; generic edible-state default"
     }
   }

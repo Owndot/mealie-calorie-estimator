@@ -169,21 +169,34 @@ describe("interpretation cache and confidence safety", () => {
     expect(result.matchedIngredients.map(item => item.context?.canonicalName)).toEqual(["paprika", "lemon", "spearmint", "red lentils", "olive oil"])
     expect(result.matchedIngredients.every(item => item.source === "generic")).toBe(true)
   })
-  it("keeps preserved dried tomatoes meaningful and does not reject the ingredient", async () => {
+  it.each(["Getrocknete Tomate in Öl", "Getrocknete Tomaten in Öl", "getrocknete Tomaten, eingelegt in Öl", "sun-dried tomatoes in oil", "getrocknete Tomaten, abgetropft"])("keeps preserved tomato variant %s meaningful through estimateRecipe", async name => {
     vi.mocked(fetch).mockImplementation(async (_url, options) => {
       const body = JSON.parse(options!.body as string)
       if (body.messages[0].role === "system") return response(interpretation("tomato", "dry", { category: "vegetable" }))
       return response({ kcal: 180, protein: 4, carbs: 12, fat: 10, fiber: 8, sugar: 8, sodium: 200, cholesterol: 0, saturatedFat: 1, transFat: 0 })
     })
-    const preserved = ingredient("Getrocknete Tomate in Öl")
+    const preserved = ingredient(name)
     preserved.quantity = 60
     const result = await estimateRecipe(recipe(preserved))
     expect(result.partial).toBe(false)
     expect(result.matchedIngredients[0]).toMatchObject({
       source: "LLM",
-      context: { canonicalName: "tomato", state: "dry", descriptorNotes: ["in oil"] },
+      grams: 60,
+      context: { canonicalName: "tomato", state: "dry" },
     })
-    expect(result.matchedIngredients[0].context?.query).toContain("in oil")
+    expect(result.matchedIngredients[0].context?.descriptorNotes).toEqual(expect.arrayContaining(name.includes("abgetropft") ? [] : ["in oil"]))
+    expect(result.matchedIngredients[0].context?.query).toContain(name.includes("abgetropft") ? "dry" : "in oil")
+    expect(result.matchedIngredients[0].nutrients).not.toBeNull()
+    expect(fetch).toHaveBeenCalled()
+  })
+  it("retains a locally detected dry state when the classifier is uncertain about state", async () => {
+    vi.mocked(fetch).mockResolvedValue(response(interpretation("tomato", "raw", { category: "vegetable" })))
+    const result = await interpretSemanticIngredient(ingredient("Getrocknete Tomate in Öl"))
+    expect(result).toMatchObject({ canonicalName: "tomato", state: "dry", descriptorNotes: ["in oil"] })
+  })
+  it("rejects an unrelated classifier identity despite compatible local descriptors", async () => {
+    vi.mocked(fetch).mockResolvedValue(response(interpretation("cucumber", "raw", { category: "vegetable" })))
+    expect(await interpretSemanticIngredient(ingredient("Getrocknete Tomate in Öl"))).toBeNull()
   })
   it("does not override an explicit canned state with dry nutrition", async () => {
     vi.mocked(fetch).mockResolvedValue(response(interpretation("chickpeas", "dry", { category: "legume" })))

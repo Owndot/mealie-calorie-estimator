@@ -57,7 +57,7 @@ const aliases = new Map(Object.entries(groups).flatMap(([key, names]) =>
   [key, ...names].map(name => [normalizeFoodText(name), key] as const),
 ))
 const descriptorRules: Array<{ state?: FoodState; note?: string; pattern: RegExp }> = [
-  { state: "drained", pattern: /\b(abgetropft\w*|abgegossen\w*|abtropfgewicht|drained)\b/g },
+  { state: "drained", note: "drained", pattern: /\b(abgetropft\w*|abgegossen\w*|abtropfgewicht|drained)\b/g },
   { state: "canned", pattern: /\b(a\s+d\s+(?:(?:der|dem)\s+)?dose[n]?|aus\s+(?:der|dem)\s+dose[n]?|aus\s+dose[n]?|dose[n]?|konserve[n]?|canned|tinned)\b/g },
   { state: "dry", note: "sun-dried", pattern: /\b(sun\s*[- ]?dried)\b/g },
   { state: "dry", pattern: /\b(trocken\w*|getrocknet\w*|dried|dry|uncooked)\b/g },
@@ -117,7 +117,9 @@ export function interpretIngredient(
   if (qualifiers?.length && !qualifiers.some(q => identity.includes(q))) canonicalName += ` ${[...new Set(qualifiers)].join(" ")}`
   const states = detailDescriptors.states.slice()
   if (/\b(dose[n]?|konserve[n]?|can[s]?|tin[s]?)\b/.test(normalizeFoodText(ingredient.unit?.name))) states.push("canned")
-  let state: FoodState = states[0] ?? "unspecified"
+  const primaryStates = states.filter(candidate => candidate !== "drained")
+  let state: FoodState = primaryStates[0] ?? states[0] ?? "unspecified"
+  if (states.includes("drained") && states.includes("canned") && !states.includes("dry")) state = "drained"
   let reason = states.length ? "explicit ingredient state" : "no explicit state"
   let confidence: IngredientContext["confidence"] = states.length ? "high" : "low"
   if ((states.includes("dry") && states.some(s => ["cooked", "canned"].includes(s))) || /\b(nicht|not)\s+(gekocht|cooked|getrocknet|dried)\b/.test(detail)) {

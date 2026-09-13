@@ -126,7 +126,7 @@ describe("state interpretation and aliases", () => {
     ["getrocknete Kidneybohnen", "kidney beans", "dry"],
     ["Getrocknete Tomate in Öl", "tomato", "dry"],
     ["sun-dried tomatoes in oil", "tomato", "dry"],
-    ["getrocknete Tomaten, abgetropft", "tomato", "drained"],
+    ["getrocknete Tomaten, abgetropft", "tomato", "dry"],
     ["geröstete Tomaten in Öl", "tomato", "cooked"],
     ["Artischocken in Öl", "artischocken", "unspecified"],
     ["Oliven in Lake", "oliven", "unspecified"],
