@@ -136,6 +136,16 @@ describe("generic retrieval and source boundaries", () => {
     expect(matchGenericFood(context)?.entry.fdcId).toBe(profileId)
     expect(genericNutrients(context)?.kcalPer100g).toBeGreaterThan(0)
   })
+  it("keeps USDA fiber subtraction to a single normalization step and allows fiber-heavy curry powder", () => {
+    const match = genericCatalog.find(item => item.key === "curry powder:unspecified")
+    expect(match).toBeDefined()
+    const nutrients = match!.entry.nutrients
+    expect(nutrients.carbsPer100g).toBeCloseTo(2.63)
+    expect(nutrients.fiberPer100g).toBeCloseTo(53.2)
+    expect(nutrients.carbsPer100g).toBeLessThan(nutrients.fiberPer100g!)
+    expect(nutrients.carbsPer100g + nutrients.fiberPer100g!).toBeCloseTo(55.83, 2)
+    expect(validateProfile(nutrients)).toEqual([])
+  })
   it("uses OFF for a classified branded packaged product", async () => {
     vi.mocked(fetch).mockImplementation(async url => String(url).includes("/search?")
       ? new Response(JSON.stringify({ hits: [{ product_name: "Kokosmilch", brands: "Aroy D", nutriments: { "energy-kcal_100g": 190, "fat_100g": 18, "proteins_100g": 2, "carbohydrates_100g": 4 } }] }))

@@ -144,6 +144,25 @@ describe("estimateNutrients", () => {
     const result = await respond({ kcal: 0, sodium: 39300, fat: null, sugar: -1, protein: "Infinity" })
     expect(result).toBeNull()
   })
+
+  it("tells the LLM that carbs exclude fiber and keeps fiber separate", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 325, protein: 14.29, carbs: 2.63, fat: 14.01, saturatedFat: 1.648, transFat: 0, fiber: 53.2, sugar: 2.76, sodium: 52, cholesterol: 0 }) } }] }),
+    }))
+    const { estimateNutrients } = await import("../src/services/llm-estimator.js")
+
+    const result = await estimateNutrients("Curry powder")
+
+    expect(result).not.toBeNull()
+    expect(result?.carbsPer100g).toBeCloseTo(2.63)
+    expect(result?.fiberPer100g).toBeCloseTo(53.2)
+    expect(result?.carbsPer100g).toBeLessThan(result!.fiberPer100g!)
+    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)
+    expect(body.messages[0].content).toContain("Carbs means available carbohydrate excluding fiber")
+  })
 })
 
 it("specifies mass basis, milligrams and uncertainty in the nutrient prompt", async () => {

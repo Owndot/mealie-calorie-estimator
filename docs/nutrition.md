@@ -13,6 +13,14 @@ Every `NutrientSet` / `NutrientProfilePer100g` describes **100 g edible food**:
 
 The legacy `totalNutrients` and `perServingNutrients` fields remain available for API compatibility, but their `Per100g` suffixes are deprecated when they hold totals. Their sodium/cholesterol values now consistently mean mg. External consumers relying on the old, inconsistent units must update.
 
+### Carbohydrate convention (EU/German)
+
+Internal `carbsPer100g` and Mealie `carbohydrateContent` use the European/German nutrition-label convention: available carbohydrate excluding dietary fiber. Fiber is tracked separately as `fiberPer100g` / `fiberContent`.
+
+This matters for foods with very high fiber and low digestible carbohydrate, such as curry powder: the checked-in USDA entry stores `carbsPer100g = 2.63` and `fiberPer100g = 53.2`, not a double-subtracted zero or a negative value. The importer normalizes USDA `carbohydrate by difference` by subtracting fiber once, and OFF `carbohydrates_100g` is treated as already available carbohydrate rather than being reduced again by `fiber_100g`.
+
+The LLM nutrient prompt uses the same rule: `carbs = available carbohydrate excluding fiber`, `fiber = dietary fiber separately`, and `sugar` remains a subset of available carbohydrate.
+
 ### Confirmed sodium/cholesterol bug
 
 [OFF's normalized nutrient schema](https://openfoodfacts.github.io/documentation/docs/Product-Opener/schemas/schemas/product_nutrition/) defines weight-based `_100g` values in grams, including sodium and cholesterol. Contributor `_unit` fields must not be applied again to those normalized values. [Mealie's frontend unit labels](https://github.com/mealie-recipes/mealie/blob/mealie-next/frontend/app/composables/recipes/use-recipe-nutrition.ts) use milligrams for both API fields. The previous code copied OFF grams straight to those fields and allowed the LLM to choose unspecified units.

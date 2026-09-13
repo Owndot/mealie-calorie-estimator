@@ -54,6 +54,30 @@ describe("lookupNutrients", () => {
     expect(calledUrl).toContain("langs=de")
   })
 
+  it("keeps OFF carbohydrates in the available-carbohydrate convention and does not subtract fiber again", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      hits: [{
+        product_name: "Curry Powder",
+        brands: "Example",
+        nutriments: {
+          "energy-kcal_100g": 300,
+          "proteins_100g": 12,
+          "carbohydrates_100g": 63,
+          "fat_100g": 9,
+          "fiber_100g": 11,
+          "sugars_100g": 6,
+        },
+      }],
+    }), { status: 200, headers: { "content-type": "application/json" } }))
+
+    const result = await lookupNutrients("Curry Powder")
+
+    expect(result.matched).toBe(true)
+    expect(result.nutrients?.carbsPer100g).toBe(63)
+    expect(result.nutrients?.fiberPer100g).toBe(11)
+    expect(result.nutrients?.carbsPer100g).toBeGreaterThan(result.nutrients!.fiberPer100g!)
+  })
+
   it("retries on a 503 and succeeds on a later attempt", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
