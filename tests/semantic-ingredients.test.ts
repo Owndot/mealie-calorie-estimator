@@ -151,6 +151,7 @@ describe("interpretation cache and confidence safety", () => {
   })
   it("covers the core Anatolian lentil soup identities without a partial estimate", async () => {
     vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      if (String(_url).includes("/search?")) return new Response(JSON.stringify({ hits: [] }), { status: 200 })
       const body = JSON.parse(options!.body as string)
       const input = JSON.parse(body.messages[1].content)
       const values: Record<string, unknown> = {
@@ -208,6 +209,56 @@ describe("interpretation cache and confidence safety", () => {
     expect(result).toMatchObject({ partial: false, matchedCount: 1 })
     expect(result.matchedIngredients[0]).toMatchObject({ source: "generic", context: { interpretationSource: "LLM", canonicalName: "coriander seeds" } })
     expect(fetch).toHaveBeenCalledOnce()
+  })
+  it.each(["Gewürzpaste", "Currypaste", "curry paste", "Würzpaste", "Kräuterpaste", "Gewürzmischung", "Marinade", "Dressing", "Sauce", "seasoning paste"])("uses a validated generic composite fallback for %s", async name => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      if (String(_url).includes("/search?")) return new Response(JSON.stringify({ hits: [] }), { status: 200 })
+      const body = JSON.parse(options!.body as string)
+      if (body.max_tokens === 10) return response(2)
+      if (body.messages[0].role === "system") return new Response("null", { status: 200 })
+      return response({ kcal: 90, protein: 2, carbs: 8, fat: 4, fiber: 1, sugar: 2, sodium: 400, cholesterol: 0 })
+    })
+    const ing = ingredient(name)
+    ing.quantity = 1
+    ing.unit!.name = "TL"
+    const result = await estimateRecipe(recipe(ing))
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [] })
+    expect(result.matchedIngredients[0]).toMatchObject({ source: "LLM", context: { genericComposite: true, interpretationSource: "generic-fallback" } })
+  })
+  it("completes a recipe containing a generic seasoning paste", async () => {
+    vi.mocked(fetch).mockImplementation(async (url, options) => {
+      if (String(url).includes("/search?")) return new Response(JSON.stringify({ hits: [] }), { status: 200 })
+      const body = JSON.parse(options!.body as string)
+      if (body.max_tokens === 10) return response(2)
+      if (body.messages[0].role === "system") {
+        const input = JSON.parse(body.messages[1].content)
+        const classified: Record<string, unknown> = {
+          "red wine": interpretation("red wine", "unspecified", { category: "other", generic: false }),
+          basil: interpretation("basil", "fresh", { category: "herb" }),
+          oregano: interpretation("oregano", "fresh", { category: "herb" }),
+        }
+        return response(classified[input.name] ?? null)
+      }
+      return response({ kcal: 90, protein: 2, carbs: 8, fat: 4, fiber: 1, sugar: 2, sodium: 400, cholesterol: 0 })
+    })
+    const names = ["onion", "garlic", "olive oil", "red wine", "tomato paste", "tomato", "sugar", "salt", "pepper", "basil", "oregano", "water", "cream", "Gewürzpaste"]
+    const ingredients = names.map(name => {
+      const item = ingredient(name)
+      if (name === "Gewürzpaste") { item.quantity = 1; item.unit!.name = "TL" }
+      return item
+    })
+    const result = await estimateRecipe({ ...recipe(ingredients[0]), recipeIngredient: ingredients })
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [] })
+    expect(result.matchedIngredients.find(item => item.name === "Gewürzpaste")).toMatchObject({ matched: true, source: "LLM", context: { genericComposite: true } })
+  })
+  it("keeps invalid non-food text unmatched after classifier failure", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response("null", { status: 200 }))
+    expect(await interpretSemanticIngredient(ingredient("xyz qqq 123"))).toBeNull()
+  })
+  it("accepts an explicit generic-composite classifier result without inventing identity", async () => {
+    vi.mocked(fetch).mockResolvedValue(response({ canonicalFood: "curry paste", state: "unspecified", category: "sauce", generic: false, brand: null, confidence: 0.96, identityType: "generic-composite" }))
+    const result = await interpretSemanticIngredient(ingredient("unknown seasoning paste"))
+    expect(result).toMatchObject({ genericComposite: true, canonicalName: "unknown seasoning paste", interpretationSource: "LLM" })
   })
   it("does not let generic USDA erase an oil-preservation descriptor", async () => {
     vi.mocked(fetch).mockImplementation(async (_url, options) => {

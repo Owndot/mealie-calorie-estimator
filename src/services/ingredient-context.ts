@@ -6,7 +6,7 @@ export interface IngredientContext {
   brand?: string | null
   category?: string
   interpretationConfidence?: number
-  interpretationSource?: "deterministic" | "LLM" | "unresolved"
+  interpretationSource?: "deterministic" | "LLM" | "unresolved" | "generic-fallback"
   originalName: string
   canonicalName: string
   state: FoodState
@@ -15,8 +15,9 @@ export interface IngredientContext {
   confidence: "high" | "medium" | "low"
   fatPercentage?: number
   descriptorNotes?: string[]
+  genericComposite?: boolean
 }
-export const NUTRITION_VERSION = "nutrition-v12-source-hierarchy"
+export const NUTRITION_VERSION = "nutrition-v13-generic-composites"
 
 export function normalizeFoodText(text: unknown): string {
   if (typeof text !== "string") return ""
