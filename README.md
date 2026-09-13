@@ -180,3 +180,7 @@ The test profile starts Mealie (SQLite), a mock Open Food Facts server, and the 
 ```sh
 npm run build
 ```
+
+### Nutrition correctness and German ingredients
+
+See [nutrition units, source data and preparation handling](docs/nutrition.md) for the sodium/cholesterol milligram contract, German aliases, dry/cooked/canned inference, density conversions, validation limits and cache invalidation. `PINCH_GRAMS` is optional and defaults to `0.25` g. Existing configurations continue to work; state-specific caches and versioned recipe hashes bypass earlier mixed-unit estimates.

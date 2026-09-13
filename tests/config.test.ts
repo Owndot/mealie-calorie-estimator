@@ -59,3 +59,13 @@ describe("getMealieToken", () => {
     expect(gt()).toBe("fallback-token")
   })
 })
+
+describe("pinch configuration", () => {
+  it.each([["0.2", 0.2], ["0.3", 0.3], ["0.4", 0.4], ["2", 0.25], ["0", 0.25], ["-1", 0.25], ["NaN", 0.25], ["", 0.25]])(
+    "uses a bounded pinch mass for %s", async (value, expected) => {
+      process.env.PINCH_GRAMS = value
+      const { config } = await import("../src/config.js")
+      expect(config.units.pinchGrams).toBe(expected)
+    },
+  )
+})
