@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { estimateRecipe, buildNutritionPatch, computeIngredientHash, parseYield, resolveServings } from "../src/services/estimator.js"
-import { contextForName, interpretIngredient, nutrientCacheKey } from "../src/services/ingredient-context.js"
+import { contextForName, interpretIngredient, normalizeFoodText, normalizeIngredientDescriptors, nutrientCacheKey } from "../src/services/ingredient-context.js"
 import { genericNutrients } from "../src/services/generic-foods.js"
 import { convertToGrams } from "../src/services/unit-converter.js"
 import { lookupNutrients } from "../src/services/off-client.js"
+import { scoreOffMatch } from "../src/services/off-matching.js"
 import { validateProfile, recipeWarnings } from "../src/services/nutrition-validation.js"
 import type { MealieIngredient, MealieRecipe, NutrientSet } from "../src/types.js"
 
@@ -112,6 +113,33 @@ describe("state interpretation and aliases", () => {
     input.originalText = "400 g Kidneybohnen, abgetropft"
     expect(interpretIngredient(input).state).toBe("drained")
     expect(interpretIngredient(ingredient("Kidneybohnen", 1, "Dose")).state).toBe("canned")
+  })
+  it.each([
+    ["Kidneybohnen a. d. Dose", "kidney beans", "canned"],
+    ["Kidneybohnen aus der Dose", "kidney beans", "canned"],
+    ["Kidneybohnen, abgetropft", "kidney beans", "drained"],
+    ["Kichererbsen aus der Dose", "chickpeas", "canned"],
+    ["Tomaten gehackt", "tomato", "raw"],
+    ["Spinat TK", "spinat", "frozen"],
+    ["Kartoffeln gekocht", "potato", "cooked"],
+    ["Reis gekocht", "rice", "cooked"],
+    ["getrocknete Kidneybohnen", "kidney beans", "dry"],
+  ])("normalizes descriptor variant %s", (name, canonicalName, state) => {
+    expect(contextForName(name)).toMatchObject({ canonicalName, state })
+  })
+  it("keeps packaging and preparation notes separate from the base identity", () => {
+    expect(normalizeIngredientDescriptors("Tomaten, gehackt in Öl")).toMatchObject({
+      baseName: "tomaten",
+      states: [],
+      notes: ["chopped", "in oil"],
+    })
+    expect(normalizeFoodText({ unexpected: "runtime value" })).toBe("")
+  })
+  it("does not crash OFF scoring when optional metadata is not a string", async () => {
+    vi.mocked(fetch).mockResolvedValue(response([hit("Kidneybohnen", 337)]))
+    const result = await lookupNutrients("Kidneybohnen")
+    expect(result.matched).toBe(true)
+    expect(scoreOffMatch({ ...contextForName("Kidneybohnen"), brand: "Example" }, "Kidneybohnen", undefined, { invalid: true } as unknown as string)).toBe(0)
   })
   it("does not let recipe instructions override explicit canned beans", () => {
     expect(interpretIngredient(ingredient("Bohnen", 400, "g", "aus der Dose"), ["Die Bohnen über Nacht einweichen."]).state).toBe("canned")

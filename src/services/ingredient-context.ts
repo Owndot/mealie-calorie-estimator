@@ -16,14 +16,22 @@ export interface IngredientContext {
 }
 export const NUTRITION_VERSION = "nutrition-v8-semantic"
 
-export function normalizeFoodText(text: string): string {
+export function normalizeFoodText(text: unknown): string {
+  if (typeof text !== "string") return ""
   return text.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "")
     .replace(/ß/g, "ss").replace(/[^\p{L}\p{N}%]+/gu, " ").trim().replace(/\s+/g, " ")
+}
+export interface IngredientDescriptors {
+  normalized: string
+  baseName: string
+  states: FoodState[]
+  notes: string[]
 }
 const groups: Record<string, string[]> = {
   "pinto beans": ["Wachtelbohnen", "Wachtelbohne", "Pintobohnen", "Pintobohne", "pinto bean"],
   "kidney beans": ["Kidneybohnen", "Kidneybohne", "kidney bean", "rote Bohnen"],
   beans: ["Bohnen", "Bohne", "bean"],
+  chickpeas: ["Kichererbsen", "Kichererbse", "chickpea"],
   "basmati rice": ["Basmati-Reis", "Basmatireis"], rice: ["Reis"],
   "coconut milk": ["Kokosmilch"], "coconut drink": ["Kokosdrink", "coconut milk drink"],
   "coconut oil": ["Kokosöl", "Kokosoel"], "olive oil": ["Olivenöl", "Olivenoel"],
@@ -46,22 +54,38 @@ const groups: Record<string, string[]> = {
 const aliases = new Map(Object.entries(groups).flatMap(([key, names]) =>
   [key, ...names].map(name => [normalizeFoodText(name), key] as const),
 ))
-const statePatterns: Array<[FoodState, RegExp]> = [
-  ["drained", /\b(abgetropft\w*|abtropfgewicht|drained)\b/],
-  ["canned", /\b(dose[n]?|konserve[n]?|canned|tinned)\b/],
-  ["dry", /\b(trocken\w*|getrocknet\w*|dried|dry|uncooked)\b/],
-  ["cooked", /\b(gekocht\w*|vorgekocht\w*|cooked|boiled)\b/],
-  ["raw", /\b(roh\w*|raw)\b/],
-  ["frozen", /\b(tiefgekuhlt\w*|gefroren\w*|frozen|tk)\b/],
-  ["fresh", /\b(frisch\w*|fresh)\b/],
+const descriptorRules: Array<{ state?: FoodState; note?: string; pattern: RegExp }> = [
+  { state: "drained", pattern: /\b(abgetropft\w*|abgegossen\w*|abtropfgewicht|drained)\b/g },
+  { state: "canned", pattern: /\b(a\s+d\s+(?:(?:der|dem)\s+)?dose[n]?|aus\s+(?:der|dem)\s+dose[n]?|aus\s+dose[n]?|dose[n]?|konserve[n]?|canned|tinned)\b/g },
+  { state: "dry", pattern: /\b(trocken\w*|getrocknet\w*|dried|dry|uncooked)\b/g },
+  { state: "cooked", pattern: /\b(gekocht\w*|vorgekocht\w*|cooked|boiled)\b/g },
+  { state: "raw", pattern: /\b(roh\w*|raw)\b/g },
+  { state: "frozen", pattern: /\b(tiefgekuhlt\w*|gefroren\w*|frozen|tk)\b/g },
+  { state: "fresh", pattern: /\b(frisch\w*|fresh)\b/g },
+  { note: "chopped", pattern: /\b(gehackt\w*|chopped)\b/g },
+  { note: "diced", pattern: /\b(gewurfelt\w*|diced)\b/g },
+  { note: "peeled", pattern: /\b(geschalt\w*|peeled)\b/g },
+  { note: "in oil", pattern: /\b(in\s+(?:dem\s+)?(?:ol|oel))\b/g },
 ]
 const prep = /\b(fein|grob|finely|roughly|bio|organic|biologisch\w*|gewurfelt\w*|gehackt\w*|geschnitten\w*|gerieben\w*|gemahlen\w*|geschalt\w*|diced|chopped|sliced|grated|ground|peeled)\b/g
 const staples = new Set(["pinto beans", "kidney beans", "rice", "basmati rice"])
 const freshFoods = new Set(["onion", "red onion", "garlic", "ginger", "eggplant", "tomato", "potato", "carrot"])
 
-function explicitStates(text: string): FoodState[] {
-  const stateText = text.replace(/\b(frisch|freshly)\s+(gerieben\w*|gemahlen\w*|gehackt\w*|geschnitten\w*|grated|ground|chopped|sliced)\b/g, "$2")
-  return statePatterns.filter(([, pattern]) => pattern.test(stateText)).map(([state]) => state)
+export function normalizeIngredientDescriptors(text: unknown): IngredientDescriptors {
+  const normalized = normalizeFoodText(text)
+  const stateText = normalized.replace(/\b(frisch|freshly)\s+(gerieben\w*|gemahlen\w*|gehackt\w*|geschnitten\w*|grated|ground|chopped|sliced)\b/g, "$2")
+  let baseName = stateText
+  const states: FoodState[] = []
+  const notes: string[] = []
+  for (const rule of descriptorRules) {
+    if (rule.pattern.test(stateText)) {
+      if (rule.state && !states.includes(rule.state)) states.push(rule.state)
+      if (rule.note && !notes.includes(rule.note)) notes.push(rule.note)
+      baseName = baseName.replace(new RegExp(rule.pattern.source, "g"), " ")
+    }
+    rule.pattern.lastIndex = 0
+  }
+  return { normalized, baseName: baseName.trim().replace(/\s+/g, " "), states, notes }
 }
 
 export function interpretIngredient(
@@ -69,19 +93,20 @@ export function interpretIngredient(
   instructions: MealieRecipe["recipeInstructions"] = [],
   defaults = true,
 ): IngredientContext {
-  const originalName = ingredient.food?.name ?? ""
-  const name = normalizeFoodText(originalName)
-  const detail = normalizeFoodText([originalName, ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display].filter(Boolean).join(" "))
+  const originalName = typeof ingredient.food?.name === "string" ? ingredient.food.name : ""
+  const nameDescriptor = normalizeIngredientDescriptors(originalName)
+  const name = nameDescriptor.baseName
+  const detailDescriptors = normalizeIngredientDescriptors([originalName, ingredient.note, ingredient.originalText, ingredient.original_text, ingredient.display].filter(value => typeof value === "string").join(" "))
+  const detail = detailDescriptors.normalized
   let identity = name.replace(prep, " ")
-  for (const [, pattern] of statePatterns) identity = identity.replace(new RegExp(pattern.source, "g"), " ")
   identity = identity.replace(/\b(vollfett\w*|full fat)\b/g, " ")
   identity = identity.replace(/\b(aus der|aus dem|in der|from the|in a)\b/g, " ").trim().replace(/\s+/g, " ")
   let canonicalName = aliases.get(identity) ?? identity
   // Nutrition-changing qualifiers in notes must not disappear when the food name is generic.
   const qualifiers = detail.match(/\b(light|fettarm\w*|fettreduziert\w*|low fat|reduced fat|low sodium|natriumarm\w*|salted|gesalzen\w*|sweetened|gesusst\w*|krautersalz|kalium\w*)\b/g)
   if (qualifiers?.length && !qualifiers.some(q => identity.includes(q))) canonicalName += ` ${[...new Set(qualifiers)].join(" ")}`
-  const states = explicitStates(detail)
-  if (/\b(dose[n]?|konserve[n]?|can[s]?|tin[s]?)\b/.test(normalizeFoodText(ingredient.unit?.name ?? ""))) states.push("canned")
+  const states = detailDescriptors.states.slice()
+  if (/\b(dose[n]?|konserve[n]?|can[s]?|tin[s]?)\b/.test(normalizeFoodText(ingredient.unit?.name))) states.push("canned")
   let state: FoodState = states[0] ?? "unspecified"
   let reason = states.length ? "explicit ingredient state" : "no explicit state"
   let confidence: IngredientContext["confidence"] = states.length ? "high" : "low"

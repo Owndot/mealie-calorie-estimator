@@ -171,7 +171,7 @@ describe("interpretation cache and confidence safety", () => {
   })
   it("does not override an explicit canned state with dry nutrition", async () => {
     vi.mocked(fetch).mockResolvedValue(response(interpretation("chickpeas", "dry", { category: "legume" })))
-    expect(await interpretSemanticIngredient(ingredient("Kichererbsen aus der Dose"))).toBeNull()
+    expect(await interpretSemanticIngredient(ingredient("unknown pulses aus der Dose"))).toBeNull()
   })
   it("clears interpretation cache together with LLM caches", async () => {
     vi.mocked(fetch).mockImplementation(async () => response(interpretation()))
