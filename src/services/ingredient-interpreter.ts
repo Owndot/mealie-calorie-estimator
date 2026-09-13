@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v8-semantic-fallback"
+export const INTERPRETATION_VERSION = "interpretation-v9-independent-nutrient-routing"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -55,6 +55,28 @@ function compatibleCanonicalIdentity(localName: string, classifiedName: string):
   return normalizeFoodText(localBase) === normalizeFoodText(classifiedBase)
 }
 const pending = new Map<string, Promise<SemanticInterpretation | null>>()
+
+export function isPlausibleFoodPhrase(context: IngredientContext): boolean {
+  const normalized = normalizeFoodText(context.originalName)
+  const tokens = normalized.split(" ").filter(Boolean)
+  const stopwords = new Set(["a", "d", "ad", "an", "and", "aus", "der", "die", "das", "de", "of", "the"])
+  if (!normalized || tokens.length > 8 || tokens.some(token => token.length < 2 && !stopwords.has(token))) return false
+  if (tokens.some(token => /^(?:xyz|qqq|asdf|n\/?a)$/i.test(token))) return false
+  return /[\p{L}]/u.test(normalized)
+}
+
+export function buildUnresolvedFoodContext(context: IngredientContext): IngredientContext | null {
+  if (context.state === "ambiguous" || !isPlausibleFoodPhrase(context)) return null
+  return {
+    ...context,
+    generic: undefined,
+    brand: null,
+    interpretationSource: "unresolved",
+    interpretationConfidence: 0.7,
+    confidence: "low",
+    reason: "safe unresolved food-like context; nutrient routing remains independent",
+  }
+}
 
 function canResolveLocally(
   context: IngredientContext,

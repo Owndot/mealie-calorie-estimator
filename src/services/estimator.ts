@@ -1,4 +1,4 @@
-import { interpretSemanticIngredient, INTERPRETATION_VERSION } from "./ingredient-interpreter.js"
+import { buildUnresolvedFoodContext, interpretSemanticIngredient, INTERPRETATION_VERSION } from "./ingredient-interpreter.js"
 import { contextForName, interpretIngredient, NUTRITION_VERSION } from "./ingredient-context.js"
 import { genericNutrients, matchGenericFood } from "./generic-foods.js"
 import { emptyAmounts, addAmounts, amountsFromProfile, divideAmounts, legacyAmounts } from "./nutrient-amounts.js"
@@ -6,13 +6,19 @@ import { recipeWarnings, sanitizeNutritionPatch, validateProfile } from "./nutri
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
-  NutrientSet, MealieNutrition,
+  NutrientSet, MealieNutrition, MealieIngredient,
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams, hasImpossibleVolumeStandard, resolveUnitName } from "./unit-converter.js"
 import { lookupNutrients } from "./off-client.js"
 import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
+
+function hasProductionQuantityProjection(ingredient: MealieIngredient): boolean {
+  return [ingredient.display, ingredient.originalText, ingredient.original_text]
+    .filter((value): value is string => typeof value === "string")
+    .some(value => /^\s*\d+(?:[.,]\d+)?\s+\S+/.test(value))
+}
 
 export function computeIngredientHash(recipe: MealieRecipe): string {
   // Hash only inputs read by the estimator, never API metadata or our own output.
@@ -100,31 +106,22 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       warnings.push(`Skipped ${reason}: ${unmatchedName}`)
       continue
     }
-    const context = await interpretSemanticIngredient(ing, recipe.recipeInstructions)
+    const interpretedContext = await interpretSemanticIngredient(ing, recipe.recipeInstructions)
+    const context = interpretedContext ?? (hasProductionQuantityProjection(ing)
+      ? buildUnresolvedFoodContext(interpretIngredient(ing, recipe.recipeInstructions))
+      : null)
+    logger.debug({
+      originalName: foodName,
+      interpretationStatus: interpretedContext ? "resolved" : context ? "safe-unresolved" : "rejected",
+      interpretationSource: context?.interpretationSource,
+      canonicalName: context?.canonicalName,
+      state: context?.state,
+    }, "Ingredient interpretation status")
     if (!context) {
-      const fallbackContext = interpretIngredient(ing, recipe.recipeInstructions)
-      const parsedQuantityText = [ing.display, ing.originalText, ing.original_text]
-        .filter((value): value is string => typeof value === "string")
-        .some(value => /^\s*\d+(?:[.,]\d+)?\s+\S+/.test(value))
-      if (parsedQuantityText && fallbackContext.state !== "ambiguous" && config.llm.enabled && config.llm.apiKey) {
-        const fallbackNutrients = await estimateNutrients(fallbackContext.query, fallbackContext)
-        if (fallbackNutrients && validateProfile(fallbackNutrients).length === 0) {
-          const fallbackGrams = convertToGrams(quantity, ing.unit, fallbackContext)
-          if (fallbackGrams != null && Number.isFinite(fallbackGrams) && fallbackGrams > 0) {
-            const contribution = amountsFromProfile(fallbackNutrients, fallbackGrams)
-            totals = addAmounts(totals, contribution)
-            matchedIngredients.push({ name: foodName, grams: fallbackGrams, matched: true, nutrients: fallbackNutrients,
-              llmEstimated: true, source: "LLM", confidence: "low", context: fallbackContext,
-              interpretationConfidence: 0.7, sourceConfidence: 0.6, finalMatchConfidence: 0.6,
-              weightConfidence: 1, reason: "validated LLM nutrient fallback for unresolved ordinary food" })
-            continue
-          }
-        }
-      }
       unmatchedNames.push(foodName)
       matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null,
-        interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason: "ambiguous or low-confidence ingredient interpretation" })
-      logger.debug({ originalName: foodName, quantity, unit: ing.unit?.name }, "Ingredient interpretation rejected; preserving partial safety")
+        interpretationConfidence: 0, sourceConfidence: 0, finalMatchConfidence: 0, reason: "ambiguous, contradictory, or non-food ingredient interpretation" })
+      logger.debug({ originalName: foodName, quantity, unit: ing.unit?.name, finalRejectionReason: "unsafe or non-food interpretation" }, "Ingredient rejected")
       continue
     }
     const unit = resolveUnitName(ing.unit)
@@ -139,9 +136,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     if (grams === null || !Number.isFinite(grams) || grams <= 0 || context.state === "ambiguous") {
       unmatchedNames.push(foodName)
       matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null, context, interpretationConfidence: context.interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason: context.state === "ambiguous" ? context.reason : "unknown weight" })
-      logger.debug({ ...context, quantity, unit, grams }, "Ingredient could not be estimated")
+      logger.debug({ ...context, quantity, unit, grams, interpretationStatus: context.interpretationSource, weightResolutionStatus: "rejected", finalRejectionReason: "quantity or unit could not be resolved" }, "Ingredient could not be estimated")
       continue
     }
+    logger.debug({ originalName: foodName, grams, unit, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic" }, "Ingredient weight resolution status")
     const genericMatch = matchGenericFood(context)
     let nutrients: NutrientSet | null = null
     let source: IngredientMatch["source"] = "OFF"
@@ -177,7 +175,11 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       productName = genericMatch?.entry.description ?? null
       reason = "validated generic identity/state; USDA reference preferred before OFF"
     } else {
-      if (context.generic !== true || context.brand) {
+      // An unresolved context returned by the interpreter (for example with
+      // classification disabled) can still be used for a compatible OFF
+      // search. A context synthesized after a failed classifier has no
+      // trustworthy identity, so go directly to validated nutrient fallback.
+      if (interpretedContext !== null && (context.generic !== true || context.brand)) {
         const off = await lookupNutrients(foodName, ing.unit?.name, context)
         nutrients = off.matched ? off.nutrients : null
         productName = off.productName
@@ -203,9 +205,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     if (!nutrients || validateProfile(nutrients).length || finalMatchConfidence < 0.6) {
       unmatchedNames.push(foodName)
       matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null, context, interpretationConfidence, sourceConfidence: 0, finalMatchConfidence: 0, reason })
-      logger.debug({ ...context, quantity, unit, grams, source, reason }, "No valid nutrient profile")
+      logger.debug({ ...context, quantity, unit, grams, source, reason, nutrientResolutionStatus: nutrients ? "invalid" : "unresolved", finalRejectionReason: reason }, "No valid nutrient profile")
       continue
     }
+    logger.debug({ originalName: foodName, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic", nutrientResolutionStatus: source, finalRejectionReason: null }, "Ingredient resolution status")
     const contribution = amountsFromProfile(nutrients, grams)
     totals = addAmounts(totals, contribution)
     matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, source, context, productName, confidence, interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: genericMatch?.entry.fdcId, reason })

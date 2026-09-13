@@ -519,6 +519,32 @@ describe("interpretation cache and confidence safety", () => {
     expect(result.matchedIngredients.filter(item => item.llmEstimated)).toHaveLength(3)
     expect(result.matchedIngredients.find(item => item.name.includes("Salz"))?.grams).toBe(0)
   })
+  it("keeps production-shaped unresolved foods matched through independent weight and nutrient fallback", async () => {
+    vi.mocked(fetch).mockImplementation(async (_url, options) => {
+      const body = JSON.parse(options?.body as string)
+      const content = body.messages?.[0]?.content ?? ""
+      if (body.messages?.[0]?.role === "system") return new Response("null", { status: 200 })
+      if (content.includes("Estimate the weight")) return new Response(JSON.stringify({ choices: [{ message: { content: "80" } }] }), { status: 200 })
+      return response({ kcal: 120, protein: 10, carbs: 4, fat: 6, fiber: 1, sugar: 2, sodium: 300, cholesterol: 40 })
+    })
+    const entries = [
+      ["Thunfisch a. d. Dosen", 1, "Stück"],
+      ["Dillgurke", 1, "Stück"],
+      ["griechischer Joghurt", 0.5, "Tasse"],
+    ].map(([name, quantity, unitName]) => {
+      const input = ingredient(name as string)
+      input.quantity = quantity as number
+      input.unit = { id: unitName as string, name: unitName as string, pluralName: null, abbreviation: null, standardQuantity: null, standardUnit: null }
+      input.display = `${quantity} ${unitName} ${name}`
+      input.originalText = input.display
+      input.original_text = input.display
+      return input
+    })
+    const result = await estimateRecipe({ ...recipe(entries[0]), recipeIngredient: entries })
+    expect(result).toMatchObject({ partial: false, unmatchedIngredients: [], matchedCount: 3 })
+    expect(result.matchedIngredients.every(item => item.matched && item.llmEstimated)).toBe(true)
+    expect(result.matchedIngredients.every(item => item.context?.interpretationSource === "unresolved")).toBe(true)
+  })
   it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
     "still classifies locally unresolved %s",
     async name => {
