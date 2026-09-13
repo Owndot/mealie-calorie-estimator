@@ -8,7 +8,7 @@ import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const INTERPRETATION_VERSION = "interpretation-v5-routing-precedence"
+export const INTERPRETATION_VERSION = "interpretation-v6-local-resolution"
 export const MIN_INTERPRETATION_CONFIDENCE = 0.85
 const categories = ["herb", "spice", "vegetable", "fruit", "grain", "legume", "dairy", "oil", "nut_seed", "sauce", "other"]
 const states: FoodState[] = ["raw", "fresh", "dry", "cooked", "canned", "drained", "frozen", "unspecified"]
@@ -55,6 +55,20 @@ function compatibleCanonicalIdentity(localName: string, classifiedName: string):
   return normalizeFoodText(localBase) === normalizeFoodText(classifiedBase)
 }
 const pending = new Map<string, Promise<SemanticInterpretation | null>>()
+
+function canResolveLocally(
+  context: IngredientContext,
+  exact: ReturnType<typeof matchGenericFood>,
+  brandHint: boolean,
+  unresolvedDetails: boolean,
+  requiresPreservationSemantics: boolean,
+): boolean {
+  if (brandHint || unresolvedDetails || requiresPreservationSemantics || context.state === "ambiguous") return false
+  // Salt and water are authoritative deterministic concepts even without a USDA row.
+  if (["salt", "water"].includes(context.canonicalName) && context.state === "unspecified") return true
+  // A unique local reference match proves both identity and a usable preparation state.
+  return exact?.confidence === 1 || isKnownFoodIdentity(context.canonicalName)
+}
 
 async function classify(key: string, input: unknown): Promise<SemanticInterpretation | null> {
   const cached = getCachedInterpretation(key)
@@ -103,7 +117,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
   const brandHint = /\b(brand|marke|hersteller)\b|[®™]/i.test([ingredient.food?.name, ingredient.note, ingredient.originalText, ingredient.display].join(" "))
   const unresolvedDetails = remainingDetails.length > 0
 
-  if (!brandHint && !unresolvedDetails && !requiresPreservationSemantics && (exact?.confidence === 1 || isKnownFoodIdentity(context.canonicalName))) {
+  if (canResolveLocally(context, exact, brandHint, unresolvedDetails, requiresPreservationSemantics)) {
     const interpreted = { ...context, canonicalName: exact?.name === "rice" && context.canonicalName === "basmati rice" ? "basmati rice" : exact?.name ?? context.canonicalName,
       state: exact?.state ?? context.state, query: [context.canonicalName, context.state === "unspecified" ? "" : context.state].filter(Boolean).join(" "),
       category: exact?.entry.category ?? "other", generic: true, brand: null,

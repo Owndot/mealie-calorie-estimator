@@ -313,6 +313,31 @@ describe("interpretation cache and confidence safety", () => {
     })
     expect(fetch).not.toHaveBeenCalled()
   })
+  it.each(["Salz", "Wasser", "Zucker", "Pfeffer", "Oregano", "Basilikum", "Olivenöl", "Tomatenmark", "Zwiebel", "Knoblauch", "Reis", "Kidneybohnen trocken"])(
+    "does not classify locally resolvable %s",
+    async name => {
+      const input = ingredient(name)
+      if (name === "Kidneybohnen trocken") {
+        input.food.name = "Kidneybohnen"
+        input.note = "trocken"
+      }
+      const result = await estimateRecipe(recipe(input))
+      expect(result.partial).toBe(false)
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
+  it.each(["Gewürzpaste", "unbekannte Knolle", "Korianderkörner"])(
+    "still classifies locally unresolved %s",
+    async name => {
+      vi.mocked(fetch).mockResolvedValue(response(interpretation(
+        name === "Korianderkörner" ? "coriander seeds" : "unknown food",
+        "unspecified",
+        { category: name === "Korianderkörner" ? "spice" : "other" },
+      )))
+      await interpretSemanticIngredient(ingredient(name))
+      expect(fetch).toHaveBeenCalled()
+    },
+  )
   it("does not accept a generic-composite classifier label for a simple food", async () => {
     vi.mocked(fetch).mockResolvedValue(response({
       canonicalFood: "salt", state: "unspecified", category: "spice", generic: true, brand: null,
