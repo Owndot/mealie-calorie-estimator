@@ -89,6 +89,8 @@ function hasUnresolvedIngredientDetails(
     const identityTokens = new Set([...canonicalDetails].flatMap(value => value.split(" ")))
     residual = residual.split(" ").filter(token => !identityTokens.has(token)).join(" ")
     if (!residual) return false
+    const normalizedResidual = normalizeIngredientDescriptors(residual)
+    if (!normalizedResidual.baseName || normalizeFoodText(normalizedResidual.baseName) === normalizeFoodText(context.canonicalName)) return false
     if (canonicalDetails.has(residual)) return false
     const interpreted = interpretIngredient({
       food: { id: "", name: residual, pluralName: null, aliases: [] },

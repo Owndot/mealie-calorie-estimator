@@ -364,6 +364,19 @@ describe("interpretation cache and confidence safety", () => {
     expect(result.matchedIngredients[0].context?.interpretationSource).toBe("deterministic")
     expect(fetch).not.toHaveBeenCalled()
   })
+  it.each(["Oregano", "getrockneter Oregano", "Basilikum", "getrocknetes Basilikum"])(
+    "uses the same local-resolution predicate for %s",
+    async name => {
+      const input = ingredient(name)
+      input.quantity = 1
+      input.unit = { id: "teaspoon", name: "Teelöffel", abbreviation: "TL", pluralName: null, standardQuantity: null, standardUnit: null }
+      input.display = `1 TL ${name}`
+      input.originalText = `1 TL ${name}`
+      const result = await estimateRecipe(recipe(input))
+      expect(result.matchedIngredients[0].context?.interpretationSource).toBe("deterministic")
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
   it("uses a trusted catalog clove portion for garlic piece units", async () => {
     const input = ingredient("garlic raw")
     input.quantity = 1
