@@ -1,5 +1,25 @@
 import { describe, it, expect } from "vitest"
-import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE } from "../../src/services/providers/ranking.js"
+import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize } from "../../src/services/providers/ranking.js"
+
+describe("tokenize — defensive against non-string input from external provider APIs", () => {
+  // Live acceptance test finding: OFF's real /search response returns `brands` as a string
+  // array, not a string as the type once assumed, which crashed tokenize() on every real
+  // candidate (`s.toLowerCase is not a function`). off-provider.ts now normalizes that at its
+  // own boundary, but tokenize() itself must also degrade gracefully as defense-in-depth.
+  it("returns an empty array instead of throwing for an array input", () => {
+    // @ts-expect-error deliberately passing the wrong runtime type, as untrusted external data would
+    expect(tokenize(["Nutella", "Ferrero"])).toEqual([])
+  })
+
+  it("returns an empty array instead of throwing for null/undefined/number input", () => {
+    // @ts-expect-error deliberately passing the wrong runtime type
+    expect(tokenize(null)).toEqual([])
+    // @ts-expect-error deliberately passing the wrong runtime type
+    expect(tokenize(undefined)).toEqual([])
+    // @ts-expect-error deliberately passing the wrong runtime type
+    expect(tokenize(42)).toEqual([])
+  })
+})
 
 describe("nameSimilarity", () => {
   it("returns 1 for identical names", () => {

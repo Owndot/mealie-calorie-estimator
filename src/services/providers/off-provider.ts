@@ -37,6 +37,23 @@ async function fetchWithRetry(url: string, query: string): Promise<Response | nu
   return lastResponse
 }
 
+/**
+ * Normalizes OFF's `brands` field to a single string or null, regardless of which real-world
+ * shape it arrives in. Found live: the /search API actually returns a string array (sometimes
+ * with empty-string elements, e.g. ["ja!", ""]), not the single string our type used to assume
+ * — that mismatch crashed ranking's tokenize() on every real OFF candidate (`s.toLowerCase is
+ * not a function`), silently falling through to the LLM fallback for every branded lookup.
+ * This is untrusted external API data — normalize defensively rather than trusting the type.
+ */
+function normalizeOffBrand(brands: unknown): string | null {
+  if (Array.isArray(brands)) {
+    const joined = brands.filter((b): b is string => typeof b === "string" && b.trim().length > 0).join(", ")
+    return joined.length > 0 ? joined : null
+  }
+  if (typeof brands === "string" && brands.trim().length > 0) return brands
+  return null
+}
+
 function extractNutrients(n: OffNutriments): NutrientSet {
   const fat = n["fat_100g"] ?? null
   const saturated = n["saturated-fat_100g"] ?? null
@@ -148,8 +165,8 @@ export class OffProvider implements NutrientProvider {
 
     const rankable: RankableOffProduct[] = hits.map((product) => ({
       product,
-      name: product.product_name ?? "",
-      brand: product.brands ?? null,
+      name: typeof product.product_name === "string" ? product.product_name : "",
+      brand: normalizeOffBrand(product.brands),
       hasCompleteNutrients: product.nutriments?.["energy-kcal_100g"] != null,
     }))
 
@@ -186,11 +203,11 @@ export class OffProvider implements NutrientProvider {
     const match: ProviderMatch = {
       nutrients: extractNutrients(product.nutriments),
       canonicalName: query.foodName,
-      brand: product.brands ?? query.brand,
+      brand: normalizeOffBrand(product.brands) ?? query.brand,
       state: query.state,
       provider: this.name,
-      providerId: product.product_name ?? null,
-      productName: product.product_name ?? null,
+      providerId: typeof product.product_name === "string" ? product.product_name : null,
+      productName: typeof product.product_name === "string" ? product.product_name : null,
       confidence: Math.min(0.95, top.score / 100),
     }
 

@@ -1,6 +1,13 @@
 /** Shared candidate-ranking helpers for network providers (OFF, USDA) that return multiple hits. */
 
 export function tokenize(s: string): string[] {
+  // Defense-in-depth: candidate name/brand fields ultimately come from external provider APIs
+  // (OFF, USDA) whose real-world response shape isn't guaranteed to match our TS types at
+  // runtime — found live: OFF's `brands` field is actually a string array, not a string, which
+  // crashed this function on every real candidate before the callers were fixed to normalize it
+  // at their own boundary. Guarding here too means a similarly-shaped surprise from any other
+  // provider degrades to "no similarity" instead of crashing the whole lookup.
+  if (typeof s !== "string") return []
   return s
     .toLowerCase()
     .normalize("NFKD")

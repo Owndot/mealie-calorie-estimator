@@ -75,7 +75,11 @@ export interface OffSearchResult {
 
 export interface OffProduct {
   product_name: string
-  brands?: string | null
+  // The real search-a-licious /search API returns this as a string array (e.g.
+  // ["Nutella","Ferrero"], sometimes with empty-string elements) — verified against a live
+  // response. Typed loosely here since it's untrusted external data; off-provider.ts normalizes
+  // it defensively rather than trusting either shape at runtime.
+  brands?: string[] | string | null
   nutriscore_grade?: string
   nutriments?: OffNutriments
 }

@@ -16,7 +16,7 @@ function query(foodName: string, brand: string | null = null) {
   return { foodName, brand, category: null, state: "unknown" as const }
 }
 
-function hitsResponse(products: { product_name: string; brands?: string; nutriments?: Record<string, number> }[]) {
+function hitsResponse(products: { product_name: string; brands?: string[] | string; nutriments?: Record<string, number> }[]) {
   return new Response(JSON.stringify({ hits: products }), {
     status: 200,
     headers: { "content-type": "application/json" },
@@ -143,5 +143,53 @@ describe("OffProvider", () => {
 
     expect(getCachedProviderMatch("off", buildQueryKey(foodName, "Brand X"))).toBeDefined()
     expect(getCachedProviderMatch("off", buildQueryKey(foodName, null))).toBeUndefined()
+  })
+
+  describe("brands field as a real OFF search-a-licious response shape (string array) — live acceptance test regression", () => {
+    // Found live against the real OFF API: /search actually returns `brands` as a string array
+    // (e.g. ["Nutella","Ferrero"], sometimes with empty-string elements), not the single string
+    // our type previously assumed. That crashed tokenize() (`s.toLowerCase is not a function`)
+    // on every real candidate, silently falling through to the LLM fallback for every branded
+    // lookup — caught by nutrient-resolver's try/catch, so the estimate itself didn't error, but
+    // OFF was effectively dead for all real traffic. This must never crash the lookup again.
+
+    it("does not crash when brands is a string array (the real shape) and extracts a usable brand", async () => {
+      const foodName = "Nutellatestcreme"
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        hitsResponse([{ product_name: foodName, brands: ["Nutella", "Ferrero"], nutriments: MILK_NUTRIMENTS }]),
+      )
+
+      const provider = new OffProvider()
+      const match = await provider.lookup(query(foodName, "Nutella"))
+
+      expect(match).not.toBeNull()
+      expect(match?.brand).toBe("Nutella, Ferrero")
+    })
+
+    it("does not crash when the brands array contains an empty-string element (real observed shape)", async () => {
+      const foodName = "Jatestmilch"
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        hitsResponse([{ product_name: foodName, brands: ["ja!", ""], nutriments: MILK_NUTRIMENTS }]),
+      )
+
+      const provider = new OffProvider()
+      const match = await provider.lookup(query(foodName))
+
+      expect(match).not.toBeNull()
+      expect(match?.brand).toBe("ja!")
+    })
+
+    it("does not crash when brands is entirely empty/missing, and falls back to the query brand", async () => {
+      const foodName = "Nobrandtestmilch"
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        hitsResponse([{ product_name: foodName, brands: [], nutriments: MILK_NUTRIMENTS }]),
+      )
+
+      const provider = new OffProvider()
+      const match = await provider.lookup(query(foodName, "QueryBrand"))
+
+      expect(match).not.toBeNull()
+      expect(match?.brand).toBe("QueryBrand")
+    })
   })
 })
