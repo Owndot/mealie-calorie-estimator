@@ -169,6 +169,27 @@ describe("BlsProvider — synthetic fixtures (deterministic algorithmic behavior
     expect(match).toBeNull()
   })
 
+  it("regression: prefix/suffix matching must not apply to BLS's English name, only German", async () => {
+    // Found live: "Egg" (the LLM-translated canonicalName for "Ei") prefix-matched the English
+    // name "Egg pasta raw" (BLS's translation of "Eierteigwaren roh" — pasta made WITH egg, not
+    // egg itself), at full prefix confidence, because English noun phrases don't follow BLS's
+    // disciplined German "base food, comma-separated state qualifier" convention that the prefix/
+    // suffix rules were designed around. Only jaccard (weaker, safer) applies to English names.
+    __resetBlsDataForTests(
+      Promise.resolve(
+        __buildTestBlsData([
+          { blsCode: "E13", nameDe: "Testteigwaren13, roh", nameEn: "Egg13 pasta raw", inferredState: "raw", nutrients: nutrients({ kcalPer100g: 346, proteinPer100g: 12, carbsPer100g: 69, fatPer100g: 2, cholesterolPer100g: 0 }) },
+        ]),
+      ),
+    )
+    const provider = new BlsProvider()
+    // structuredName (German, "Ei13") has no relation to the candidate at all — this isolates the
+    // English-name pass specifically (foodName = the LLM's English translation).
+    const match = await provider.lookup(query({ foodName: "Egg13", structuredName: "Ei13" }))
+
+    expect(match).toBeNull()
+  })
+
   it("regression: a very short query must not suffix-match a coincidentally-ending, semantically opposite compound", async () => {
     // Found live: "Ei" (egg, 2 letters) matched "Teigwaren eifrei11, roh" (EGG-FREE pasta) — a
     // NEGATION compound ("-frei" = "without"), not a real "type of egg". "eifrei11" happens to

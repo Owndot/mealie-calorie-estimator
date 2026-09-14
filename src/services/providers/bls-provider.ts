@@ -10,7 +10,7 @@ import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { findMismatch } from "./ranking.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v3"
+const BLS_MATCH_ALGORITHM_VERSION = "v4"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -200,15 +200,30 @@ function isOrderedPrefix(prefix: string[], full: string[]): boolean {
  * legitimate "Kartoffel geschält, roh", since both are plain substring matches).
  *
  * 1. Ordered token-sequence prefix (e.g. "Kartoffel" -> "Kartoffel geschält, roh") — strongest
- *    signal, a real word-boundary match.
+ *    signal, a real word-boundary match. German-name-only (see `allowPrefixSuffix`).
  * 2. Single-token *suffix* match (e.g. "Zwiebel" -> "Speisezwiebel", "Salz" -> "Speisesalz") —
  *    German compounds are right-headed (the base/head word is the final morpheme), so this
  *    catches the very common bare-generic-word-vs-BLS-compound case precisely, while naturally
  *    rejecting the Salzstangen case ("Salzstangen" does NOT end in "salz" — it starts with it).
  *    A length-ratio guard avoids a short query getting credit for a wildly longer compound.
- * 3. Token-set Jaccard overlap as a general fallback (reordered/partial multi-word queries).
+ *    German-name-only (see `allowPrefixSuffix`).
+ * 3. Token-set Jaccard overlap as a general fallback (reordered/partial multi-word queries) —
+ *    the only rule ever applied to BLS's English names.
+ *
+ * `allowPrefixSuffix` gates rules 1-2 to the German name only. BLS's English translations don't
+ * follow the disciplined "base food, comma/slash-separated state qualifier" convention its German
+ * names do — they're free-form phrases where the first word legitimately matching the query
+ * doesn't mean the candidate IS that food. Found live: "Ei" (egg) prefix-matched "Egg pasta raw"
+ * (English name of an egg-CONTAINING pasta, not egg), and "Paprika" prefix-matched "Paprika bacon
+ * sausage" the same way — both structurally identical to the legitimate "Kartoffel" -> "Kartoffel
+ * geschält, roh" case in form, but wrong in substance, because English noun phrases don't carry
+ * BLS's German qualifier-comma convention that rules 1-2 were designed around.
  */
-function nameScore(queryTokens: string[], candidateTokens: string[]): number {
+function nameScore(queryTokens: string[], candidateTokens: string[], allowPrefixSuffix: boolean): number {
+  if (!allowPrefixSuffix) {
+    return jaccard(queryTokens, candidateTokens) * 0.7
+  }
+
   if (isOrderedPrefix(queryTokens, candidateTokens)) return 0.85
 
   // A minimum query length guards against coincidental endings: found live, "Ei" (egg, 2 letters)
@@ -251,8 +266,8 @@ const FUZZY_MIN_SCORE = 50
 function scoreCandidates(queryText: string, records: BlsFoodRecord[]): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
   return records.map((record) => {
-    const scoreDe = nameScore(queryTokens, record.tokensDe)
-    const scoreEn = nameScore(queryTokens, record.tokensEn)
+    const scoreDe = nameScore(queryTokens, record.tokensDe, true)
+    const scoreEn = nameScore(queryTokens, record.tokensEn, false)
     const matchedViaEnglish = scoreEn > scoreDe
     const best = Math.max(scoreDe, scoreEn)
     const mismatchReason = findMismatch(queryText, matchedViaEnglish ? (record.nameEn ?? "") : record.nameDe)
