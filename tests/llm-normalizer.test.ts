@@ -187,4 +187,28 @@ describe("normalizeIngredients", () => {
     expect(promptText).not.toContain("@organicvalley-handle-should-never-leak")
     expect(promptText).not.toContain("Eier (2 gekocht")
   })
+
+  it("prompts the LLM to use \"water\"/\"beverage\"/\"condiment\"/\"seasoning\" as category values, not just the food-group examples", async () => {
+    // Found live: "Wasser" matched USDA's "Crackers, water biscuits" despite categoryConflict("water",
+    // "Crackers, water biscuits") already returning true — the LLM was never actually prompted with
+    // "water"/"beverage"/"condiment"/"seasoning" as example category values (only spice/herb/vegetable/
+    // fruit/dairy/egg/meat/grain/legume/fat/oil), so it had no reason to ever assign them, leaving
+    // categoryConflict permanently inert for these foods regardless of how correct the check itself was.
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Wasser", canonicalEnglish: "water", brand: null, state: "unknown", category: "water", foodType: "simple" }])),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await normalizeIngredients([{ index: 0, foodName: "Wasser", unitName: "ml" }])
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    const promptText = body.messages[0].content as string
+    expect(promptText).toContain("water")
+    expect(promptText).toContain("beverage")
+    expect(promptText).toContain("condiment")
+    expect(promptText).toContain("seasoning")
+  })
 })

@@ -104,7 +104,7 @@ For each ingredient, return:
 - canonicalEnglish: the English translation of that same identity
 - brand: a specific product brand ONLY if it is explicitly present as text within the given "name" field — otherwise null; never infer a brand from general knowledge about the food
 - state: one of "raw", "cooked", "dried", "unknown" — only when clearly supported by the given name; do not guess if unsupported
-- category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil"), or null if unclear
+- category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil", "water", "beverage", "condiment", "seasoning"), or null if unclear. Plain water ("Wasser") is category "water", not "beverage" or null — this field is used to reject a candidate whose name merely happens to share a word with the query (e.g. plain water must never accept a product literally named "water" that isn't water, like a cracker or a soft drink), so pick the most specific matching category rather than defaulting to null when one of the examples clearly fits.
 - foodType: one of "simple", "processed_single_food", "composite_dish", or "unknown" — see definitions and examples below. This is the MOST IMPORTANT field: it will be used to hard-reject a database match of the wrong type, so accuracy here matters more than any other field.
 
 foodType definitions:
