@@ -210,7 +210,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
         name: ing.foodName, canonicalName, brand, route, grams: null, gramsEstimated: false,
-        matched: false, nutrients: null, provider: null, providerId: null, confidence: null,
+        matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
       })
       continue
@@ -218,13 +218,16 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
 
     totalKnownWeight += grams
 
-    const resolved = await resolveNutrients({ foodName: canonicalName, brand, category: classification?.category ?? null, state }, route)
+    const resolved = await resolveNutrients(
+      { foodName: canonicalName, structuredName: ing.foodName, brand, category: classification?.category ?? null, state },
+      route,
+    )
 
     if (!resolved) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
         name: ing.foodName, canonicalName, brand, route, grams, gramsEstimated,
-        matched: false, nutrients: null, provider: null, providerId: null, confidence: null,
+        matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
       })
       continue
@@ -245,6 +248,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       nutrients: resolved.match.nutrients,
       provider: resolved.match.provider,
       providerId: resolved.match.providerId,
+      productName: resolved.match.productName,
       confidence: resolved.match.confidence,
       fallbackStatus: resolved.fallbackStatus,
       llmParticipated: (classification?.llmClassified ?? false) || resolved.fallbackStatus === "llm-nutrient",
@@ -426,6 +430,8 @@ export function buildNutritionPatch(
     name: i.name,
     canonical: i.canonicalName,
     brand: i.brand,
+    providerId: i.providerId,
+    productName: i.productName,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,
     matched: i.matched,

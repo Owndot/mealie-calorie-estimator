@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest"
 import { estimateRecipe, computeIngredientHash } from "../src/services/estimator.js"
 import { config } from "../src/config.js"
 import { initCache } from "../src/utils/cache.js"
+import { __buildTestBlsData, __resetBlsDataForTests } from "../src/services/providers/bls-provider.js"
 import { mockUsdaProvider } from "./helpers/mock-usda.js"
 import type { MealieRecipe, MealieIngredient } from "../src/types.js"
 
@@ -42,6 +43,10 @@ beforeEach(() => {
   config.llm.apiKey = ""
   config.usda.apiKey = ""
   vi.restoreAllMocks()
+  // This file exercises the USDA path specifically (its describe title says so) — BLS is now
+  // unconditionally ahead of USDA in the real generic chain and would otherwise intercept common
+  // German words (Mehl, Zucker, Reis, Ei, ...) with real bundled data before USDA ever runs.
+  __resetBlsDataForTests(Promise.resolve(__buildTestBlsData([])))
 })
 
 describe("estimateRecipe — end to end via the real USDA provider (mocked network), LLM disabled", () => {

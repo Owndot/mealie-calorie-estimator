@@ -21,7 +21,7 @@ mealie-calorie-estimator
 
 <!-- List features as bullet points -->
 
-- Routing-aware provider chain: USDA FoodData Central (optional, generic foods) and [Open Food Facts](https://world.openfoodfacts.org/) (branded/product foods) — OFF is never queried for a plain generic ingredient, and there is no hand-authored local nutrition database standing in as an "authoritative" source
+- Routing-aware provider chain: [BLS 4.0](https://blsdb.de/) (bundled German nutrition database, generic foods), [Open Food Facts](https://world.openfoodfacts.org/) (branded/product foods), and USDA FoodData Central (optional generic-route fallback) — OFF is never queried for a plain generic ingredient, and there is no hand-authored local nutrition database standing in as an "authoritative" source
 - Brand detection is evidence-based only: a brand is used only when it's explicitly present in the structured `food.name`, never inferred from general knowledge
 - Sanity-checks every candidate (implausible kcal, salt/sodium unit mistakes, macro inconsistencies) and rejects/falls through to the next provider rather than trusting it blindly
 - One whole-recipe LLM batch request for ingredient normalization (never one call per ingredient); per-ingredient LLM calls remain only for unresolved unit gram estimates and a final per-food nutrient fallback
@@ -45,12 +45,19 @@ Unit conversion prioritizes Mealie's own structured conversion metadata (mass un
 
 Ingredients are routed as **generic** or **branded** based on evidence-based classification (a brand is only used when the structured food name explicitly contains it):
 
-- **Generic route:** cache → USDA FoodData Central (only if `USDA_API_KEY` is set) → LLM (if enabled) as the final fallback. Open Food Facts is never queried here. There is intentionally **no hand-authored local nutrition dataset** in this chain — a small built-in table of kcal/macro values would not be a trustworthy, reproducible nutrition source, so when USDA is unconfigured and the LLM is disabled, a generic ingredient honestly resolves to nothing rather than a fabricated number.
-- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → the same generic (USDA) fallback → LLM last.
+- **Generic route:** cache → **BLS 4.0** (bundled, see below) → USDA FoodData Central (only if `USDA_API_KEY` is set) → LLM (if enabled) as the final fallback. Open Food Facts is never queried here.
+- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → BLS → the same USDA fallback → LLM last.
 
-A local dataset may still carry deterministic **unit/density/piece-weight metadata** (see `src/services/food-density.ts`) — e.g. "1 EL olive oil ≈ 13.6g" or "1 Stück egg ≈ 53g" are culinary/physical constants, not nutrition facts, and are fine to hand-author and document. That is separate from, and must never substitute for, an actual nutrition provider.
+There is intentionally **no hand-authored local nutrition dataset** anywhere in this chain — a small built-in table of kcal/macro values would not be a trustworthy, reproducible nutrition source. A local dataset may still carry deterministic **unit/density/piece-weight metadata** (see `src/services/food-density.ts`) — e.g. "1 EL olive oil ≈ 13.6g" or "1 Stück egg ≈ 53g" are culinary/physical constants, not nutrition facts, and are fine to hand-author and document. That is separate from, and must never substitute for, an actual nutrition provider. If BLS/USDA are unconfigured/unavailable and the LLM is disabled, a generic ingredient honestly resolves to nothing rather than a fabricated number.
 
-`BLS_LOCAL_IMPORT_PATH` is a reserved config slot for a future local/licensed generic **nutrition** dataset (such as BLS): it is **not yet implemented** — no BLS data is bundled, redistributed, or read by this project pending a licensing review, and setting the variable currently has no effect. It exists so a local-import provider can be added later without a config/env break.
+#### BLS 4.0 (Bundeslebensmittelschlüssel)
+
+The generic route's primary provider is a bundled, compact SQLite extract of the official **BLS 4.0** German food composition database (7,140 foods, published 2025-12-15 by the Max Rubner-Institut), built by `scripts/import_bls.py` from the [official export](https://blsdb.de/download) — every stored value is a verbatim (or straightforwardly unit-converted) BLS figure, nothing is hand-authored. Matching prioritizes the raw **structured German** Mealie food name (never `originalText`) via exact normalized-name match first, then a conservative German-compound-aware fuzzy match (see `src/services/providers/bls-provider.ts` for the exact algorithm and why it deliberately isn't the OFF/USDA fuzzy matcher), with preparation-state (raw/cooked/dried) taken into account and a mismatching state rejected outright rather than guessed. BLS 4.0 has no total-trans-fat component, so `transFatContent` is always left unknown (never 0) for BLS-sourced matches.
+
+**Attribution** (per the CC BY 4.0 license terms):
+> Max Rubner-Institut (2025): Bundeslebensmittelschlüssel (BLS), Version 4.0 - Deutsche Nährstoffdatenbank. Karlsruhe. DOI: [10.25826/Data20251217-134202-0](https://doi.org/10.25826/Data20251217-134202-0)
+
+`BLS_LOCAL_IMPORT_PATH`, if set, overrides the bundled database path — e.g. to point at a regenerated export after a future BLS update — without a code change; it's empty by default, which uses the bundled `resources/bls/bls-4.0.sqlite`.
 
 ### Auto-Tagging
 
@@ -123,7 +130,7 @@ It's recommended to install it next to your Mealie instance using docker-compose
 | `USDA_API_KEY` | — | Optional. Enables the USDA FoodData Central generic-route fallback provider; omitted entirely from the provider chain when unset (no dummy placeholder) |
 | `USDA_BASE_URL` | `https://api.nal.usda.gov/fdc/v1` | USDA FoodData Central base URL |
 | `USDA_RATE_LIMIT` | `10` | USDA requests per minute |
-| `BLS_LOCAL_IMPORT_PATH` | — | Reserved for a future local/licensed generic dataset (e.g. BLS). **Not yet implemented** — has no effect today |
+| `BLS_LOCAL_IMPORT_PATH` | — | Overrides the bundled BLS 4.0 database path (`resources/bls/bls-4.0.sqlite` when unset) |
 | `LLM_ENABLED` | `false` | Enable the LLM: one whole-recipe batch normalization request, plus narrowly-scoped per-ingredient gram/nutrient fallback |
 | `LLM_API_KEY` | — | API key for OpenAI-compatible endpoint |
 | `LLM_BASE_URL` | `https://api.mistral.ai/v1` | LLM API base URL |
@@ -165,7 +172,7 @@ Recipe nutrition estimated by this service is marked with `extras.calorie_estima
 
 <!-- Add bit of context why the project has been created -->
 
-Mealie stores nutrition only when entered by hand. Maintaining that for every recipe is tedious, so this service fills the gap automatically from Open Food Facts (and an optional LLM) while leaving manual entries untouched.
+Mealie stores nutrition only when entered by hand. Maintaining that for every recipe is tedious, so this service fills the gap automatically from BLS 4.0, Open Food Facts, and USDA (and an optional LLM) while leaving manual entries untouched.
 
 ## Contributing
 

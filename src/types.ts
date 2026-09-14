@@ -150,7 +150,7 @@ export interface IngredientClassification {
   llmClassified: boolean
 }
 
-export type FallbackStatus = "usda" | "off" | "llm-nutrient" | "unresolved"
+export type FallbackStatus = "bls" | "usda" | "off" | "llm-nutrient" | "unresolved"
 
 export interface ProviderMatch {
   nutrients: NutrientSet
@@ -175,6 +175,8 @@ export interface IngredientMatch {
   nutrients: NutrientSet | null
   provider: string | null
   providerId: string | null
+  /** The matched provider record's own name (e.g. BLS's "Speisezwiebel roh"), distinct from `canonicalName` (the query). */
+  productName: string | null
   confidence: number | null
   fallbackStatus: FallbackStatus
   llmParticipated: boolean

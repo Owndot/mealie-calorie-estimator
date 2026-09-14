@@ -14,22 +14,21 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     expect(chain.map((p) => p.name)).not.toContain("off")
   })
 
-  it("generic route is empty when nothing is configured — no hand-authored dataset fills the gap", () => {
+  it("generic route is [bls] when nothing else is configured — BLS is bundled, not optional", () => {
     const chain = getProviderChain("generic")
-    expect(chain).toEqual([])
+    expect(chain.map((p) => p.name)).toEqual(["bls"])
   })
 
-  it("branded route starts with OFF, then falls back to USDA when configured", () => {
+  it("branded route starts with OFF, then falls back to BLS, then USDA when configured", () => {
     config.usda.apiKey = "some-key"
     const chain = getProviderChain("branded")
-    expect(chain[0].name).toBe("off")
-    expect(chain.map((p) => p.name)).toContain("usda")
+    expect(chain.map((p) => p.name)).toEqual(["off", "bls", "usda"])
   })
 
-  it("branded route is just [off] when USDA is unconfigured — no filler provider", () => {
+  it("branded route is [off, bls] when USDA is unconfigured — no filler provider for USDA specifically", () => {
     config.usda.apiKey = ""
     const chain = getProviderChain("branded")
-    expect(chain.map((p) => p.name)).toEqual(["off"])
+    expect(chain.map((p) => p.name)).toEqual(["off", "bls"])
   })
 
   it("does not include a USDA entry — dummy or real — when USDA_API_KEY is unset", () => {
@@ -40,20 +39,25 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     expect(branded.map((p) => p.name)).not.toContain("usda")
   })
 
-  it("includes a real USDA provider only once USDA_API_KEY is configured", () => {
+  it("includes a real USDA provider, after BLS, only once USDA_API_KEY is configured", () => {
     config.usda.apiKey = "some-key"
     const generic = getProviderChain("generic")
-    expect(generic.map((p) => p.name)).toEqual(["usda"])
+    expect(generic.map((p) => p.name)).toEqual(["bls", "usda"])
   })
 
-  it("never includes a local hand-authored nutrition dataset (removed from the authoritative chain) or a BLS entry (not implemented pending licensing)", () => {
+  it("never includes a local hand-authored nutrition dataset (BLS is real bundled data, not hand-authored)", () => {
     config.usda.apiKey = "some-key"
     const generic = getProviderChain("generic")
     const branded = getProviderChain("branded")
     expect(generic.map((p) => p.name)).not.toContain("local-generic")
     expect(branded.map((p) => p.name)).not.toContain("local-generic")
-    expect(generic.map((p) => p.name)).not.toContain("bls")
-    expect(branded.map((p) => p.name)).not.toContain("bls")
+  })
+
+  it("BLS is always present on both routes, independent of USDA configuration", () => {
+    const generic = getProviderChain("generic")
+    const branded = getProviderChain("branded")
+    expect(generic.map((p) => p.name)).toContain("bls")
+    expect(branded.map((p) => p.name)).toContain("bls")
   })
 
   it("does not include the LLM provider when LLM is disabled", () => {
@@ -71,11 +75,11 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     expect(branded[branded.length - 1].name).toBe("llm-nutrient")
   })
 
-  it("LLM is the ONLY provider on the generic route when USDA is unconfigured but LLM is enabled", () => {
+  it("BLS then LLM on the generic route when USDA is unconfigured but LLM is enabled", () => {
     config.usda.apiKey = ""
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
-    expect(getProviderChain("generic").map((p) => p.name)).toEqual(["llm-nutrient"])
+    expect(getProviderChain("generic").map((p) => p.name)).toEqual(["bls", "llm-nutrient"])
   })
 
   it("does not include the LLM provider when enabled but no API key is set", () => {

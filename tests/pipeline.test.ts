@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
+import { initCache } from "../src/utils/cache.js"
 import type { MealieRecipe, MealieRecipePatch } from "../src/types.js"
 
 const patchCalls: { slug: string; patch: MealieRecipePatch }[] = []
@@ -38,6 +39,14 @@ function baseRecipe(overrides: Partial<MealieRecipe> = {}): MealieRecipe {
 }
 
 describe("runEstimationPipeline", () => {
+  beforeAll(async () => {
+    // BLS is now unconditionally in the generic provider chain (registry.ts), so every ingredient
+    // lookup here reaches the shared cache — without this, cache.ts's module-level db is
+    // undefined and getCachedProviderMatch throws (caught by resolveNutrients, but noisy and not
+    // representative of a real boot, where initCache() always runs before any estimate).
+    await initCache()
+  })
+
   beforeEach(() => {
     patchCalls.length = 0
     vi.resetModules()
@@ -47,6 +56,7 @@ describe("runEstimationPipeline", () => {
     process.env.ESTIMATE_STRATEGY = "tagged"
     mockRecipe = baseRecipe({ tags: [] })
     const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+    await (await import("../src/utils/cache.js")).initCache()
 
     const outcome = await runEstimationPipeline("test-recipe")
     expect(outcome.status).toBe("skipped-not-tagged")
@@ -57,6 +67,7 @@ describe("runEstimationPipeline", () => {
   it("estimates a fresh recipe (no prior hash) and writes nutrition + hash", async () => {
     mockRecipe = baseRecipe()
     const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+    await (await import("../src/utils/cache.js")).initCache()
 
     const outcome = await runEstimationPipeline("test-recipe")
     expect(outcome.status).toBe("estimated")
@@ -67,6 +78,7 @@ describe("runEstimationPipeline", () => {
   it("webhook-triggered re-processing settles to a no-op on the second pass (loop prevention)", async () => {
     mockRecipe = baseRecipe()
     const { runEstimationPipeline, } = await import("../src/services/pipeline.js")
+    await (await import("../src/utils/cache.js")).initCache()
     const { computeIngredientHash } = await import("../src/services/estimator.js")
 
     const first = await runEstimationPipeline("test-recipe")
@@ -95,6 +107,7 @@ describe("runEstimationPipeline", () => {
       extras: {},
     })
     const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+    await (await import("../src/utils/cache.js")).initCache()
 
     const outcome = await runEstimationPipeline("test-recipe")
     expect(outcome.status).toBe("manual-preserved")
@@ -113,6 +126,7 @@ describe("runEstimationPipeline", () => {
       extras: {},
     })
     const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+    await (await import("../src/utils/cache.js")).initCache()
 
     const firstAck = await runEstimationPipeline("test-recipe")
     expect(firstAck.status).toBe("manual-preserved")
@@ -143,6 +157,7 @@ describe("runEstimationPipeline", () => {
     it("force=true re-estimates even when the ingredient hash is unchanged", async () => {
       mockRecipe = baseRecipe()
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
       const { computeIngredientHash } = await import("../src/services/estimator.js")
 
       mockRecipe = {
@@ -166,6 +181,7 @@ describe("runEstimationPipeline", () => {
         extras: {},
       })
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
 
       const outcome = await runEstimationPipeline("test-recipe", { force: true })
       expect(outcome.status).toBe("manual-preserved")
@@ -178,6 +194,7 @@ describe("runEstimationPipeline", () => {
         extras: {},
       })
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
 
       const outcome = await runEstimationPipeline("test-recipe", { force: true, overrideManual: true })
       expect(outcome.status).toBe("estimated")
@@ -202,6 +219,7 @@ describe("runEstimationPipeline", () => {
 
       mockRecipe = baseRecipe()
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
       const { computeIngredientHash } = await import("../src/services/estimator.js")
 
       const hash = computeIngredientHash(mockRecipe)
@@ -235,6 +253,7 @@ describe("runEstimationPipeline", () => {
 
       mockRecipe = baseRecipe()
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
       const { computeIngredientHash } = await import("../src/services/estimator.js")
 
       const hash = computeIngredientHash(mockRecipe)
@@ -268,6 +287,7 @@ describe("runEstimationPipeline", () => {
       })
 
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
       const outcome = await runEstimationPipeline("test-recipe", { force: true })
 
       expect(outcome.status).toBe("manual-preserved")
@@ -289,6 +309,7 @@ describe("runEstimationPipeline", () => {
       })
 
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      await (await import("../src/utils/cache.js")).initCache()
       const outcome = await runEstimationPipeline("test-recipe", { force: true })
       expect(outcome.status).toBe("estimated")
     })

@@ -65,11 +65,12 @@ export const config = {
     retryBackoffMs: parseInt(process.env.USDA_RETRY_BACKOFF_MS || "500", 10),
   },
 
-  // Optional local/licensed generic dataset (e.g. BLS once cleared for local import) — a plain
-  // file path a deployer can point at their own licensed export. Never bundled by this project.
-  // When unset, the generic route simply has no such provider (no dummy/no-op placeholder).
+  // BLS 4.0 Open Data (Max Rubner-Institut, CC BY 4.0) — bundled with this service at
+  // resources/bls/bls-4.0.sqlite (built by scripts/import_bls.py; see README for attribution).
+  // BLS_LOCAL_IMPORT_PATH overrides the bundled path, e.g. to point at a regenerated/updated
+  // export without a code change. Empty means "use the bundled default" (bls-provider.ts).
   bls: {
-    localImportPath: process.env.BLS_LOCAL_IMPORT_PATH || "",
+    dbPath: process.env.BLS_LOCAL_IMPORT_PATH || "",
   },
 
   estimate: {
