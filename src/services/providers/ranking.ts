@@ -121,7 +121,15 @@ const GENERIC_DESCRIPTOR_WORDS = new Set([
   // never count as "extra unexplained content". Found live: their absence regressed several
   // previously-correct spice matches (cumin, coriander, black pepper) to an unnecessary LLM
   // fallback purely because "spices"/"seed" weren't recognized as generic.
-  "spice", "spices", "seed", "seeds", "herb", "herbs", "powder", "powdered",
+  //
+  // Deliberately NOT "powder"/"powdered" here, even though the same reasoning might seem to
+  // apply: found live, that let "Sahne" (liquid cream) match USDA's "Cream substitute, powdered"
+  // — for a query like "Knoblauchpulver" ("garlic powder"), "powder" is already part of the
+  // query's OWN text and gets credited as a matched MODIFIER (see coreIdentityScoreAdjustment),
+  // so it never needed to be globally generic too — doing so only opened the door to accepting an
+  // unrelated candidate's powder FORM as if it were harmless, when powder-vs-liquid is exactly
+  // the kind of form difference that matters for cream specifically.
+  "spice", "spices", "seed", "seeds", "herb", "herbs",
 ])
 
 /** Minimum length for a core-identity token to participate in substring containment checks — a
@@ -195,7 +203,12 @@ export function coreIdentityScoreAdjustment(coreText: string | null | undefined,
     extraCount++
   }
 
-  return Math.min(modifierMatches, modifierTokens.length) * 8 - extraCount * 30
+  // Found live: "Rote Linse" (red lentil) scored 33/100 against OFF's "Red lentil fusilli" — a
+  // pasta product, not the lentil itself — because a single unexplained word ("fusilli") combined
+  // with an otherwise-strong textual/modifier match wasn't quite enough to clear -30/word. Bumped
+  // to -35, which pushes this and similar single-extra-word-but-high-base-similarity cases below
+  // MIN_ACCEPTABLE_SCORE without needing to enumerate "fusilli" (or any other pasta shape) by name.
+  return Math.min(modifierMatches, modifierTokens.length) * 8 - extraCount * 35
 }
 
 interface MismatchRule {

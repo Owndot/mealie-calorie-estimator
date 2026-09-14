@@ -507,6 +507,32 @@ describe("regression: qualified-water and reversed-order dairy mismatches found 
     // applied, because "chutney" wasn't recognized as a composite/preserved-condiment marker.
     expect(categoryConflict("vegetable", "Red onion chutney")).toBe(true)
   })
+
+  it("rejects red lentil matching red lentil PASTA (fusilli) via the strengthened extra-word penalty", () => {
+    // Found live: "Rote Linse" (red lentil) still scored 33/100 against OFF's "Red lentil
+    // fusilli" after the previous round's -30/extra-word penalty — a strong textual/modifier
+    // match plus only ONE unexplained word ("fusilli") wasn't quite enough. Verifies the
+    // strengthened -35/word penalty (a general recalibration, not a "fusilli" word-list entry)
+    // pushes this below MIN_ACCEPTABLE_SCORE.
+    const ranked = rankCandidates("red lentil", null, [{ name: "Red lentil fusilli", brand: null, hasCompleteNutrients: true, foodType: "simple" as const }], { queryCoreFood: "lentil" })
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("rejects cream matching a powdered cream substitute — \"powder\" is not globally generic", () => {
+    // Found live: after adding "powder"/"powdered" to GENERIC_DESCRIPTOR_WORDS to fix
+    // Knoblauchpulver, "Sahne" (liquid cream) started matching USDA's "Cream substitute,
+    // powdered" — powder-vs-liquid is exactly the kind of form difference that should count as
+    // unexplained extra content for a plain "cream" query, which never asked for powdered form.
+    const adj = coreIdentityScoreAdjustment("cream", "cream", "Cream substitute, powdered")
+    expect(adj).toBeLessThan(0)
+  })
+
+  it("still does not penalize a query's OWN powder/dried-form modifier (Knoblauchpulver/garlic powder)", () => {
+    // The fix above works specifically because "powder" is part of the QUERY's own text here and
+    // gets credited as a matched modifier — it never needed to be globally generic.
+    const adj = coreIdentityScoreAdjustment("garlic", "garlic powder", "Spices, garlic powder")
+    expect(adj).toBeGreaterThanOrEqual(0)
+  })
 })
 
 describe("tokenize — German umlaut handling (regression for the NFKD-corruption bug)", () => {

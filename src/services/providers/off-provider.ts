@@ -153,7 +153,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v11"
+const OFF_MATCH_ALGORITHM_VERSION = "v12"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
