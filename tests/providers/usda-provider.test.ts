@@ -381,3 +381,70 @@ describe("UsdaProvider — never sees originalText", () => {
     expect(requestedUrl).not.toContain("gekocht")
   })
 })
+
+/** Extracts the decoded `query` search param USDA actually received, from a mocked fetch call. */
+function searchParamOf(url: unknown): string | null {
+  return new URL(String(url)).searchParams.get("query")
+}
+
+describe("UsdaProvider — search query is the whole-recipe normalizer's own output, verbatim", () => {
+  // ProviderQuery.foodName IS canonicalEnglish (see estimator.ts's `resolveNutrients({ foodName:
+  // canonicalEnglish, ... })` call) — USDA never re-derives, re-translates, or strips it, and
+  // never makes its own per-ingredient classification call. These lock in that the qualifiers the
+  // batch normalizer is instructed to preserve (state, "lean", "canned", "Greek", ...) actually
+  // reach the live search request, not just the classification layer's own output. Each test uses
+  // a distinct food name (this file shares one persistent provider_match_cache) so a cache hit in
+  // one test can never mask a missing fetch call in another.
+  it("sends canonicalEnglish's preserved state qualifier verbatim (dried thyme / dried basil)", async () => {
+    // mockImplementation, not mockResolvedValue — a Response body can only be read once, and this
+    // test deliberately calls lookup() twice against the same mock.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => fdcResponse([]))
+    const provider = new UsdaProvider()
+
+    await provider.lookup(query("dried thyme queryverbatim", { state: "dried", coreFoodEnglish: "thyme" }))
+    expect(searchParamOf(fetchMock.mock.calls[0][0])).toBe("dried thyme queryverbatim")
+
+    await provider.lookup(query("dried basil queryverbatim", { state: "dried", coreFoodEnglish: "basil" }))
+    expect(searchParamOf(fetchMock.mock.calls[1][0])).toBe("dried basil queryverbatim")
+  })
+
+  it("sends canonicalEnglish's preserved color/origin modifier verbatim (red onion, Greek yogurt)", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => fdcResponse([]))
+    const provider = new UsdaProvider()
+
+    await provider.lookup(query("red onion queryverbatim", { coreFoodEnglish: "onion" }))
+    expect(searchParamOf(fetchMock.mock.calls[0][0])).toBe("red onion queryverbatim")
+
+    await provider.lookup(query("Greek yogurt queryverbatim", { coreFoodEnglish: "yogurt" }))
+    expect(searchParamOf(fetchMock.mock.calls[1][0])).toBe("Greek yogurt queryverbatim")
+  })
+
+  it("sends the whole-egg default verbatim, never narrowed to egg white/yolk", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(fdcResponse([]))
+    const provider = new UsdaProvider()
+
+    await provider.lookup(query("whole egg queryverbatim", { coreFoodEnglish: "egg" }))
+    expect(searchParamOf(fetchMock.mock.calls[0][0])).toBe("whole egg queryverbatim")
+  })
+
+  it("makes exactly one search request per lookup — no per-ingredient classification fan-out inside the provider", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(fdcResponse([]))
+    const provider = new UsdaProvider()
+    await provider.lookup(query("dried thyme fanoutcheck", { state: "dried", coreFoodEnglish: "thyme" }))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("wires ProviderQuery.coreFoodEnglish through to core-identity rejection, not just queryState/queryCategory", async () => {
+    // If coreFoodEnglish weren't actually threaded into rankCandidates, this candidate (core food
+    // "tapioca", not "garlic", present) would only be caught by weaker lexical checks. Verifying
+    // the real end-to-end wiring here (not just rankCandidates in isolation, already covered in
+    // ranking.test.ts) confirms USDA's lookup() passes query.coreFoodEnglish, not e.g. leaves it
+    // unwired or reads the wrong field.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      fdcResponse([{ description: "Tapioca, garlic flavor", fdcId: 999, dataType: "Branded", foodNutrients: CHICKEN_NUTRIENTS }]),
+    )
+    const provider = new UsdaProvider()
+    const match = await provider.lookup(query("garlic", { coreFoodEnglish: "garlic", route: "branded" }))
+    expect(match).toBeNull()
+  })
+})
