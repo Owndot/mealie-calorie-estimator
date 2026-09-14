@@ -170,23 +170,6 @@ const MISMATCH_RULES: MismatchRule[] = [
     forbiddenCandidatePattern: /\begg,?\s*white\b|\begg,?\s*yolk\b|\beiweiß\b|\beiweiss\b|\beigelb\b|\balbumen\b|\begg,?\s*pasta\b|\beierteigwaren\b|\begg,?\s*noodles\b|\beifrei\b/i,
     description: "whole egg vs egg white/yolk/egg-containing or egg-free composite product",
   },
-  // A bare, unqualified "Öl"/"oil" query means generic oil — it must not accept a candidate naming
-  // a SPECIFIC oil type the query never asked for (that would be guessing). A query that itself
-  // names a specific oil (e.g. "Olivenöl") is unaffected — forbiddenCandidatePattern.test(query)
-  // short-circuits the rule for it, same mechanism as every other rule here.
-  {
-    queryPattern: /(?<!\p{L})(öl|oil)(?!\p{L})/iu,
-    // Found live in the mandatory manual-provenance audit, in THREE separate recipes across two
-    // redeploys: bare "Öl" matched USDA's "Oil, almond", then (after adding "almond" to a name
-    // list) "Oil, babassu" — proving a per-name enumeration is whack-a-mole against USDA's long
-    // tail of specific oil types. Fixed structurally instead: USDA's SR Legacy naming convention
-    // for oils is "Oil, <type>" — ANY such candidate the query didn't itself name a specific type
-    // for is guessing, regardless of which type. The enumerated German-compound list stays for
-    // OFF/BLS candidates that don't follow USDA's comma-qualified naming (e.g. bare "Kokosöl").
-    forbiddenCandidatePattern:
-      /\b(coconut|kokos|olive|oliven|sesame|sesam|sunflower|sonnenblumen|canola|raps|palm|walnut|walnuss|avocado|peanut|erdnuss|corn|maiskeim|flaxseed|leinsamen|almond|mandel|hazelnut|haselnuss|grapeseed|traubenkern|pumpkin seed|kürbiskern|rice bran)\b|^oils?,\s*(?!vegetable\b|cooking\b|salad\b|blend\b)[a-z]/i,
-    description: "generic oil vs a specific oil type the query never named",
-  },
   // "Kirschtomate" (cherry tomato, a vegetable) translated to canonicalEnglish "cherry tomato"
   // matched USDA's "Cherries, sweet, raw" — the FRUIT, via the shared word "cherry"/"cherries".
   // Anchored whole-string checks (not a simple substring test) so a legitimate "Tomatoes, cherry,
@@ -199,8 +182,43 @@ const MISMATCH_RULES: MismatchRule[] = [
   },
 ]
 
+/**
+ * Generic oil-type descriptors: a candidate whose name is built ENTIRELY from these words (plus
+ * "oil" itself) is a genuine generic answer; any other content word means it names a specific
+ * type the query never asked for.
+ */
+const GENERIC_OIL_WORDS = new Set(["oil", "oils", "vegetable", "cooking", "salad", "blend", "blended", "plant", "edible", "nfs", "unspecified", "and"])
+
+/**
+ * A bare, unqualified "Öl"/"oil" query means generic oil — it must not accept a candidate naming a
+ * SPECIFIC oil type the query never asked for (that would be guessing). Found live in the mandatory
+ * manual-provenance audit, across THREE separate redeploys: bare "Öl" matched USDA's "Oil, almond",
+ * then (after adding "almond" to a name list) "Oil, babassu", then (after a structural "Oil, <type>"
+ * comma-format check) "Cottonseed oil" — USDA's Survey (FNDDS) dataset phrases oils as "<type> oil"
+ * rather than SR Legacy's "Oil, <type>", so neither a name list nor a single naming-convention regex
+ * generalizes. Fixed properly this time: tokenize the candidate name and check whether every token is
+ * a recognized GENERIC oil word — if any token isn't, the candidate names something the query didn't.
+ */
+function genericOilConflict(queryFoodName: string, candidateName: string): boolean {
+  // Unicode-aware lookaround (not tokenize(), which NFKD-decomposes "ö" into "o" + a combining
+  // diaeresis that then gets stripped as non-letter/number — turning "Öl" into two garbage
+  // single-letter tokens ["o","l"], silently breaking any tokenize()-based check on this exact
+  // word, found live while writing this function). This same guard already excludes a query that
+  // itself names a specific oil (e.g. "Olivenöl", "Kokosöl") — "öl" there is preceded by a letter
+  // ("v"/"s"), so the lookbehind fails and the guard below never matches.
+  if (!/(?<!\p{L})(öl|oil)(?!\p{L})/iu.test(queryFoodName)) return false
+
+  const candidateTokens = tokenize(candidateName)
+  if (!candidateTokens.includes("oil") && !candidateTokens.includes("oils")) return false
+  return !candidateTokens.every((t) => GENERIC_OIL_WORDS.has(t))
+}
+
 /** Returns a description of the violated rule, or null if no obvious mismatch applies. */
 export function findMismatch(queryFoodName: string, candidateName: string): string | null {
+  if (genericOilConflict(queryFoodName, candidateName)) {
+    return "generic oil vs a specific oil type the query never named"
+  }
+
   for (const rule of MISMATCH_RULES) {
     const queryAsksForForbidden = rule.forbiddenCandidatePattern.test(queryFoodName)
     if (queryAsksForForbidden) continue // the query itself legitimately names the "forbidden" thing

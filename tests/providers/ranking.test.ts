@@ -149,12 +149,16 @@ describe("findMismatch — obvious mismatch rejection", () => {
     expect(findMismatch("Öl", "Oil, almond")).not.toBeNull()
   })
 
-  it("rejects a bare oil query matching ANY specific USDA \"Oil, <type>\" candidate structurally, not just enumerated names", () => {
-    // Found live on the next redeploy: bare "Öl" matched USDA's "Oil, babassu" — a specific oil
-    // type not in the enumerated name list, proving enumeration alone is whack-a-mole. The
-    // structural "Oil, <type>" check catches this and any other USDA-named oil type generically.
+  it("rejects a bare oil query matching ANY specific oil type structurally, in either USDA naming convention", () => {
+    // Found live across three separate redeploys: bare "Öl" matched USDA's "Oil, almond", then
+    // "Oil, babassu" (after enumerating "almond"), then "Cottonseed oil" (after a comma-format-only
+    // structural check) — USDA's SR Legacy dataset phrases oils as "Oil, <type>" while Survey
+    // (FNDDS) phrases them "<type> oil", so neither enumeration nor one naming convention
+    // generalizes. The tokenized "every word must be a recognized generic oil word" check does.
     expect(findMismatch("Öl", "Oil, babassu")).not.toBeNull()
     expect(findMismatch("oil", "Oil, grapeseed")).not.toBeNull()
+    expect(findMismatch("Öl", "Cottonseed oil")).not.toBeNull()
+    expect(findMismatch("oil", "Sesame oil")).not.toBeNull()
   })
 
   it("does not reject a bare oil query against USDA's generic \"Oil, vegetable\"/\"Oil, cooking\" naming", () => {
