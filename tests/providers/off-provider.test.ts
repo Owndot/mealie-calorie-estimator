@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
 import { OffProvider } from "../../src/services/providers/off-provider.js"
-import { initCache, buildQueryKey, getCachedProviderMatch, isProviderMiss } from "../../src/utils/cache.js"
+import { initCache } from "../../src/utils/cache.js"
 import { config } from "../../src/config.js"
 
 beforeAll(async () => {
@@ -81,17 +81,16 @@ describe("OffProvider", () => {
 
   it("does NOT poison the negative cache on a transient failure (persistent 5xx) — a later retry can still succeed", async () => {
     const foodName = "Transientfailuretestmilch"
-    const key = buildQueryKey(foodName, null)
 
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("unavailable", { status: 503 }))
     const provider = new OffProvider()
 
     const failed = await provider.lookup(query(foodName))
     expect(failed).toBeNull()
-    // A transient failure is not a confirmed "OFF has no hits" — must not be cached as a miss,
-    // or the food would be starved of branded nutrition for a full day even after OFF recovers.
-    expect(isProviderMiss("off", key)).toBe(false)
 
+    // Behavioral proof: a transient failure is not a confirmed "OFF has no hits" — it must not be
+    // cached as a miss, or the food would be starved of branded nutrition for a full day even
+    // after OFF recovers. A subsequent lookup must still reach the (now-healthy) network.
     vi.restoreAllMocks()
     vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([{ product_name: foodName, nutriments: MILK_NUTRIMENTS }]))
     const recovered = await provider.lookup(query(foodName))
@@ -100,13 +99,14 @@ describe("OffProvider", () => {
 
   it("DOES cache a confirmed empty result (OFF reached, zero hits) as a miss", async () => {
     const foodName = "Confirmedemptytestmilch"
-    const key = buildQueryKey(foodName, null)
-
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([]))
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([]))
     const provider = new OffProvider()
 
     await provider.lookup(query(foodName))
-    expect(isProviderMiss("off", key)).toBe(true)
+    // Behavioral proof: a second lookup of the same confirmed-empty query must not hit the
+    // network again — served straight from the negative cache.
+    await provider.lookup(query(foodName))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it("caches a successful match and does not re-hit the network on a repeat lookup", async () => {
@@ -128,21 +128,22 @@ describe("OffProvider", () => {
 
     const provider = new OffProvider()
     await provider.lookup(query(foodName))
-    expect(isProviderMiss("off", buildQueryKey(foodName, null))).toBe(true)
-
     await provider.lookup(query(foodName))
     expect(fetchMock).toHaveBeenCalledTimes(1) // second call served from the negative cache, no network hit
   })
 
   it("keys the cache on food name + brand so a branded and a generic lookup of the same food never collide", async () => {
     const foodName = "Poisontestmilch"
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([{ product_name: foodName, brands: "Brand X", nutriments: MILK_NUTRIMENTS }]))
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([{ product_name: foodName, brands: "Brand X", nutriments: MILK_NUTRIMENTS }]))
 
     const provider = new OffProvider()
-    await provider.lookup(query(foodName, "Brand X"))
+    const branded = await provider.lookup(query(foodName, "Brand X"))
+    expect(branded).not.toBeNull()
 
-    expect(getCachedProviderMatch("off", buildQueryKey(foodName, "Brand X"))).toBeDefined()
-    expect(getCachedProviderMatch("off", buildQueryKey(foodName, null))).toBeUndefined()
+    // Behavioral proof: a generic (no-brand) lookup of the SAME food name must not reuse the
+    // branded result from the cache — it has to hit the network again under its own cache key.
+    await provider.lookup(query(foodName))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   describe("brands field as a real OFF search-a-licious response shape (string array) — live acceptance test regression", () => {

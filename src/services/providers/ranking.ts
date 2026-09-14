@@ -27,7 +27,11 @@ export function tokenize(s: string): string[] {
  * USDA and state conflicts could never be detected there.
  */
 const ENGLISH_STATE_PATTERNS: [FoodState, RegExp][] = [
-  ["dried", /\b(dried|dehydrated|dry)\b/i],
+  // "powder" found live: "Kirschtomate" (raw cherry tomato, 200g) matched USDA's "Tomato
+  // powder" — a concentrated dehydrated product wildly wrong at that gram quantity — because
+  // "powder" wasn't recognized as a dried-state indicator, so no state conflict ever fired
+  // against the query's "raw" state.
+  ["dried", /\b(dried|dehydrated|dry|powder(ed)?)\b/i],
   ["cooked", /\b(cooked|boiled|baked|fried|roasted|grilled|steamed|braised|poached|stewed)\b/i],
   ["raw", /\braw\b/i],
 ]
@@ -136,8 +140,19 @@ const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] 
   { pattern: /wurst|sausage/i, impliesCategory: "meat-product" },
   { pattern: /suppe|eintopf|\bsoup\b|\bstew\b|chowder/i, impliesCategory: "prepared-dish" },
   { pattern: /stangen|brezel|chips|pretzel|\bsnack\b/i, impliesCategory: "snack" },
-  { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit/i, impliesCategory: "baked-good" },
+  { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit|brot|\bbread\b/i, impliesCategory: "baked-good" },
   { pattern: /limonade|saft|getränk|juice|drink|\b(soda|cola|tea|tee|ale)\b/i, impliesCategory: "beverage" },
+  // German dish-naming convention: MEAT-PREFIX + dish-type suffix names a whole prepared dish,
+  // not the suffix word's literal food identity. Found live: "Schweinepfeffer" ("Schweine-" =
+  // pork + "-pfeffer", a savoury pork goulash) matched a bare "Pfeffer" (pepper spice) query via
+  // BLS's own compound-suffix rule, since "schweinepfeffer" genuinely does end in "pfeffer" —
+  // that rule can't distinguish "a type of X" (Speisezwiebel/Zwiebel) from "a dish named with X
+  // as its stylistic suffix" (Schweinepfeffer/Pfeffer, Rehpfeffer/Pfeffer) on string shape alone.
+  // Requires a continuation after the prefix (\w+) so the bare animal word alone (e.g. "Schwein")
+  // is never flagged, and excludes an "ei"/"eier" (egg) continuation specifically — "Hühnerei"
+  // (chicken's EGG, a confirmed-correct BLS match found earlier) is animal-prefix + egg, not
+  // animal-prefix + dish-suffix, and must not collide with this rule.
+  { pattern: /\b(schweine|rinder|kalbs|lamm|hähnchen|haehnchen|hühner|huehner|enten|puten|wild|reh)(?!ei\b|eier\b)\w+/i, impliesCategory: "meat-dish" },
 ]
 
 /**

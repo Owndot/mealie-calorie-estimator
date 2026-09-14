@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict } from "../../src/services/providers/ranking.js"
+import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict, inferStateFromName } from "../../src/services/providers/ranking.js"
 
 describe("tokenize — defensive against non-string input from external provider APIs", () => {
   // Live acceptance test finding: OFF's real /search response returns `brands` as a string
@@ -139,5 +139,63 @@ describe("categoryConflict", () => {
 
   it("does not reject a candidate with no composite-product marker at all", () => {
     expect(categoryConflict("spice", "Paprika, edelsüß")).toBe(false)
+  })
+
+  it("rejects a spice query against 'Bread, Italian' — a baked-good composite, not a spice", () => {
+    // Found live: "italienische Gewürzmischung" (Italian spice mix, 4g) matched USDA's
+    // "Bread, Italian" — a whole bakery product with no relation to the seasoning blend.
+    expect(categoryConflict("spice", "Bread, Italian")).toBe(true)
+  })
+
+  describe("German meat-prefix + dish-suffix compounds", () => {
+    it("rejects a spice/seasoning query against a meat-prefixed dish compound", () => {
+      // Found live: "Pfeffer" (pepper spice) matched BLS's "Schweinepfeffer" — "Schweine-"
+      // (pork) + "-pfeffer", a whole savoury pork goulash dish, not a type of pepper. The
+      // suffix-compound match was structurally identical to legitimate cases like
+      // "Speisezwiebel"/"Zwiebel", but "-pfeffer" here is a German dish-naming convention
+      // ("X Pfeffer" = an X-style peppery stew), not the food's literal identity.
+      expect(categoryConflict("spice", "Schweinepfeffer")).toBe(true)
+      expect(categoryConflict("seasoning", "Rehpfeffer")).toBe(true) // venison pepper stew
+    })
+
+    it("does NOT reject a legitimate animal-prefix + egg compound (Hühnerei)", () => {
+      // "Hühnerei" (chicken's EGG) is animal-prefix + egg, not animal-prefix + dish-suffix —
+      // a confirmed-correct BLS match that must not collide with the meat-dish rule above.
+      expect(categoryConflict("egg", "Hühnerei roh")).toBe(false)
+    })
+
+    it("does not reject when the query category is broad enough to legitimately include a meat dish", () => {
+      expect(categoryConflict("meat", "Schweinepfeffer")).toBe(false)
+    })
+
+    it("does not flag the bare animal word alone (no dish-suffix continuation to match)", () => {
+      expect(categoryConflict("dairy", "Schwein")).toBe(false) // bare animal word, no continuation
+      expect(categoryConflict("spice", "Salz")).toBe(false) // no animal prefix at all
+    })
+
+    it("still flags a genuine animal-prefixed compound that isn't an egg (e.g. pork meat vs dairy category)", () => {
+      expect(categoryConflict("dairy", "Schweinefleisch")).toBe(true)
+    })
+  })
+})
+
+describe("inferStateFromName — English candidate state inference (USDA)", () => {
+  it("infers 'dried' from 'powder' — not just 'dried'/'dehydrated'/'dry'", () => {
+    // Found live: "Kirschtomate" (raw cherry tomato, 200g) matched USDA's "Tomato powder" — a
+    // concentrated dehydrated product wildly wrong at that gram quantity — because "powder"
+    // wasn't recognized as a dried-state indicator, so no state conflict was ever detected
+    // against the query's "raw" state.
+    expect(inferStateFromName("Tomato powder")).toBe("dried")
+    expect(inferStateFromName("Garlic powder")).toBe("dried")
+  })
+
+  it("infers raw/cooked/dried correctly from typical USDA description phrasing", () => {
+    expect(inferStateFromName("Bananas, raw")).toBe("raw")
+    expect(inferStateFromName("Potato, boiled, without skin")).toBe("cooked")
+    expect(inferStateFromName("Onions, dehydrated flakes")).toBe("dried")
+  })
+
+  it("returns 'unknown' when no state word is present", () => {
+    expect(inferStateFromName("Chicken, breast")).toBe("unknown")
   })
 })

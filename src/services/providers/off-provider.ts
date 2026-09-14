@@ -134,11 +134,17 @@ interface RankableOffProduct extends RankableCandidate {
  * name/brand similarity and nutrient completeness, and rejects curated obvious mismatches
  * (ginger vs ginger ale, salt vs electrolyte drink, etc).
  */
+// Bumped whenever ranking/rejection behavior changes (categoryConflict was added this version) —
+// same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
+// provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
+// stale cached matches for any already-resolved ingredient text.
+const OFF_MATCH_ALGORITHM_VERSION = "v2"
+
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
 
   async lookup(query: ProviderQuery): Promise<ProviderMatch | null> {
-    const queryKey = buildQueryKey(query.foodName, query.brand)
+    const queryKey = buildQueryKey(`${OFF_MATCH_ALGORITHM_VERSION}:${query.foodName}`, query.brand)
 
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
