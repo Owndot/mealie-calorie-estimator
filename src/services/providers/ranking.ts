@@ -1,5 +1,6 @@
 /** Shared candidate-ranking helpers for network providers (OFF, USDA) that return multiple hits. */
 import type { FoodState, FoodType } from "../../types.js"
+import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /**
  * PRIMARY hard-rejection signal (checked before any lexical/confidence score): a
@@ -35,9 +36,10 @@ export function tokenize(s: string): string[] {
   // at their own boundary. Guarding here too means a similarly-shaped surprise from any other
   // provider degrades to "no similarity" instead of crashing the whole lookup.
   if (typeof s !== "string") return []
-  return s
-    .toLowerCase()
-    .normalize("NFKD")
+  // normalizeGermanText(), not .normalize("NFKD") — NFKD decomposes "ö" into "o" + a combining
+  // diaeresis, which the char-class strip below then silently deletes as a non-letter, corrupting
+  // "Gewürz" into ["gewu", "rz"] instead of one token. See text-normalize.ts.
+  return normalizeGermanText(s)
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter(Boolean)
@@ -94,6 +96,96 @@ export function nameSimilarity(a: string, b: string): number {
   const containment = flatA.length > 0 && flatB.length > 0 && (flatA.includes(flatB) || flatB.includes(flatA)) ? 0.5 : 0
 
   return Math.max(jaccard, containment)
+}
+
+/**
+ * Generic, food-agnostic quality/state descriptors — words that commonly qualify almost any food
+ * without themselves naming a DIFFERENT food (organic, fresh, small, sweet, ...). Excluded from
+ * the "extra content" count in coreIdentityScoreAdjustment() so a candidate isn't penalized for
+ * harmless descriptive words, while genuine additional food content (chutney, cheese, tapioca,
+ * pineapple, ...) still counts. This is a broad, reusable vocabulary of quality/state words that
+ * apply across many foods — not a blacklist of specific wrong foods, unlike MISMATCH_RULES below.
+ */
+const GENERIC_DESCRIPTOR_WORDS = new Set([
+  "raw", "fresh", "cooked", "boiled", "baked", "fried", "roasted", "grilled", "steamed", "braised",
+  "poached", "stewed", "dried", "dry", "dehydrated", "frozen", "canned", "organic", "natural",
+  "whole", "ground", "pure", "plain", "style", "tender", "petite", "small", "large", "mild",
+  "sweet", "ripe", "nfs", "unspecified", "generic", "bottled", "prepared", "unprepared", "extra",
+  "premium", "select", "product", "products", "type", "flavor", "flavour", "flavored", "flavoured",
+])
+
+/** Minimum length for a core-identity token to participate in substring containment checks — a
+ *  1-2 letter fragment risks matching coincidentally inside an unrelated word. */
+const CORE_TOKEN_MIN_LENGTH = 3
+
+function coreTokensOf(coreText: string | null | undefined): string[] {
+  if (!coreText) return []
+  return tokenize(coreText).filter((t) => t.length >= CORE_TOKEN_MIN_LENGTH)
+}
+
+/**
+ * PRIMARY structural signal, checked alongside foodTypeConflict and before any lexical score: a
+ * candidate whose name contains NONE of the query's core-identity tokens is a different food, no
+ * matter how many adjectives/descriptors it happens to share with the query. This is what
+ * actually generalizes across cases like "italienische Gewürzmischung" (core: "seasoning")
+ * matching USDA's "Salami, Italian, pork" / "Italian Ice" / "Creamy Italian dressing" /
+ * "Focaccia, Italian, plain" / "Pastry, Italian, with cheese" — none of those names contain
+ * "seasoning" at all — and "chili flakes" (core: "chili") matching "Onions, dehydrated flakes"
+ * (no "chili" anywhere), WITHOUT enumerating any of those specific wrong foods by name: whatever
+ * "Italian X" or "X flakes" a provider returns next, the mechanism still holds.
+ *
+ * coreText comes from the LLM's own coreFoodGerman/coreFoodEnglish classification (the base food
+ * noun, stripped of modifiers like color/origin/state) — an empty/missing core (LLM
+ * disabled/failed, or genuinely unclear) is permissive, matching foodTypeConflict's degrade
+ * pattern, so this never blocks everything when the signal isn't available.
+ *
+ * Uses substring containment (not exact token equality) specifically to handle German
+ * compounding: BLS's own "Speisezwiebel" must be recognized as containing the core "zwiebel"
+ * even though it's fused into one token, not a separate word.
+ */
+export function coreIdentityConflict(coreText: string | null | undefined, candidateName: string): boolean {
+  const coreTokens = coreTokensOf(coreText)
+  if (coreTokens.length === 0) return false
+  const candidateTokens = tokenize(candidateName)
+  const hasCore = coreTokens.some((core) => candidateTokens.some((t) => t.includes(core)))
+  return !hasCore
+}
+
+/**
+ * SECONDARY structural signal: a point ADJUSTMENT (not a hard gate — coreIdentityConflict already
+ * handles the "core entirely absent" case) rewarding modifier overlap and penalizing candidate
+ * content the query's core + modifiers + generic descriptors don't explain. E.g. "Tapioca Garlic"
+ * for a bare "garlic" query has one unexplained word ("tapioca"); "Bell Pepper with Blue cheese"
+ * for "green bell pepper" has two ("blue", "cheese"); "Red onion chutney" for "red onion" has one
+ * ("chutney"). Each unexplained word is real evidence the candidate is a different or composite
+ * product built around the core ingredient, not the ingredient itself — deliberately steep so
+ * even ONE unexplained word reliably pushes an otherwise-mediocre textual match below
+ * MIN_ACCEPTABLE_SCORE, and two or more pushes almost any match below it, per "a database miss is
+ * preferable to a confident wrong match." modifierTokens are derived from the query's own full
+ * text (canonicalGerman/canonicalEnglish) minus its core tokens — never hand-authored per food.
+ */
+export function coreIdentityScoreAdjustment(coreText: string | null | undefined, fullQueryText: string, candidateName: string): number {
+  const coreTokens = coreTokensOf(coreText)
+  if (coreTokens.length === 0) return 0
+
+  const queryTokens = tokenize(fullQueryText)
+  const modifierTokens = queryTokens.filter((t) => !coreTokens.some((c) => t.includes(c) || c.includes(t)))
+
+  const candidateTokens = tokenize(candidateName)
+  let modifierMatches = 0
+  let extraCount = 0
+  for (const t of candidateTokens) {
+    if (t.length < CORE_TOKEN_MIN_LENGTH) continue
+    if (coreTokens.some((c) => t.includes(c))) continue
+    if (modifierTokens.some((m) => t.includes(m) || m.includes(t))) {
+      modifierMatches++
+      continue
+    }
+    if (GENERIC_DESCRIPTOR_WORDS.has(t)) continue
+    extraCount++
+  }
+
+  return Math.min(modifierMatches, modifierTokens.length) * 8 - extraCount * 30
 }
 
 interface MismatchRule {
@@ -339,6 +431,13 @@ export interface RankOptions {
   queryCategory?: string | null
   /** Query's known food type — the PRIMARY hard-rejection signal. See foodTypeConflict(). */
   queryFoodType?: FoodType
+  /**
+   * Query's core food-identity noun (e.g. "seasoning" for "Italian seasoning", "onion" for "red
+   * onion"), from the LLM's coreFoodGerman/coreFoodEnglish classification — a second PRIMARY
+   * hard-rejection signal alongside queryFoodType. See coreIdentityConflict()/
+   * coreIdentityScoreAdjustment(). Absent/null is permissive.
+   */
+  queryCoreFood?: string | null
   /** Scores a provider-specific dataset tier (e.g. USDA dataType) as a ranking signal, not a hard filter. */
   dataTypeScore?: (dataType: string | null | undefined) => number
 }
@@ -365,9 +464,17 @@ export function rankCandidates<T extends RankableCandidate>(
         ? `food type conflict: a "${options.queryFoodType}" query cannot accept a "composite_dish" candidate ("${candidate.name}")`
         : null
 
+      // Second PRIMARY hard-rejection signal, checked right alongside foodTypeConflict: a
+      // candidate whose name contains NONE of the query's core-identity tokens is a different
+      // food regardless of any shared adjective/descriptor. See coreIdentityConflict().
+      mismatchReason = mismatchReason ?? (coreIdentityConflict(options.queryCoreFood, candidate.name)
+        ? `core identity conflict: "${options.queryCoreFood}" is absent from candidate name ("${candidate.name}")`
+        : null)
+
       mismatchReason = mismatchReason ?? findMismatch(queryFoodName, candidate.name)
 
       let score = nameSimilarity(queryFoodName, candidate.name) * 60
+      score += coreIdentityScoreAdjustment(options.queryCoreFood, queryFoodName, candidate.name)
 
       if (queryBrand && candidate.brand) {
         score += nameSimilarity(queryBrand, candidate.brand) > 0.5 ? 25 : -15

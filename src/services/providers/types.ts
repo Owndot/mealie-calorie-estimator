@@ -28,6 +28,16 @@ export interface ProviderQuery {
    */
   foodType: FoodType
   /**
+   * The query's core food-identity noun in German (e.g. "Zwiebel" for "rote Zwiebel",
+   * "Gewürzmischung" for "italienische Gewürzmischung") — from the LLM's coreFoodGerman
+   * classification. A SECOND primary hard-rejection signal alongside foodType, used by BLS: a
+   * candidate whose name contains none of this word's tokens is a different food regardless of
+   * shared adjectives. See ranking.ts's coreIdentityConflict(). Null/absent is permissive.
+   */
+  coreFoodGerman?: string | null
+  /** Same as coreFoodGerman, in English (e.g. "onion", "seasoning") — used by OFF/USDA. */
+  coreFoodEnglish?: string | null
+  /**
    * Which route this query is being resolved under. USDA uses this to exclude Branded results
    * outright on the generic route (never a correct generic-ingredient answer) while still
    * allowing a brand-compatible Branded result on the branded route, where OFF has priority

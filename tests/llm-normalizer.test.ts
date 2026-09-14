@@ -46,7 +46,7 @@ describe("normalizeIngredients", () => {
 
     const inputs = Array.from({ length: 8 }, (_, i) => ({ index: i, foodName: `Food${i}`, unitName: "g" }))
     const responseItems = inputs.map((i) => ({
-      index: i.index, canonicalGerman: i.foodName, canonicalEnglish: i.foodName, brand: null, state: "raw", category: "test", foodType: "simple",
+      index: i.index, canonicalGerman: i.foodName, canonicalEnglish: i.foodName, brand: null, state: "raw", category: "test", foodType: "simple", coreFoodGerman: i.foodName, coreFoodEnglish: i.foodName,
     }))
 
     const fetchMock = vi.fn().mockResolvedValue(chatResponse(JSON.stringify(responseItems)))
@@ -102,8 +102,8 @@ describe("normalizeIngredients", () => {
 
     const fetchMock = vi.fn().mockResolvedValue(
       chatResponse(JSON.stringify([
-        { index: 0, canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef", brand: null, state: "raw", category: "meat", foodType: "simple" },
-        { index: 1, canonicalGerman: "Tomaten, aus der Dose, abgetropft", canonicalEnglish: "tomatoes, canned, drained", brand: null, state: "unknown", category: "vegetable", foodType: "processed_single_food" },
+        { index: 0, canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef", brand: null, state: "raw", category: "meat", foodType: "simple", coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef" },
+        { index: 1, canonicalGerman: "Tomaten, aus der Dose, abgetropft", canonicalEnglish: "tomatoes, canned, drained", brand: null, state: "unknown", category: "vegetable", foodType: "processed_single_food", coreFoodGerman: "Tomaten", coreFoodEnglish: "tomatoes" },
       ])),
     )
     vi.stubGlobal("fetch", fetchMock)
@@ -123,7 +123,7 @@ describe("normalizeIngredients", () => {
       config.llm.apiKey = "test-key"
 
       const fetchMock = vi.fn().mockResolvedValue(
-        chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Chobani griechischer Joghurt", canonicalEnglish: "Chobani Greek Yogurt", brand: "Chobani", state: "raw", category: "dairy", foodType: "processed_single_food" }])),
+        chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Chobani griechischer Joghurt", canonicalEnglish: "Chobani Greek Yogurt", brand: "Chobani", state: "raw", category: "dairy", foodType: "processed_single_food", coreFoodGerman: "Joghurt", coreFoodEnglish: "yogurt" }])),
       )
       vi.stubGlobal("fetch", fetchMock)
 
@@ -137,7 +137,7 @@ describe("normalizeIngredients", () => {
       config.llm.apiKey = "test-key"
 
       const fetchMock = vi.fn().mockResolvedValue(
-        chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "griechischer Joghurt", canonicalEnglish: "Greek yogurt", brand: "Chobani", state: "raw", category: "dairy", foodType: "simple" }])),
+        chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "griechischer Joghurt", canonicalEnglish: "Greek yogurt", brand: "Chobani", state: "raw", category: "dairy", foodType: "simple", coreFoodGerman: "Joghurt", coreFoodEnglish: "yogurt" }])),
       )
       vi.stubGlobal("fetch", fetchMock)
 
@@ -151,7 +151,7 @@ describe("normalizeIngredients", () => {
       config.llm.apiKey = "test-key"
 
       const fetchMock = vi.fn().mockResolvedValue(
-        chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Milch", canonicalEnglish: "milk", brand: null, state: "raw", category: "dairy", foodType: "simple" }])),
+        chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Milch", canonicalEnglish: "milk", brand: null, state: "raw", category: "dairy", foodType: "simple", coreFoodGerman: "Milch", coreFoodEnglish: "milk" }])),
       )
       vi.stubGlobal("fetch", fetchMock)
 
@@ -166,7 +166,7 @@ describe("normalizeIngredients", () => {
     config.llm.apiKey = "test-key"
 
     const fetchMock = vi.fn().mockResolvedValue(
-      chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Ei", canonicalEnglish: "egg", brand: null, state: "raw", category: "egg", foodType: "simple" }])),
+      chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Ei", canonicalEnglish: "egg", brand: null, state: "raw", category: "egg", foodType: "simple", coreFoodGerman: "Ei", coreFoodEnglish: "egg" }])),
     )
     vi.stubGlobal("fetch", fetchMock)
 
@@ -198,7 +198,7 @@ describe("normalizeIngredients", () => {
     config.llm.apiKey = "test-key"
 
     const fetchMock = vi.fn().mockResolvedValue(
-      chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Wasser", canonicalEnglish: "water", brand: null, state: "unknown", category: "water", foodType: "simple" }])),
+      chatResponse(JSON.stringify([{ index: 0, canonicalGerman: "Wasser", canonicalEnglish: "water", brand: null, state: "unknown", category: "water", foodType: "simple", coreFoodGerman: "Wasser", coreFoodEnglish: "water" }])),
     )
     vi.stubGlobal("fetch", fetchMock)
 

@@ -7,10 +7,11 @@ import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict, foodTypeConflict } from "./ranking.js"
+import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment } from "./ranking.js"
+import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v13"
+const BLS_MATCH_ALGORITHM_VERSION = "v15"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -21,12 +22,13 @@ const BLS_MATCH_ALGORITHM_VERSION = "v13"
  * hyphens too let a bare "Kartoffel" query prefix-match that gratin dish outright (found live via
  * a state-mismatch smoke test). Keeping hyphens fused into their token avoids it, while comma/
  * slash/parens still split exactly like BLS's own state-qualifier syntax.
+ *
+ * Uses normalizeGermanText(), not .normalize("NFKD") — NFKD decomposes "ö" into "o" + a combining
+ * diaeresis, which the old `.replace(/\p{M}/gu, "")` step then silently deleted, corrupting
+ * "Gewürz" into "gewrz"-shaped garbage instead of one coherent token. See text-normalize.ts.
  */
 function tokenizeBls(s: string): string[] {
-  return s
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
+  return normalizeGermanText(s)
     .replace(/[^\p{L}\p{N}\s-]/gu, " ")
     .split(/\s+/)
     .filter(Boolean)
@@ -276,7 +278,7 @@ interface ScoredRecord {
 /** Conservative threshold for a *fuzzy* (non-exact-normalized-string) BLS match. Exact matches bypass this entirely. */
 const FUZZY_MIN_SCORE = 50
 
-function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType): ScoredRecord[] {
+function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
   return records.map((record) => {
     // PRIMARY check first, before any lexical scoring: the official BLS Code letter (X/Y =
@@ -297,9 +299,15 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
     const matchedViaEnglish = scoreEn > scoreDe
     const best = Math.max(scoreDe, scoreEn)
     const candidateName = matchedViaEnglish ? (record.nameEn ?? "") : record.nameDe
-    const mismatchReason = findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
+
+    // Second PRIMARY signal, alongside foodTypeConflict — see coreIdentityConflict() in
+    // ranking.ts. Shared with OFF/USDA rather than a separate BLS-specific implementation.
+    const mismatchReason = (coreIdentityConflict(queryCoreFood, candidateName)
+      ? `core identity conflict: "${queryCoreFood}" is absent from candidate name ("${candidateName}")`
+      : null) ?? findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
 
     let score = best * 70
+    score += coreIdentityScoreAdjustment(queryCoreFood, queryText, candidateName)
     score += record.nutrients.kcalPer100g !== null ? 15 : -50
     if (mismatchReason) score -= 1000
 
@@ -370,12 +378,18 @@ export class BlsProvider implements NutrientProvider {
 
     // Tried in order: raw structured name (highest fidelity), the LLM's normalized German name
     // (catches misspellings/dialect), then the LLM's English translation (last resort, weakened
-    // via nameScore's allowPrefixSuffix=false for English candidates).
+    // via nameScore's allowPrefixSuffix=false for English candidates). Each variant is paired with
+    // the core-identity value in its OWN language — coreFoodGerman for the two German variants,
+    // coreFoodEnglish for the English fallback — since coreIdentityConflict() substring-matches
+    // against the candidate name in whichever language actually got selected.
     const structuredName = query.structuredName?.trim()
     const canonicalGerman = query.canonicalGerman?.trim()
-    const queryTexts = [structuredName, canonicalGerman, query.foodName].filter(
-      (s, i, arr): s is string => !!s && arr.indexOf(s) === i,
-    )
+    const queryVariants = [
+      { text: structuredName, core: query.coreFoodGerman ?? null },
+      { text: canonicalGerman, core: query.coreFoodGerman ?? null },
+      { text: query.foodName, core: query.coreFoodEnglish ?? null },
+    ].filter((v, i, arr): v is { text: string; core: string | null } => !!v.text && arr.findIndex((o) => o.text === v.text) === i)
+    const queryTexts = queryVariants.map((v) => v.text)
 
     // Unlike OFF/USDA, BLS matching is state-sensitive (pickBestByState) — the shared
     // buildQueryKey(foodName, brand) alone would let a "cooked" resolution get wrongly reused for
@@ -394,7 +408,7 @@ export class BlsProvider implements NutrientProvider {
     if (cached) return cached
     if (isProviderMiss(this.name, queryKey)) return null
 
-    for (const text of queryTexts) {
+    for (const { text, core } of queryVariants) {
       const normalized = normalizeKey(text)
       const exactCandidates = data.byNormalizedNameDe.get(normalized)
 
@@ -415,7 +429,7 @@ export class BlsProvider implements NutrientProvider {
         // differently *named* but compatible BLS entry (e.g. "Kartoffel gekocht" vs "Kartoffel").
       }
 
-      const scored = scoreCandidates(text, data.records, query.category, query.foodType).sort((a, b) => b.score - a.score)
+      const scored = scoreCandidates(text, data.records, query.category, query.foodType, core).sort((a, b) => b.score - a.score)
       const picked = pickBestByState(scored, query.state, FUZZY_MIN_SCORE)
       if (picked) {
         const match = buildMatch(query, picked, false)

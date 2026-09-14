@@ -169,6 +169,17 @@ export interface IngredientClassification {
   category: string | null
   /** "unknown" (never simple/processed by default) when the LLM is disabled/failed — see FoodType. */
   foodType: FoodType
+  /**
+   * The base food-identity noun within canonicalGerman, stripped of modifiers (color, origin/
+   * style, state) — e.g. "Zwiebel" for "rote Zwiebel", "Gewürzmischung" for "italienische
+   * Gewürzmischung". Used as a PRIMARY hard-rejection signal by BLS: a candidate whose name
+   * contains none of this word's tokens is a different food regardless of shared adjectives — see
+   * ranking.ts's coreIdentityConflict(). Null when the LLM is disabled/failed (permissive, same
+   * degrade pattern as foodType "unknown") or genuinely unclear.
+   */
+  coreFoodGerman: string | null
+  /** Same as coreFoodGerman, in English (e.g. "onion", "seasoning") — used by OFF/USDA. */
+  coreFoodEnglish: string | null
   route: FoodRoute
   /** true when the LLM batch normalizer actually produced this row (vs. deterministic fallback) */
   llmClassified: boolean

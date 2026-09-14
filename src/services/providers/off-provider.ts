@@ -153,7 +153,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v9"
+const OFF_MATCH_ALGORITHM_VERSION = "v10"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -200,7 +200,12 @@ export class OffProvider implements NutrientProvider {
     // categoryConflict participates here too (query-side data only — no new OFF response field
     // needed) for the same reason BLS/USDA reject it: a strict raw-ingredient category query
     // should never accept an OFF product that reads as a composite/manufactured item.
-    const ranked = rankCandidates(query.foodName, query.brand, rankable, { queryState: query.state, queryCategory: query.category, queryFoodType: query.foodType })
+    const ranked = rankCandidates(query.foodName, query.brand, rankable, {
+      queryState: query.state,
+      queryCategory: query.category,
+      queryFoodType: query.foodType,
+      queryCoreFood: query.coreFoodEnglish,
+    })
     const top = ranked[0]
 
     if (!top) {

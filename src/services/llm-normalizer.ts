@@ -29,6 +29,10 @@ function deterministicClassification(input: NormalizerInput): IngredientClassifi
     // LLM there's no reliable signal to hard-reject composite-dish candidates on the query side,
     // so this degrades to the existing lexical/category checks rather than blocking everything.
     foodType: "unknown",
+    // null is permissive (see coreIdentityConflict in ranking.ts) for the same reason — without
+    // the LLM there's no reliable core-noun signal to hard-reject on.
+    coreFoodGerman: null,
+    coreFoodEnglish: null,
     route: "generic",
     llmClassified: false,
   }
@@ -56,6 +60,8 @@ interface RawItem {
   state: unknown
   category: unknown
   foodType: unknown
+  coreFoodGerman: unknown
+  coreFoodEnglish: unknown
 }
 
 /** Strict structural validation — malformed output must fail safely, not throw or half-apply. */
@@ -81,6 +87,8 @@ function parseAndValidate(content: string, expectedCount: number): RawItem[] | n
     if (typeof o.state !== "string" || !VALID_STATES.includes(o.state as FoodState)) return null
     if (o.category !== null && typeof o.category !== "string") return null
     if (typeof o.foodType !== "string" || !VALID_FOOD_TYPES.includes(o.foodType as FoodType)) return null
+    if (o.coreFoodGerman !== null && typeof o.coreFoodGerman !== "string") return null
+    if (o.coreFoodEnglish !== null && typeof o.coreFoodEnglish !== "string") return null
     items.push({
       index: o.index,
       canonicalGerman: o.canonicalGerman,
@@ -89,6 +97,8 @@ function parseAndValidate(content: string, expectedCount: number): RawItem[] | n
       state: o.state,
       category: o.category,
       foodType: o.foodType,
+      coreFoodGerman: o.coreFoodGerman,
+      coreFoodEnglish: o.coreFoodEnglish,
     })
   }
 
@@ -105,7 +115,9 @@ For each ingredient, return:
 - brand: a specific product brand ONLY if it is explicitly present as text within the given "name" field — otherwise null; never infer a brand from general knowledge about the food
 - state: one of "raw", "cooked", "dried", "unknown" — only when clearly supported by the given name; do not guess if unsupported
 - category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil", "water", "beverage", "condiment", "seasoning"), or null if unclear. Plain water ("Wasser") is category "water", not "beverage" or null — this field is used to reject a candidate whose name merely happens to share a word with the query (e.g. plain water must never accept a product literally named "water" that isn't water, like a cracker or a soft drink), so pick the most specific matching category rather than defaulting to null when one of the examples clearly fits.
-- foodType: one of "simple", "processed_single_food", "composite_dish", or "unknown" — see definitions and examples below. This is the MOST IMPORTANT field: it will be used to hard-reject a database match of the wrong type, so accuracy here matters more than any other field.
+- foodType: one of "simple", "processed_single_food", "composite_dish", or "unknown" — see definitions and examples below. This field will be used to hard-reject a database match of the wrong type, so accuracy here matters more than most other fields.
+- coreFoodGerman: the CORE food-identity noun within canonicalGerman — the base food itself, with every descriptive MODIFIER (color, origin/style, state/preparation, brand) stripped away. This is the single most important field: a database candidate whose name contains none of this word's tokens will be HARD-REJECTED, no matter how well it otherwise matches on a shared adjective. Never include a modifier here — only the base noun(s). Examples: "Zwiebel" for "rote Zwiebel" (modifier "rote" excluded), "Gewürzmischung" for "italienische Gewürzmischung" (modifier "italienische" excluded — NOT "italienische Gewürzmischung", NOT "Italian"), "Basilikum" for "getrockneter Basilikum" (modifier "getrocknet" excluded), "Paprika" for "grüne Paprika" (modifier "grüne" excluded), "Brühe" for "Gemüsebrühe" (the compound's head noun — "Gemüse" is the modifier), "Knoblauch" for "Knoblauchzehe"/"Knoblauchpulver" (the food is garlic; "-zehe"/"-pulver" describe the FORM, not a different food). If canonicalGerman IS just the base food with no modifiers (e.g. "Tomate", "Ei", "Salz"), coreFoodGerman equals canonicalGerman. null only if genuinely unclear.
+- coreFoodEnglish: the same core identity in English, following the identical rule — e.g. "onion", "seasoning" (NOT "Italian seasoning"), "basil", "bell pepper", "broth", "garlic". null only if genuinely unclear.
 
 foodType definitions:
 - "simple": a single raw or minimally-prepared ingredient. Examples: tomato, salt, egg, olive oil, red lentils, chicken breast, green bell pepper, coriander (the herb), mint (the herb), water.
@@ -123,7 +135,7 @@ Ingredients:
 ${lines.join("\n")}
 
 Return ONLY a JSON array, one object per ingredient, in this exact shape, no explanation, no markdown:
-[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","category":"...","foodType":"simple"}]`
+[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","category":"...","foodType":"simple","coreFoodGerman":"...","coreFoodEnglish":"..."}]`
 }
 
 async function callLlm(prompt: string): Promise<string | null> {
@@ -200,6 +212,9 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
       logger.info({ foodName: input.foodName, claimedBrand: item.brand }, "Rejected LLM brand claim — not evidenced in structured food name")
     }
 
+    const coreFoodGerman = (item.coreFoodGerman as string | null)?.trim() || null
+    const coreFoodEnglish = (item.coreFoodEnglish as string | null)?.trim() || null
+
     return {
       index: input.index,
       canonicalGerman: (item.canonicalGerman as string).trim() || input.foodName.trim(),
@@ -208,6 +223,8 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
       state: item.state as FoodState,
       category: (item.category as string | null) ?? null,
       foodType: item.foodType as FoodType,
+      coreFoodGerman,
+      coreFoodEnglish,
       route: brand ? "branded" : "generic",
       llmClassified: true,
     }

@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest"
-import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict, inferStateFromName, foodTypeConflict } from "../../src/services/providers/ranking.js"
+import {
+  nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict,
+  inferStateFromName, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment,
+} from "../../src/services/providers/ranking.js"
 
 describe("foodTypeConflict — PRIMARY hard-rejection signal, checked before any lexical score", () => {
   it("rejects a simple query against a composite_dish candidate", () => {
@@ -456,5 +459,160 @@ describe("inferStateFromName — English candidate state inference (USDA)", () =
     // FoodState has no dedicated "pickled" value; grouping it with "cooked" still gets the
     // useful behavior of conflicting with a "raw" query.
     expect(inferStateFromName("Pickled red onion")).toBe("cooked")
+  })
+})
+
+describe("tokenize — German umlaut handling (regression for the NFKD-corruption bug)", () => {
+  it("keeps an umlaut word as one coherent, transliterated token", () => {
+    expect(tokenize("Gewürz")).toEqual(["gewuerz"])
+    expect(tokenize("Öl")).toEqual(["oel"])
+    expect(tokenize("grüne")).toEqual(["gruene"])
+    expect(tokenize("Frühlingszwiebel")).toEqual(["fruehlingszwiebel"])
+    expect(tokenize("Hähnchen")).toEqual(["haehnchen"])
+    expect(tokenize("Käse")).toEqual(["kaese"])
+  })
+
+  it("never splits an umlaut word into fragments the way NFKD-then-strip did", () => {
+    // The bug produced ["gewu", "rz"] for "Gewürz", ["o", "l"] for "Öl", etc.
+    expect(tokenize("Gewürz")).not.toEqual(["gewu", "rz"])
+    expect(tokenize("Öl")).not.toEqual(["o", "l"])
+    expect(tokenize("Käse")).not.toEqual(["ka", "se"])
+  })
+
+  it("still correctly compares an umlaut word against its own compound (German right-headed compounding)", () => {
+    expect(tokenize("Olivenöl")).toEqual(["olivenoel"])
+    expect(tokenize("Olivenöl")[0]).toContain(tokenize("Öl")[0])
+  })
+})
+
+describe("coreIdentityConflict — PRIMARY structural signal: core food noun must be present", () => {
+  it("rejects a candidate whose name contains none of the query's core tokens, regardless of shared adjectives", () => {
+    // Generalizes across every "Italian X" collision found live (Salami/Italian Ice/Creamy
+    // Italian dressing/Focaccia, Italian/Pastry, Italian with cheese) without listing any of them
+    // by name — none of these candidate names contain "seasoning" at all.
+    expect(coreIdentityConflict("seasoning", "Salami, Italian, pork")).toBe(true)
+    expect(coreIdentityConflict("seasoning", "Italian Ice")).toBe(true)
+    expect(coreIdentityConflict("seasoning", "Creamy Italian dressing")).toBe(true)
+    expect(coreIdentityConflict("seasoning", "Focaccia, Italian, plain")).toBe(true)
+    expect(coreIdentityConflict("seasoning", "Pastry, Italian, with cheese")).toBe(true)
+  })
+
+  it("allows a candidate whose name DOES contain the core token", () => {
+    expect(coreIdentityConflict("seasoning", "Italian Seasoning")).toBe(false)
+  })
+
+  it("rejects chili flakes matching onion flakes — different core food, shared form word only", () => {
+    expect(coreIdentityConflict("chili", "Onions, dehydrated flakes")).toBe(true)
+    expect(coreIdentityConflict("chili", "Chili, vegetarian")).toBe(false)
+  })
+
+  it("handles German compounding via substring containment, not exact token equality", () => {
+    // "Speisezwiebel" is one fused token; a core of "Zwiebel" must still be recognized inside it.
+    expect(coreIdentityConflict("Zwiebel", "Speisezwiebel roh")).toBe(false)
+    expect(coreIdentityConflict("Knoblauch", "Knoblauch roh")).toBe(false)
+  })
+
+  it("is permissive when the core is null/empty (LLM disabled/failed) — never blocks everything", () => {
+    expect(coreIdentityConflict(null, "Anything At All")).toBe(false)
+    expect(coreIdentityConflict("", "Anything At All")).toBe(false)
+  })
+
+  it("does not reject on a coincidentally-short core token via substring noise (min length guard)", () => {
+    // A 1-2 letter "core" (malformed LLM output) is too risky to substring-match — permissive.
+    expect(coreIdentityConflict("a", "Completely Unrelated Product")).toBe(false)
+  })
+})
+
+describe("coreIdentityScoreAdjustment — SECONDARY signal: penalize unexplained extra candidate content", () => {
+  it("penalizes a candidate with one unexplained extra word enough to matter", () => {
+    // "Tapioca Garlic" for bare "garlic" — one unexplained word ("tapioca").
+    const adj = coreIdentityScoreAdjustment("garlic", "garlic", "Tapioca Garlic")
+    expect(adj).toBeLessThan(0)
+  })
+
+  it("penalizes a candidate with two unexplained extra words more heavily than one", () => {
+    const oneExtra = coreIdentityScoreAdjustment("onion", "red onion", "Red onion chutney")
+    const twoExtra = coreIdentityScoreAdjustment("bell pepper", "green bell pepper", "Bell Pepper with Blue cheese")
+    expect(twoExtra).toBeLessThan(oneExtra)
+  })
+
+  it("does not penalize generic quality/state descriptors as unexplained extras", () => {
+    const adj = coreIdentityScoreAdjustment("pepper", "red bell pepper", "Peppers, sweet, red, raw")
+    // "sweet" and "raw" are generic descriptors, "red" is the query's own modifier — no real penalty expected.
+    expect(adj).toBeGreaterThanOrEqual(0)
+  })
+
+  it("rewards modifier overlap", () => {
+    const withModifier = coreIdentityScoreAdjustment("onion", "red onion", "Red onion")
+    const withoutModifier = coreIdentityScoreAdjustment("onion", "red onion", "Onion")
+    expect(withModifier).toBeGreaterThanOrEqual(withoutModifier)
+  })
+
+  it("returns 0 (no adjustment) when core is unavailable", () => {
+    expect(coreIdentityScoreAdjustment(null, "anything", "Anything Product")).toBe(0)
+  })
+})
+
+describe("rankCandidates — end-to-end core-identity behavior (all residual live failures from the manual audit)", () => {
+  function candidate(name: string, overrides: Record<string, unknown> = {}) {
+    return { name, brand: null, hasCompleteNutrients: true, foodType: "simple" as const, ...overrides }
+  }
+
+  it("Italian seasoning != Italian pastry", () => {
+    const ranked = rankCandidates("Italian seasoning", null, [candidate("Pastry, Italian, with cheese")], { queryCoreFood: "seasoning" })
+    expect(ranked[0].mismatchReason).toMatch(/core identity conflict/)
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("Italian seasoning != Italian Ice", () => {
+    const ranked = rankCandidates("Italian seasoning", null, [candidate("Italian Ice")], { queryCoreFood: "seasoning" })
+    expect(ranked[0].mismatchReason).toMatch(/core identity conflict/)
+  })
+
+  it("Italian seasoning != an unrelated dressing, unless the query itself is a dressing", () => {
+    const ranked = rankCandidates("Italian seasoning", null, [candidate("Creamy Italian dressing")], { queryCoreFood: "seasoning" })
+    expect(ranked[0].mismatchReason).toMatch(/core identity conflict/)
+
+    const dressingQuery = rankCandidates("Italian dressing", null, [candidate("Creamy Italian dressing")], { queryCoreFood: "dressing" })
+    expect(dressingQuery[0].mismatchReason).toBeNull()
+  })
+
+  it("chili flakes != onion flakes", () => {
+    const ranked = rankCandidates("chili flakes", null, [candidate("Onions, dehydrated flakes")], { queryCoreFood: "chili" })
+    expect(ranked[0].mismatchReason).toMatch(/core identity conflict/)
+  })
+
+  it("dried basil != a pineapple/basil-branded product with a dominant unrelated word", () => {
+    const ranked = rankCandidates("dried basil", null, [candidate("Mr Basil pineapple")], { queryCoreFood: "basil" })
+    // core is present ("basil"), so this isn't a hard core-identity rejection — but "mr"/"pineapple"
+    // are unexplained extra content that must drag the score below acceptance.
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("garlic != an unrelated garlic-containing composite product (Tapioca Garlic)", () => {
+    const ranked = rankCandidates("garlic", null, [candidate("Tapioca Garlic")], { queryCoreFood: "garlic" })
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("green pepper != a pepper-and-cheese appetizer product", () => {
+    const ranked = rankCandidates("green bell pepper", null, [candidate("Bell Pepper with Blue cheese")], { queryCoreFood: "bell pepper" })
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("vegetable broth != a vague generic \"Vegetable\" product", () => {
+    const ranked = rankCandidates("vegetable broth", null, [candidate("Vegetable")], { queryCoreFood: "broth" })
+    expect(ranked[0].mismatchReason).toMatch(/core identity conflict/)
+  })
+
+  it("positive control: a genuinely correct match still clears acceptance with core-identity data present", () => {
+    const ranked = rankCandidates("Italian seasoning", null, [candidate("Italian Seasoning")], { queryCoreFood: "seasoning" })
+    expect(ranked[0].mismatchReason).toBeNull()
+    expect(ranked[0].score).toBeGreaterThanOrEqual(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("positive control: bell pepper still matches its correct USDA candidate (core token present via stemmed containment)", () => {
+    const ranked = rankCandidates("red bell pepper", null, [candidate("Peppers, sweet, red, raw", { dataType: "SR Legacy" })], { queryCoreFood: "bell pepper" })
+    expect(ranked[0].mismatchReason).toBeNull()
+    expect(ranked[0].score).toBeGreaterThanOrEqual(MIN_ACCEPTABLE_SCORE)
   })
 })

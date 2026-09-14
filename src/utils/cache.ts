@@ -4,6 +4,7 @@ import path from "node:path"
 import { config } from "../config.js"
 import type { NutrientSet, ProviderMatch } from "../types.js"
 import { logger } from "./logger.js"
+import { normalizeIdentityText } from "./text-normalize.js"
 
 let db: Database
 let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -129,7 +130,7 @@ export async function initCache(): Promise<void> {
 }
 
 export function normalizeKey(key: string): string {
-  return key.toLowerCase().trim()
+  return normalizeIdentityText(key)
 }
 
 /** Builds the composite cache key for a provider query — food name + brand, so branded and generic lookups never share a cache slot. */

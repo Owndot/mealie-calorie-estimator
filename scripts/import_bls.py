@@ -24,7 +24,6 @@ of the service itself).
 """
 import sqlite3
 import sys
-import unicodedata
 import re
 from pathlib import Path
 
@@ -76,9 +75,15 @@ def mg_to_g(v):
 
 
 def normalize_name(name: str) -> str:
-    """Same normalization family as the TS side's ranking.tokenize()/cache.normalizeKey() —
-    lowercase, diacritics-folded, non-letter/digit collapsed to spaces, for exact-match lookups."""
-    s = unicodedata.normalize("NFKD", name).lower()
+    """Same normalization policy as the TS side's src/utils/text-normalize.ts
+    normalizeIdentityText() — lowercase, umlauts/ss transliterated to ae/oe/ue/ss (NOT Unicode
+    NFKD, which decomposes "o with diaeresis" into a base letter plus a combining mark that then
+    gets silently stripped by the char-class collapse below, corrupting the word — e.g. "Gewuerz"
+    would come out as two garbage fragments instead of one token), then non-letter/digit collapsed
+    to spaces, for exact-match lookups. Keep these two implementations in sync by hand — Python
+    can't import the TS module."""
+    s = name.lower()
+    s = s.replace("ß", "ss").replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
     s = re.sub(r"[^\w\s]", " ", s, flags=re.UNICODE)
     s = re.sub(r"\s+", " ", s).strip()
     return s

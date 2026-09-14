@@ -192,6 +192,8 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     const route = classification?.route ?? "generic"
     const state: FoodState = classification?.state ?? "unknown"
     const foodType = classification?.foodType ?? "unknown"
+    const coreFoodGerman = classification?.coreFoodGerman ?? null
+    const coreFoodEnglish = classification?.coreFoodEnglish ?? null
 
     let grams: number | null = null
     let gramsEstimated = false
@@ -221,7 +223,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     totalKnownWeight += grams
 
     const resolved = await resolveNutrients(
-      { foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand, category: classification?.category ?? null, state, foodType, route },
+      {
+        foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand,
+        category: classification?.category ?? null, state, foodType, coreFoodGerman, coreFoodEnglish, route,
+      },
       route,
     )
 
