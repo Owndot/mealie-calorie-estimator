@@ -159,7 +159,7 @@ async function classify(key: string, input: unknown): Promise<SemanticInterpreta
   try { return await request } finally { pending.delete(key) }
 }
 
-export async function interpretSemanticIngredient(ingredient: MealieIngredient, instructions: MealieRecipe["recipeInstructions"] = []): Promise<IngredientContext | null> {
+export async function interpretSemanticIngredient(ingredient: MealieIngredient, instructions: MealieRecipe["recipeInstructions"] = [], allowLlm = true): Promise<IngredientContext | null> {
   const context = interpretIngredient(ingredient, instructions)
   if (context.state === "ambiguous") return null
   const exact = matchGenericFood(context, true)
@@ -188,7 +188,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
     requiresPreservationSemantics,
     localProfile: exact ? { name: exact.name, state: exact.state, confidence: exact.confidence, profileId: exact.entry.fdcId } : null,
     localResolution,
-    classificationRequired: !localResolution && Boolean(config.llm.enabled && config.llm.apiKey),
+    classificationRequired: !localResolution && allowLlm && Boolean(config.llm.enabled && config.llm.apiKey),
   }, "Ingredient routing decision")
   if (localResolution) {
     const interpreted = { ...context, canonicalName: exact?.name === "rice" && context.canonicalName === "basmati rice" ? "basmati rice" : exact?.name ?? context.canonicalName,
@@ -199,7 +199,7 @@ export async function interpretSemanticIngredient(ingredient: MealieIngredient, 
     return interpreted
   }
   // Without an enabled classifier preserve the existing strict, literal OFF path.
-  if (!config.llm.enabled || !config.llm.apiKey) return {
+  if (!allowLlm || !config.llm.enabled || !config.llm.apiKey) return {
     ...context, ...(brandHint || unresolvedDetails ? { generic: false, canonicalName: normalizeFoodText(`${context.canonicalName} ${remainingDetails}`),
       query: `${context.query} ${remainingDetails}`.trim() } : {}),
     interpretationSource: "unresolved", interpretationConfidence: 0.85,

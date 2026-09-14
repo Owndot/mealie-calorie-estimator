@@ -123,7 +123,7 @@ describe("partial-estimate safety", () => {
     await estimateAndTag(input, "complete-hash")
     const sent = vi.mocked(patchRecipe).mock.calls[0][1]
     expect(sent.nutrition?.calories).toBe("365")
-    expect(sent.extras).toMatchObject({ calorie_estimator_partial: "false", calorie_estimator_nutrition_status: "complete", calorie_estimator_hash: "complete-hash", calorie_estimator_warnings: "[]", calorie_estimator_partial_total_kcal: "", calorie_estimator_unmatched: "[]", custom: "preserved" })
+    expect(sent.extras).toMatchObject({ calorie_estimator_partial: "false", calorie_estimator_nutrition_status: "complete", calorie_estimator_hash: "complete-hash", calorie_estimator_warnings: JSON.stringify(["Unknown recipe nutrients omitted: transFatG"]), calorie_estimator_partial_total_kcal: "", calorie_estimator_unmatched: "[]", custom: "preserved" })
     expect(getOrCreateTags).toHaveBeenCalledOnce()
   })
 

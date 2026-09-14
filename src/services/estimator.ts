@@ -72,6 +72,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   const matchedIngredients: IngredientMatch[] = []
   const unmatchedNames: string[] = []
   let totals = emptyAmounts()
+  const incompleteNutrients = new Set<keyof typeof totals>()
   const warnings: string[] = []
   const normalized = await normalizeRecipe(recipe)
   for (const [index, ing] of recipe.recipeIngredient.entries()) {
@@ -105,7 +106,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
         warnings.push(`Skipped ${reason}: ${unmatchedName}`)
         continue
       }
-      const interpretedContext = row ? normalizedContext(row, ing) : await interpretSemanticIngredient(ing, recipe.recipeInstructions)
+      const interpretedContext = row ? normalizedContext(row, ing) : await interpretSemanticIngredient(ing, recipe.recipeInstructions, !config.llm.normalizeRecipe)
       const context = interpretedContext ?? buildUnresolvedFoodContext(interpretIngredient(ing, recipe.recipeInstructions))
       logger.debug({
         originalName: foodName,
@@ -163,6 +164,9 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       }
       logger.debug({ originalName: foodName, interpretationStatus: context.interpretationSource, weightResolutionStatus: weightEstimated ? "llm-estimated" : "deterministic", nutrientResolutionStatus: source, finalRejectionReason: null }, "Ingredient resolution status")
       const contribution = amountsFromProfile(nutrients, grams)
+      for (const key of Object.keys(contribution) as Array<keyof typeof totals>) {
+        if (contribution[key] == null) incompleteNutrients.add(key)
+      }
       totals = addAmounts(totals, contribution)
       matchedIngredients.push({ name: foodName, grams, matched: true, nutrients, llmEstimated, estimatedAmount: weightEstimated, originalSource: resolved?.originalSource, resolvedAt: resolved?.timestamp, source, context, productName, confidence, interpretationConfidence, sourceConfidence, finalMatchConfidence, weightConfidence, profileId: resolved?.profileId, reason })
       logger.debug({ originalName: foodName, canonicalFood: context.canonicalName, interpretationSource: context.interpretationSource, category: context.category, normalizedQuery: context.query, state: context.state, stateReason: context.reason,
@@ -178,6 +182,8 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       logger.warn({ error, name }, "Continuing after ingredient failure")
     }
   }
+  for (const key of incompleteNutrients) totals[key] = null
+  if (incompleteNutrients.size) warnings.push(`Unknown recipe nutrients omitted: ${[...incompleteNutrients].join(", ")}`)
   const servings = resolveServings(recipe)
   const yieldServings = parseYield(recipe.recipeYield)
   if (servings && yieldServings && servings !== yieldServings) warnings.push("recipeServings takes precedence over conflicting recipeYield")

@@ -2,12 +2,12 @@ import crypto from "node:crypto"
 import { config } from "../config.js"
 import type { MealieIngredient, MealieRecipe } from "../types.js"
 import { contextForName, interpretIngredient, NUTRITION_VERSION, type IngredientContext } from "./ingredient-context.js"
-import { convertToGrams, resolveUnitName } from "./unit-converter.js"
+import { convertToGrams, normalizeUnitName, resolveUnitName } from "./unit-converter.js"
 import { getCachedInterpretation, setCachedInterpretation } from "../utils/cache.js"
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import { logger } from "../utils/logger.js"
 
-export const NORMALIZATION_VERSION = "recipe-normalization-v1"
+export const NORMALIZATION_VERSION = "recipe-normalization-v2"
 export interface NormalizedIngredient {
   index: number
   original: string
@@ -69,6 +69,11 @@ export function normalizedGrams(row: NormalizedIngredient, ing: MealieIngredient
     const grams = convertToGrams(ing.quantity, { ...ing.unit!, standardQuantity: null, standardUnit: null })
     if (grams !== null) return { grams, estimated: false }
     return { grams: NaN, estimated: false }
+  }
+  if (ing.quantity != null && ing.unit?.standardQuantity != null && ing.unit.standardUnit
+    && ["gram", "kilogram", "milligram", "ounce", "pound"].includes(normalizeUnitName(ing.unit.standardUnit))) {
+    const grams = convertToGrams(ing.quantity, ing.unit, contextForName(row.name))
+    return { grams: grams ?? NaN, estimated: false }
   }
   const explicitMass = ingredientText(ing).match(/^\s*(\d+(?:[.,]\d+)?)\s*(kg|mg|g)\b/i)
   if (explicitMass) {
