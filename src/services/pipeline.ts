@@ -1,5 +1,5 @@
 import { getRecipe, getRecipeHouseholdId, patchRecipe } from "./mealie-client.js"
-import { computeIngredientHash, hasManualCalories, buildManualAckPatch, shouldEstimate } from "./estimator.js"
+import { computeIngredientHash, hasManualCalories, hasManuallyModifiedNutrition, buildManualAckPatch, shouldEstimate } from "./estimator.js"
 import { perServingFromRecipeNutrition, tagsAreComplete, resolveAndMergeTags, estimateAndTag } from "./tagging.js"
 import { logger } from "../utils/logger.js"
 import type { Completeness } from "../types.js"
@@ -57,10 +57,17 @@ export async function runEstimationPipeline(slug: string, opts: PipelineOptions 
 
   // Re-estimation is about to happen, either because ingredients changed or force was
   // requested. Manual protection applies either way — force alone never overwrites a
-  // genuinely manual entry; only the separate overrideManual flag can.
-  if (hasManualCalories(recipe) && !opts.overrideManual) {
-    logger.info({ slug, calories: recipe.nutrition?.calories }, "Manual calories detected, acknowledging without overwriting")
-    const patch = buildManualAckPatch(recipe, hash)
+  // genuinely manual entry; only the separate overrideManual flag can. Two distinct manual
+  // scenarios are protected: nutrition that was never touched by the estimator at all, and
+  // nutrition the estimator DID write before but whose fingerprint no longer matches — i.e. a
+  // person edited it by hand after the last estimate.
+  const neverEstimated = hasManualCalories(recipe)
+  const modifiedAfterEstimate = !neverEstimated && hasManuallyModifiedNutrition(recipe)
+
+  if ((neverEstimated || modifiedAfterEstimate) && !opts.overrideManual) {
+    const reason = modifiedAfterEstimate ? "modified-after-estimate" : "never-estimated"
+    logger.info({ slug, calories: recipe.nutrition?.calories, reason }, "Manual nutrition detected, acknowledging without overwriting")
+    const patch = buildManualAckPatch(recipe, hash, reason)
     await patchRecipe(slug, patch, householdId)
     return { status: "manual-preserved" }
   }

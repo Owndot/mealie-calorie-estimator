@@ -143,7 +143,77 @@ describe("runEstimationPipeline", () => {
 
       const outcome = await runEstimationPipeline("test-recipe", { force: true, overrideManual: true })
       expect(outcome.status).toBe("estimated")
-      expect(patchCalls[0].patch.nutrition?.calories).toBeDefined()
+      // Proves the real estimate path ran (and so the manual "500" was not simply left in
+      // place) rather than the manual-ack path: calorie_estimator_status is only ever set by
+      // buildNutritionPatch, never by buildManualAckPatch.
+      expect(patchCalls[0].patch.extras?.calorie_estimator_status).toBeDefined()
+      expect(patchCalls[0].patch.extras?.calorie_estimator_note).toBeUndefined()
+    })
+  })
+
+  describe("manual-edit-after-estimate protection (fingerprint-based)", () => {
+    it("protects nutrition that was hand-edited after a previous estimate, even though a hash is present", async () => {
+      const { computeNutritionFingerprint } = await import("../src/services/nutrition-format.js")
+
+      const estimatorWrittenNutrition = {
+        calories: "350", proteinContent: null, carbohydrateContent: null, fatContent: null,
+        saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null,
+        fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null,
+      }
+      const writtenFingerprint = computeNutritionFingerprint({
+        kcalPer100g: 350, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
+        saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
+        fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
+      })
+
+      mockRecipe = baseRecipe()
+      const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      const { computeIngredientHash } = await import("../src/services/estimator.js")
+
+      const hash = computeIngredientHash(mockRecipe)
+      mockRecipe = {
+        ...mockRecipe,
+        // A person changed the calorie value by hand after the estimator last wrote 350.
+        nutrition: { ...estimatorWrittenNutrition, calories: "9999" },
+        extras: { calorie_estimator_hash: hash, calorie_estimator_nutrition_fingerprint: writtenFingerprint },
+      }
+
+      // force ingredient "change" by using a different hash won't apply here — instead force=true
+      // is used directly to attempt re-estimation despite the hash technically being unchanged.
+      const outcome = await runEstimationPipeline("test-recipe", { force: true })
+
+      expect(outcome.status).toBe("manual-preserved")
+      expect(patchCalls[0].patch.nutrition).toEqual({})
+      expect(patchCalls[0].patch.extras?.calorie_estimator_note).toContain("edited after estimation")
+    })
+
+    it("does NOT protect nutrition whose fingerprint still matches the estimator's last write", async () => {
+      const { computeNutritionFingerprint } = await import("../src/services/nutrition-format.js")
+
+      const estimatorWrittenNutrition = {
+        calories: "350", proteinContent: null, carbohydrateContent: null, fatContent: null,
+        saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null,
+        fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null,
+      }
+      const writtenFingerprint = computeNutritionFingerprint({
+        kcalPer100g: 350, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
+        saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
+        fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
+      })
+
+      mockRecipe = baseRecipe()
+      const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      const { computeIngredientHash } = await import("../src/services/estimator.js")
+
+      const hash = computeIngredientHash(mockRecipe)
+      mockRecipe = {
+        ...mockRecipe,
+        nutrition: estimatorWrittenNutrition, // untouched since the estimator wrote it
+        extras: { calorie_estimator_hash: hash, calorie_estimator_nutrition_fingerprint: writtenFingerprint },
+      }
+
+      const outcome = await runEstimationPipeline("test-recipe", { force: true })
+      expect(outcome.status).toBe("estimated") // not manual-preserved — safe to overwrite
     })
   })
 })

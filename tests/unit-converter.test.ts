@@ -15,19 +15,14 @@ function unit(overrides: Partial<MealieUnit> = {}): MealieUnit {
 }
 
 describe("convertToGrams", () => {
-  it("uses standardQuantity when available (Mealie conversion takes precedence) and marks it not estimated", () => {
-    const u = unit({ name: "cup", standardQuantity: 240, standardUnit: "ml" })
-    const result = convertToGrams(2, u)
-    expect(result?.grams).toBe(480)
+  it("uses standardQuantity with a mass standardUnit (Mealie conversion takes precedence) and marks it not estimated", () => {
+    const u = unit({ name: "custom", standardQuantity: 100, standardUnit: "g" })
+    const result = convertToGrams(3, u)
+    expect(result?.grams).toBe(300)
     expect(result?.estimated).toBe(false)
   })
 
-  it("uses standardQuantity with g unit", () => {
-    const u = unit({ name: "custom", standardQuantity: 100, standardUnit: "g" })
-    expect(convertToGrams(3, u)?.grams).toBe(300)
-  })
-
-  it("uses fixed conversion for food-independent units, not estimated", () => {
+  it("uses fixed conversion for food-independent MASS units, not estimated", () => {
     expect(convertToGrams(1, unit({ name: "kg" }))).toEqual({ grams: 1000, estimated: false })
     expect(convertToGrams(1, unit({ name: "oz" }))?.grams).toBe(28.35)
     expect(convertToGrams(1, unit({ name: "lb" }))?.grams).toBe(453.592)
@@ -42,9 +37,56 @@ describe("convertToGrams", () => {
     expect(convertToGrams(1, null)).toBeNull()
   })
 
-  it("handles ml to grams via standardUnit", () => {
-    const u = unit({ name: "liter", standardQuantity: 1, standardUnit: "l" })
-    expect(convertToGrams(2, u)?.grams).toBe(2000)
+  describe("ml/l are volume units, NOT fixed grams — density depends on the food", () => {
+    it("returns null without a food name — never silently assumes density = 1", () => {
+      expect(convertToGrams(200, unit({ name: "ml", abbreviation: "" }))).toBeNull()
+      expect(convertToGrams(1, unit({ name: "l", abbreviation: "" }))).toBeNull()
+    })
+
+    it("200 ml water and 200 ml olive oil resolve to different gram weights", () => {
+      const water = convertToGrams(200, unit({ name: "ml", abbreviation: "" }), "Wasser")
+      const oil = convertToGrams(200, unit({ name: "ml", abbreviation: "" }), "Olivenöl")
+
+      expect(water?.grams).not.toBeNull()
+      expect(oil?.grams).not.toBeNull()
+      expect(water!.grams).not.toBe(oil!.grams)
+      expect(water!.grams).toBeCloseTo(200, 0) // water ≈ 1 g/ml
+      expect(oil!.grams).toBeLessThan(water!.grams) // olive oil is less dense than water
+      expect(water?.estimated).toBe(true)
+      expect(oil?.estimated).toBe(true)
+    })
+
+    it("the original quantity is never mutated by the density lookup", () => {
+      const quantity = 200
+      const waterUnit = unit({ name: "ml", abbreviation: "" })
+      convertToGrams(quantity, waterUnit, "Olivenöl")
+      expect(quantity).toBe(200)
+      expect(waterUnit.name).toBe("ml")
+    })
+
+    it("scales linearly with quantity for the same food", () => {
+      const single = convertToGrams(1, unit({ name: "ml", abbreviation: "" }), "Olivenöl")!.grams
+      const hundred = convertToGrams(100, unit({ name: "ml", abbreviation: "" }), "Olivenöl")!.grams
+      expect(hundred).toBeCloseTo(single * 100, 5)
+    })
+
+    it("l (liter) converts through the same density path as ml, scaled by 1000", () => {
+      const literResult = convertToGrams(1, unit({ name: "l", abbreviation: "" }), "Milch")
+      const mlResult = convertToGrams(1000, unit({ name: "ml", abbreviation: "" }), "Milch")
+      expect(literResult?.grams).toBeCloseTo(mlResult!.grams, 5)
+    })
+
+    it("returns null for an unrecognized food's volume rather than guessing a density — caller must fall through to LLM", () => {
+      expect(convertToGrams(200, unit({ name: "ml", abbreviation: "" }), "vollkommen-unbekannte-fluessigkeit-xyz")).toBeNull()
+    })
+
+    it("a standardUnit of ml/l (Mealie's own conversion metadata) also requires food density, not a fixed 1:1", () => {
+      const cupInMl = unit({ name: "cup", standardQuantity: 240, standardUnit: "ml", abbreviation: "" })
+      expect(convertToGrams(2, cupInMl)).toBeNull() // no food name given
+      const result = convertToGrams(2, cupInMl, "Wasser")
+      expect(result?.grams).toBeCloseTo(480, 0)
+      expect(result?.estimated).toBe(true)
+    })
   })
 
   describe("food-dependent units (EL/TL/cup) require a food name and resolve differently per food", () => {

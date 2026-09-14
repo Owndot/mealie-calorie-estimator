@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest"
+import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
 import { config } from "../src/config.js"
+import { initCache } from "../src/utils/cache.js"
+import { mockUsdaProvider } from "./helpers/mock-usda.js"
 import type { MealieRecipe, MealieIngredient, MealieRecipePatch } from "../src/types.js"
 
 const patchCalls: { slug: string; patch: MealieRecipePatch }[] = []
@@ -42,15 +44,29 @@ function recipe(slug: string, servings: number, ingredients: MealieIngredient[])
   }
 }
 
+beforeAll(async () => {
+  await initCache()
+})
+
 beforeEach(() => {
   patchCalls.length = 0
   config.llm.enabled = false
   config.llm.apiKey = ""
   config.usda.apiKey = ""
+  vi.restoreAllMocks()
 })
 
 describe("realistic German recipes — end to end through the full pipeline", () => {
   it("Kartoffelsuppe (potato soup): resolves all generic ingredients, divides by recipeServings only, writes only nutrition/extras/tags", async () => {
+    config.usda.apiKey = "test-key"
+    mockUsdaProvider({
+      Kartoffel: { kcal: 77, protein: 2, carbs: 17, fat: 0.1 },
+      Zwiebel: { kcal: 40, protein: 1.1, carbs: 9.3, fat: 0.1 },
+      Knoblauch: { kcal: 149, protein: 6.4, carbs: 33, fat: 0.5 },
+      Sahne: { kcal: 292, protein: 2.1, carbs: 3.4, fat: 30 },
+      Salz: { kcal: 0, protein: 0, carbs: 0, fat: 0, sodiumMg: 38750 },
+    })
+
     const { getRecipe } = await import("../src/services/mealie-client.js")
     ;(getRecipe as any).mockResolvedValue(
       recipe("kartoffelsuppe", 4, [
@@ -104,6 +120,12 @@ describe("realistic German recipes — end to end through the full pipeline", ()
   })
 
   it("Hähnchen mit Reis: sodium is written to Mealie in milligrams, not raw internal grams", async () => {
+    config.usda.apiKey = "test-key"
+    mockUsdaProvider({
+      Hähnchenbrust: { kcal: 165, protein: 31, carbs: 0, fat: 3.6, sodiumMg: 74 },
+      Reis: { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3, sodiumMg: 1 },
+    })
+
     const { getRecipe } = await import("../src/services/mealie-client.js")
     ;(getRecipe as any).mockResolvedValue(
       recipe("haehnchen-mit-reis", 2, [
@@ -124,6 +146,12 @@ describe("realistic German recipes — end to end through the full pipeline", ()
   })
 
   it("Salzkartoffeln with an unresolvable exotic main ingredient: nutrition is withheld, not silently reported as complete", async () => {
+    config.usda.apiKey = "test-key"
+    // "vollkommen-unbekannte-zutat-xyz" deliberately has no USDA match — Kartoffel does, and
+    // legitimately resolves, so the withholding is driven by the unresolved 600g, not by
+    // everything failing to resolve.
+    mockUsdaProvider({ Kartoffel: { kcal: 77, protein: 2, carbs: 17, fat: 0.1 } })
+
     const { getRecipe } = await import("../src/services/mealie-client.js")
     ;(getRecipe as any).mockResolvedValue(
       recipe("salzkartoffeln-exotisch", 4, [
@@ -138,5 +166,8 @@ describe("realistic German recipes — end to end through the full pipeline", ()
     const patch = patchCalls[0].patch
     expect(patch.nutrition).toEqual({})
     expect(patch.extras?.calorie_estimator_status).toBe("withheld")
+
+    const provenance = JSON.parse(patch.extras!.calorie_estimator_provenance)
+    expect(provenance.find((p: { name: string }) => p.name === "Kartoffel").matched).toBe(true)
   })
 })

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { computeIngredientHash, parseYield, buildNutritionPatch, hasManualCalories, buildManualAckPatch } from "../src/services/estimator.js"
-import type { MealieRecipe, EstimateResult, NutrientSet } from "../src/types.js"
+import { computeIngredientHash, parseYield, buildNutritionPatch, hasManualCalories, hasManuallyModifiedNutrition, buildManualAckPatch } from "../src/services/estimator.js"
+import { computeNutritionFingerprint } from "../src/services/nutrition-format.js"
+import type { MealieRecipe, EstimateResult, NutrientSet, MealieNutrition } from "../src/types.js"
 
 function makeRecipe(overrides: Partial<MealieRecipe> = {}): MealieRecipe {
   return {
@@ -266,8 +267,8 @@ describe("buildNutritionPatch", () => {
         {
           name: "Mehl", canonicalName: "Mehl", brand: null, route: "generic",
           grams: 100, gramsEstimated: false, matched: true,
-          nutrients: n(364), provider: "local-generic", providerId: "Mehl",
-          confidence: 0.7, fallbackStatus: "local-generic", llmParticipated: false,
+          nutrients: n(364), provider: "usda", providerId: "Mehl",
+          confidence: 0.7, fallbackStatus: "usda", llmParticipated: false,
         },
       ],
       completeness: "complete",
@@ -277,7 +278,7 @@ describe("buildNutritionPatch", () => {
     const patch = buildNutritionPatch(result, "prov-hash", "2 servings")
     const provenance = JSON.parse(patch.extras.calorie_estimator_provenance)
     expect(provenance).toHaveLength(1)
-    expect(provenance[0]).toMatchObject({ name: "Mehl", provider: "local-generic", confidence: 0.7, matched: true })
+    expect(provenance[0]).toMatchObject({ name: "Mehl", provider: "usda", confidence: 0.7, matched: true })
   })
 })
 
@@ -312,16 +313,86 @@ describe("hasManualCalories", () => {
   })
 })
 
+describe("hasManuallyModifiedNutrition — detects a hand-edit of previously estimator-written nutrition", () => {
+  function estimatorWrittenNutrition(): MealieNutrition {
+    return {
+      calories: "350", proteinContent: "10", carbohydrateContent: "40", fatContent: "15",
+      saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null,
+      fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null,
+    }
+  }
+
+  function fingerprintFor(nutrition: MealieNutrition): string {
+    return computeNutritionFingerprint(n(Number(nutrition.calories), {
+      proteinPer100g: Number(nutrition.proteinContent), carbsPer100g: Number(nutrition.carbohydrateContent), fatPer100g: Number(nutrition.fatContent),
+    }))
+  }
+
+  it("returns false when nutrition still matches the fingerprint the estimator wrote", () => {
+    const nutrition = estimatorWrittenNutrition()
+    const recipe = makeRecipe({
+      nutrition,
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: fingerprintFor(nutrition) },
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(false)
+  })
+
+  it("returns true when current nutrition differs from the estimator-written fingerprint", () => {
+    const written = estimatorWrittenNutrition()
+    const recipe = makeRecipe({
+      nutrition: { ...written, calories: "999" }, // a person changed the calorie value by hand
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: fingerprintFor(written) },
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(true)
+  })
+
+  it("returns false (conservative default) when there is no stored fingerprint, even with a hash present", () => {
+    const recipe = makeRecipe({
+      nutrition: estimatorWrittenNutrition(),
+      extras: { calorie_estimator_hash: "h1" }, // pre-upgrade write, no fingerprint recorded yet
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(false)
+  })
+
+  it("returns false when there is no hash at all (that's hasManualCalories' concern, not this one)", () => {
+    const recipe = makeRecipe({
+      nutrition: estimatorWrittenNutrition(),
+      extras: {},
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(false)
+  })
+
+  it("detects a person manually adding nutrition to a recipe the estimator had left withheld (all-null fingerprint)", () => {
+    const emptyFingerprint = computeNutritionFingerprint(n(null, {
+      proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
+    }))
+    const recipe = makeRecipe({
+      nutrition: { calories: "500", proteinContent: null, carbohydrateContent: null, fatContent: null, saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null, fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null },
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: emptyFingerprint },
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(true)
+  })
+})
+
 describe("buildManualAckPatch", () => {
   it("sets hash and note, leaves nutrition untouched", () => {
     const recipe = makeRecipe({
       nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
       extras: {},
     })
-    const patch = buildManualAckPatch(recipe, "manual-hash")
+    const patch = buildManualAckPatch(recipe, "manual-hash", "never-estimated")
 
     expect(patch.nutrition).toEqual({})
     expect(patch.extras.calorie_estimator_hash).toBe("manual-hash")
     expect(patch.extras.calorie_estimator_note).toBe("Manual — preserved existing calorie entry")
+  })
+
+  it("uses a different note for nutrition modified after an earlier estimate", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: { calorie_estimator_hash: "old-hash" },
+    })
+    const patch = buildManualAckPatch(recipe, "manual-hash", "modified-after-estimate")
+    expect(patch.extras.calorie_estimator_note).toContain("edited after estimation")
   })
 })

@@ -29,7 +29,7 @@ function match(overrides: Partial<ProviderMatch> = {}): ProviderMatch {
     canonicalName: "Mehl",
     brand: null,
     state: "unknown",
-    provider: "local-generic",
+    provider: "usda",
     providerId: "Mehl",
     productName: "Mehl",
     confidence: 0.7,
@@ -50,20 +50,20 @@ describe("cache", () => {
   describe("provider match cache", () => {
     it("stores and retrieves a provider match", () => {
       const key = buildQueryKey("flour", null)
-      setCachedProviderMatch("local-generic", key, match())
-      const cached = getCachedProviderMatch("local-generic", key)
+      setCachedProviderMatch("usda", key, match())
+      const cached = getCachedProviderMatch("usda", key)
       expect(cached?.nutrients.kcalPer100g).toBe(364)
       expect(cached?.canonicalName).toBe("Mehl")
     })
 
     it("is case-insensitive via buildQueryKey", () => {
       const key = buildQueryKey("FLOUR", null)
-      setCachedProviderMatch("local-generic", key, match())
-      expect(getCachedProviderMatch("local-generic", buildQueryKey("flour", null))?.nutrients.kcalPer100g).toBe(364)
+      setCachedProviderMatch("usda", key, match())
+      expect(getCachedProviderMatch("usda", buildQueryKey("flour", null))?.nutrients.kcalPer100g).toBe(364)
     })
 
     it("returns undefined for uncached queries", () => {
-      expect(getCachedProviderMatch("local-generic", buildQueryKey("nonexistent-food", null))).toBeUndefined()
+      expect(getCachedProviderMatch("usda", buildQueryKey("nonexistent-food", null))).toBeUndefined()
     })
 
     it("does not poison cache between a generic and branded lookup of the same food name", () => {
@@ -71,20 +71,20 @@ describe("cache", () => {
       const brandedKey = buildQueryKey("Joghurt", "Danone")
       expect(genericKey).not.toBe(brandedKey)
 
-      setCachedProviderMatch("local-generic", genericKey, match({ brand: null, confidence: 0.7 }))
+      setCachedProviderMatch("usda", genericKey, match({ brand: null, confidence: 0.7 }))
       setCachedProviderMatch("off", brandedKey, match({ brand: "Danone", confidence: 0.9, provider: "off" }))
 
-      expect(getCachedProviderMatch("local-generic", genericKey)?.brand).toBeNull()
+      expect(getCachedProviderMatch("usda", genericKey)?.brand).toBeNull()
       expect(getCachedProviderMatch("off", brandedKey)?.brand).toBe("Danone")
     })
 
     it("keeps different providers' cache entries for the same query key independent", () => {
       const key = buildQueryKey("Tomate", null)
-      setCachedProviderMatch("local-generic", key, match({ provider: "local-generic", confidence: 0.7 }))
-      setCachedProviderMatch("usda", key, match({ provider: "usda", confidence: 0.85 }))
+      setCachedProviderMatch("usda", key, match({ provider: "usda", confidence: 0.7 }))
+      setCachedProviderMatch("off", key, match({ provider: "off", confidence: 0.85 }))
 
-      expect(getCachedProviderMatch("local-generic", key)?.confidence).toBe(0.7)
-      expect(getCachedProviderMatch("usda", key)?.confidence).toBe(0.85)
+      expect(getCachedProviderMatch("usda", key)?.confidence).toBe(0.7)
+      expect(getCachedProviderMatch("off", key)?.confidence).toBe(0.85)
     })
   })
 
@@ -122,7 +122,7 @@ describe("cache", () => {
   })
 
   it("reports cache stats", () => {
-    setCachedProviderMatch("local-generic", buildQueryKey("stats-food", null), match())
+    setCachedProviderMatch("usda", buildQueryKey("stats-food", null), match())
     markProviderMiss("off", buildQueryKey("stats-miss", null))
     const stats = getCacheStats()
     expect(stats.providerMatches).toBeGreaterThan(0)
@@ -131,7 +131,7 @@ describe("cache", () => {
 
   it("survives a flush + reload cycle (container restart)", async () => {
     const key = buildQueryKey("restart-test-food", null)
-    setCachedProviderMatch("local-generic", key, match({ canonicalName: "RestartFood" }))
+    setCachedProviderMatch("usda", key, match({ canonicalName: "RestartFood" }))
     flushCache()
 
     expect(fs.existsSync(TEST_DB)).toBe(true)
@@ -145,7 +145,7 @@ describe("cache", () => {
     const SQL = await initSqlJs()
     const reloaded = new SQL.Database(buffer)
     const stmt = reloaded.prepare("SELECT canonical_name FROM provider_match_cache WHERE provider = ? AND query_key = ?")
-    stmt.bind(["local-generic", key])
+    stmt.bind(["usda", key])
     expect(stmt.step()).toBe(true)
     expect((stmt.getAsObject() as { canonical_name: string }).canonical_name).toBe("RestartFood")
     stmt.free()
@@ -154,14 +154,14 @@ describe("cache", () => {
 
   it("a fresh module instance calling initCache() against the same file (a real process restart) reads back prior writes", async () => {
     const key = buildQueryKey("true-restart-food", null)
-    setCachedProviderMatch("local-generic", key, match({ canonicalName: "TrueRestartFood" }))
+    setCachedProviderMatch("usda", key, match({ canonicalName: "TrueRestartFood" }))
     flushCache()
 
     vi.resetModules()
     const freshCacheModule = await import("../src/utils/cache.js")
     await freshCacheModule.initCache()
 
-    const reloadedMatch = freshCacheModule.getCachedProviderMatch("local-generic", key)
+    const reloadedMatch = freshCacheModule.getCachedProviderMatch("usda", key)
     expect(reloadedMatch?.canonicalName).toBe("TrueRestartFood")
   })
 })

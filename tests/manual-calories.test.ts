@@ -52,7 +52,7 @@ describe("Manual calories flow", () => {
       },
     })
     const hash = computeIngredientHash(recipe)
-    const patch = buildManualAckPatch(recipe, hash)
+    const patch = buildManualAckPatch(recipe, hash, "never-estimated")
 
     expect(patch.nutrition).toEqual({}) // calories unchanged
     expect(patch.extras.calorie_estimator_hash).toBe(hash)

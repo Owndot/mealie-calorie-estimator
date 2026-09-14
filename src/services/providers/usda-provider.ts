@@ -92,7 +92,7 @@ function extractNutrients(food: FdcFood): NutrientSet {
     fiberPer100g: findNutrient(food, NUTRIENT_IDS.fiber),
     sugarPer100g: findNutrient(food, NUTRIENT_IDS.sugar),
     // USDA reports sodium/cholesterol in mg; NutrientSet keeps the same grams/100g convention
-    // as every other provider (OFF, local-generic), so convert here at the provider boundary.
+    // as every other provider (OFF), so convert here at the provider boundary.
     sodiumPer100g: sodiumMg !== null ? sodiumMg / 1000 : null,
     cholesterolPer100g: cholesterolMg !== null ? cholesterolMg / 1000 : null,
   }

@@ -1,9 +1,9 @@
 import type { MealieUnit } from "../types.js"
-import { estimateSpoonCupGrams, estimatePieceWeightGrams } from "./food-density.js"
+import { estimateSpoonCupGrams, estimatePieceWeightGrams, estimateVolumeGrams } from "./food-density.js"
 
 export interface GramConversion {
   grams: number
-  /** true when a food-specific density/piece-weight table was used (not an exact structured/fixed conversion). */
+  /** true when a food-specific density/piece-weight table (or an LLM estimate) was used — not an exact structured/fixed mass conversion. */
   estimated: boolean
 }
 
@@ -11,8 +11,12 @@ interface ConversionEntry {
   gramsPerUnit: number
 }
 
-/** Units whose gram weight is fixed regardless of what food is being measured. */
-const FIXED_UNITS: Record<string, ConversionEntry> = {
+/**
+ * Units whose gram weight is fixed regardless of what food is being measured. Only true MASS
+ * units belong here (g/kg/mg/oz/lb) — ml/l are volume units and are handled separately via
+ * food-specific density, since their gram weight is not constant across foods.
+ */
+const FIXED_MASS_UNITS: Record<string, ConversionEntry> = {
   gram: { gramsPerUnit: 1 },
   grams: { gramsPerUnit: 1 },
   gramm: { gramsPerUnit: 1 },
@@ -36,15 +40,8 @@ const FIXED_UNITS: Record<string, ConversionEntry> = {
   dashes: { gramsPerUnit: 0.3 },
 }
 
-/** Liquid volume units, assumed water-density (1ml = 1g) unless a food-specific density applies. */
-const LIQUID_VOLUME_UNITS: Record<string, ConversionEntry> = {
-  ml: { gramsPerUnit: 1 },
-  milliliter: { gramsPerUnit: 1 },
-  milliliters: { gramsPerUnit: 1 },
-  l: { gramsPerUnit: 1000 },
-  liter: { gramsPerUnit: 1000 },
-  liters: { gramsPerUnit: 1000 },
-}
+/** Volume units — NOT fixed-gram. Resolved via food-specific density (see food-density.ts); never assume density = 1. */
+const VOLUME_UNIT_NAMES = new Set(["ml", "milliliter", "milliliters", "l", "liter", "liters"])
 
 /** Units that depend on the food being measured — resolved via the density module, never a single global constant. */
 const SPOON_CUP_UNIT_NAMES = new Set([
@@ -64,16 +61,28 @@ const PIECE_PACKAGE_UNIT_NAMES = new Set([
 
 /**
  * Resolves an ingredient quantity+unit to grams. Conversion priority (per the skill):
- * 1. explicit structured Mealie conversion (unit.standardQuantity/standardUnit)
- * 2. deterministic unit conversion (g/kg/ml/l/oz/lb/...)
- * 3. food-specific density (EL/TL/cup — 1 EL oil != 1 EL flour)
+ * 1. explicit structured Mealie conversion (unit.standardQuantity/standardUnit) — mass units
+ *    resolve deterministically here; if the standard unit is a volume (ml/l), it still needs
+ *    food-specific density, same as priority 3 below.
+ * 2. deterministic mass-unit conversion (g/kg/mg/oz/lb/...)
+ * 3. food-specific density (EL/TL/cup/ml/l — 1 EL/ml oil != 1 EL/ml flour; never assumed = 1)
  * 4. known piece/package weight (Stück/Dose/Glas/Bund/Zehe/...)
  * LLM estimation (priority 5) is the caller's responsibility when this returns null.
  */
 export function convertToGrams(quantity: number, unit: MealieUnit | null, canonicalFoodName?: string): GramConversion | null {
   if (unit?.standardQuantity != null && unit.standardUnit != null) {
-    const grams = standardUnitToGrams(unit.standardQuantity, unit.standardUnit)
-    if (grams !== null) return { grams: grams * quantity, estimated: false }
+    const standardUnit = unit.standardUnit.toLowerCase().trim()
+    const totalStandardQty = unit.standardQuantity * quantity
+
+    const mass = FIXED_MASS_UNITS[standardUnit]
+    if (mass) return { grams: totalStandardQty * mass.gramsPerUnit, estimated: false }
+
+    if (VOLUME_UNIT_NAMES.has(standardUnit) && canonicalFoodName) {
+      const grams = estimateVolumeGrams(totalStandardQty, standardUnit, canonicalFoodName)
+      if (grams !== null) return { grams, estimated: true }
+    }
+    // Falls through to the candidate-based resolution below (e.g. unit.name) if the standard
+    // unit was a volume we couldn't resolve a density for, rather than guessing density = 1.
   }
 
   const candidates = [unit?.name, unit?.abbreviation].filter((s): s is string => s != null && s.length > 0)
@@ -81,11 +90,13 @@ export function convertToGrams(quantity: number, unit: MealieUnit | null, canoni
   for (const candidate of candidates) {
     const name = candidate.toLowerCase().trim()
 
-    const fixed = FIXED_UNITS[name]
-    if (fixed) return { grams: quantity * fixed.gramsPerUnit, estimated: false }
+    const mass = FIXED_MASS_UNITS[name]
+    if (mass) return { grams: quantity * mass.gramsPerUnit, estimated: false }
 
-    const liquid = LIQUID_VOLUME_UNITS[name]
-    if (liquid) return { grams: quantity * liquid.gramsPerUnit, estimated: false }
+    if (VOLUME_UNIT_NAMES.has(name) && canonicalFoodName) {
+      const grams = estimateVolumeGrams(quantity, name, canonicalFoodName)
+      if (grams !== null) return { grams, estimated: true }
+    }
 
     if (SPOON_CUP_UNIT_NAMES.has(name) && canonicalFoodName) {
       const grams = estimateSpoonCupGrams(quantity, name, canonicalFoodName)
@@ -98,17 +109,5 @@ export function convertToGrams(quantity: number, unit: MealieUnit | null, canoni
     }
   }
 
-  return null
-}
-
-function standardUnitToGrams(quantity: number, unit: string): number | null {
-  const u = unit.toLowerCase().trim()
-  if (u === "g" || u === "gram" || u === "grams") return quantity
-  if (u === "kg" || u === "kilogram" || u === "kilograms") return quantity * 1000
-  if (u === "mg" || u === "milligram" || u === "milligrams") return quantity * 0.001
-  if (u === "ml" || u === "milliliter" || u === "milliliters") return quantity
-  if (u === "l" || u === "liter" || u === "liters") return quantity * 1000
-  if (u === "oz" || u === "ounce" || u === "ounces") return quantity * 28.35
-  if (u === "lb" || u === "lbs" || u === "pound" || u === "pounds") return quantity * 453.592
   return null
 }

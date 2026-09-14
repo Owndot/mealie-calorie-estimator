@@ -71,6 +71,14 @@ function matchDensity(foodName: string): SpoonCupDensity {
   return DEFAULT_DENSITY
 }
 
+/** Returns the matched category's density, or null if nothing matched (no generic-solid fallback for volume). */
+function matchDensityForVolume(foodName: string): SpoonCupDensity | null {
+  for (const entry of CATEGORY_DENSITIES) {
+    if (entry.keywords.test(foodName)) return entry.density
+  }
+  return null
+}
+
 const SPOON_CUP_UNIT_KEYS: Record<string, keyof SpoonCupDensity> = {
   el: "tablespoon",
   esslöffel: "tablespoon",
@@ -103,6 +111,38 @@ export function estimateSpoonCupGrams(quantity: number, unitName: string, canoni
   if (!key) return null
   const density = matchDensity(canonicalFoodName)
   return quantity * density[key]
+}
+
+const VOLUME_ML_UNIT_KEYS: Record<string, "ml" | "l"> = {
+  ml: "ml",
+  milliliter: "ml",
+  milliliters: "ml",
+  l: "l",
+  liter: "l",
+  liters: "l",
+}
+
+/** 1 US tablespoon ≈ 15 mL — used to derive grams-per-mL from the same category density table above. */
+const ML_PER_TABLESPOON = 15
+
+/**
+ * Resolves grams for a volume unit (ml/l) using food-specific density. Unlike the spoon/cup/pinch
+ * table above, this deliberately has NO generic fallback density: ml/l are true volume units and
+ * their gram weight depends entirely on the food's density (200ml water ≈ 200g, 200ml olive oil
+ * ≈ 184g) — silently assuming density = 1 (i.e. water) for an unrecognized liquid would be exactly
+ * the kind of unit-scale mistake the skill warns against. Returns null when no category matches,
+ * so the caller falls through to a bounded LLM density/gram estimate as the last resort.
+ */
+export function estimateVolumeGrams(quantity: number, unitName: string, canonicalFoodName: string): number | null {
+  const key = VOLUME_ML_UNIT_KEYS[unitName.toLowerCase().trim()]
+  if (!key) return null
+
+  const density = matchDensityForVolume(canonicalFoodName)
+  if (!density) return null
+
+  const gramsPerMl = density.tablespoon / ML_PER_TABLESPOON
+  const milliliters = key === "l" ? quantity * 1000 : quantity
+  return milliliters * gramsPerMl
 }
 
 interface PieceWeightEntry {

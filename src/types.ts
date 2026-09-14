@@ -146,7 +146,7 @@ export interface IngredientClassification {
   llmClassified: boolean
 }
 
-export type FallbackStatus = "local-generic" | "usda" | "off" | "llm-nutrient" | "unresolved"
+export type FallbackStatus = "usda" | "off" | "llm-nutrient" | "unresolved"
 
 export interface ProviderMatch {
   nutrients: NutrientSet

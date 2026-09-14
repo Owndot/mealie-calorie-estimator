@@ -8,6 +8,7 @@ import { convertToGrams } from "./unit-converter.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
 import { estimateGrams } from "./llm-estimator.js"
+import { computeNutritionFingerprint, perServingFromRecipeNutrition } from "./nutrition-format.js"
 import { logger } from "../utils/logger.js"
 
 /**
@@ -291,6 +292,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   return result
 }
 
+/** Detects nutrition that was entered by hand and never touched by the estimator at all. */
 export function hasManualCalories(recipe: MealieRecipe): boolean {
   const hasHash = recipe.extras?.calorie_estimator_hash != null
   const hasStoredNutrition =
@@ -299,13 +301,35 @@ export function hasManualCalories(recipe: MealieRecipe): boolean {
   return !hasHash && hasStoredNutrition
 }
 
-export function buildManualAckPatch(recipe: MealieRecipe, hash: string): NutritionPatch {
+/**
+ * Detects nutrition that the estimator DID write before (a hash is present), but whose current
+ * values no longer match the fingerprint of what the estimator last wrote — i.e. a person has
+ * edited it by hand since. Returns false (not modified) when there's no stored fingerprint to
+ * compare against, either because this recipe was never estimated, or because it was estimated
+ * by a version of the service predating this fingerprint — that's a deliberate, conservative
+ * default so an upgrade doesn't suddenly treat every existing recipe as manually modified.
+ */
+export function hasManuallyModifiedNutrition(recipe: MealieRecipe): boolean {
+  const storedFingerprint = recipe.extras?.calorie_estimator_nutrition_fingerprint
+  const hasHash = recipe.extras?.calorie_estimator_hash != null
+  if (!hasHash || !storedFingerprint) return false
+
+  const current = perServingFromRecipeNutrition(recipe.nutrition)
+  return computeNutritionFingerprint(current) !== storedFingerprint
+}
+
+export type ManualProtectionReason = "never-estimated" | "modified-after-estimate"
+
+export function buildManualAckPatch(recipe: MealieRecipe, hash: string, reason: ManualProtectionReason): NutritionPatch {
   return {
     nutrition: {},
     extras: {
       calorie_estimator_hash: hash,
       calorie_estimator_unmatched: JSON.stringify([]),
-      calorie_estimator_note: "Manual — preserved existing calorie entry",
+      calorie_estimator_note:
+        reason === "modified-after-estimate"
+          ? "Manual — nutrition was edited after estimation, preserved"
+          : "Manual — preserved existing calorie entry",
     },
   }
 }
@@ -328,6 +352,9 @@ export function buildNutritionPatch(
     calorie_estimator_hash: hash,
     calorie_estimator_unmatched: JSON.stringify(result.unmatchedIngredients),
     calorie_estimator_status: result.completeness,
+    // Fingerprints exactly the values below (or the all-null state when withheld), so a later
+    // run can tell "still ours, safe to overwrite" apart from "a person edited this by hand".
+    calorie_estimator_nutrition_fingerprint: computeNutritionFingerprint(result.perServingNutrients),
   }
 
   if (result.completenessReason) {

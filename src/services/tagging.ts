@@ -1,6 +1,9 @@
-import type { NutrientSet, MealieNutrition, MealieTag, MealieRecipe, EstimateResult } from "../types.js"
+import type { NutrientSet, MealieTag, MealieRecipe, EstimateResult } from "../types.js"
 import { getOrCreateTags, patchRecipe } from "./mealie-client.js"
 import { estimateRecipe, buildNutritionPatch } from "./estimator.js"
+import { perServingFromRecipeNutrition } from "./nutrition-format.js"
+
+export { perServingFromRecipeNutrition }
 
 export function getCalorieTag(kcal: number | null): string | null {
   if (kcal === null) return null
@@ -29,44 +32,6 @@ export function computeTags(perServing: NutrientSet): string[] {
   if (calorieTag) tags.push(calorieTag)
   tags.push(getDigestibilityTag(perServing))
   return tags
-}
-
-export function perServingFromRecipeNutrition(nutrition: MealieNutrition | null): NutrientSet {
-  if (!nutrition) {
-    return {
-      kcalPer100g: null, proteinPer100g: null, carbsPer100g: null,
-      fatPer100g: null, saturatedFatPer100g: null, transFatPer100g: null,
-      unsaturatedFatPer100g: null, fiberPer100g: null, sugarPer100g: null,
-      sodiumPer100g: null, cholesterolPer100g: null,
-    }
-  }
-
-  const p = (v: string | null): number | null => {
-    if (v === null || v.trim() === "") return null
-    const n = Number.parseFloat(v)
-    return Number.isNaN(n) ? null : n
-  }
-
-  // sodiumContent/cholesterolContent are stored in Mealie as milligrams (schema.org
-  // NutritionInformation convention); NutrientSet keeps every field in grams internally.
-  const pMg = (v: string | null): number | null => {
-    const mg = p(v)
-    return mg !== null ? mg / 1000 : null
-  }
-
-  return {
-    kcalPer100g: p(nutrition.calories),
-    proteinPer100g: p(nutrition.proteinContent),
-    carbsPer100g: p(nutrition.carbohydrateContent),
-    fatPer100g: p(nutrition.fatContent),
-    saturatedFatPer100g: p(nutrition.saturatedFatContent),
-    transFatPer100g: p(nutrition.transFatContent),
-    unsaturatedFatPer100g: p(nutrition.unsaturatedFatContent),
-    fiberPer100g: p(nutrition.fiberContent),
-    sugarPer100g: p(nutrition.sugarContent),
-    sodiumPer100g: pMg(nutrition.sodiumContent),
-    cholesterolPer100g: pMg(nutrition.cholesterolContent),
-  }
 }
 
 export async function resolveAutoTags(

@@ -21,13 +21,13 @@ mealie-calorie-estimator
 
 <!-- List features as bullet points -->
 
-- Routing-aware provider chain: a built-in generic ingredient dataset and (optionally) USDA FoodData Central for generic foods; [Open Food Facts](https://world.openfoodfacts.org/) for branded/product foods — OFF is never queried for a plain generic ingredient
+- Routing-aware provider chain: USDA FoodData Central (optional, generic foods) and [Open Food Facts](https://world.openfoodfacts.org/) (branded/product foods) — OFF is never queried for a plain generic ingredient, and there is no hand-authored local nutrition database standing in as an "authoritative" source
 - Brand detection is evidence-based only: a brand is used only when it's explicitly present in the structured `food.name`, never inferred from general knowledge
 - Sanity-checks every candidate (implausible kcal, salt/sodium unit mistakes, macro inconsistencies) and rejects/falls through to the next provider rather than trusting it blindly
 - One whole-recipe LLM batch request for ingredient normalization (never one call per ingredient); per-ingredient LLM calls remain only for unresolved unit gram estimates and a final per-food nutrient fallback
-- Food-specific unit conversion — 1 EL/TL of oil, flour, sugar, honey etc. resolve to different gram weights; German units (EL, TL, Prise, Dose, Glas, Bund, Packung, Päckchen, Becher, Tasse, Stange, Zehe, Stück) are supported alongside metric/imperial
+- Food-specific unit conversion — 1 EL/TL/ml of oil, flour, sugar, honey etc. resolve to different gram weights (ml/l are volume units, never assumed to be 1g/ml); German units (EL, TL, Prise, Dose, Glas, Bund, Packung, Päckchen, Becher, Tasse, Stange, Zehe, Stück) are supported alongside metric/imperial
 - Recipes with a significant unresolved ingredient are marked withheld rather than written with misleadingly "complete" numbers; minor unresolved seasonings are marked partial and don't block the rest
-- Skips re-estimation via a SHA256 ingredient hash, preserves manually entered calories, and supports an explicit force-recalculate endpoint that still protects manual entries unless overridden
+- Skips re-estimation via a SHA256 ingredient hash, preserves manually entered calories (including nutrition hand-edited *after* an earlier estimate, detected via a fingerprint of the values the estimator last wrote), and supports an explicit force-recalculate endpoint that still protects manual entries unless overridden
 - Webhook, on-demand, and bulk backfill entry points, all sharing one estimation pipeline
 - **Auto-tags** recipes with calorie range and digestibility tags
 
@@ -39,16 +39,18 @@ This small service enriches [Mealie](https://mealie.io/) (self-hosted recipe man
 2. **Resolving ingredients** from structured Mealie data only (`food.name` / `quantity` / `unit` — `originalText` is never read) through a routing-aware provider chain, with sanity checks on every candidate.
 3. **Patching nutrition** back into Mealie's nutrition fields, dividing the whole-recipe total by `recipeServings` exactly once.
 
-Unit conversion prioritizes Mealie's own structured conversion metadata, then deterministic conversions, then food-specific density/piece-weight tables, and only falls back to an LLM gram estimate when nothing else resolves it. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved unless explicitly overridden.
+Unit conversion prioritizes Mealie's own structured conversion metadata (mass units only — a structured `standardUnit` of ml/l still requires food density, exactly like priority 3 below), then deterministic mass-unit conversion (g/kg/mg/oz/lb), then food-specific density (EL/TL/cup/ml/l — 200ml water and 200ml olive oil are *not* the same weight, and an unrecognized liquid never silently defaults to water density), then known piece/package weights (Stück/Dose/Glas/...), and only falls back to a bounded LLM gram estimate when nothing else resolves it. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved unless explicitly overridden.
 
 ### Provider strategy
 
 Ingredients are routed as **generic** or **branded** based on evidence-based classification (a brand is only used when the structured food name explicitly contains it):
 
-- **Generic route:** cache → built-in local generic dataset → USDA FoodData Central (if `USDA_API_KEY` is set) → LLM (if enabled) as the final fallback. Open Food Facts is never queried here.
-- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → the same generic fallback chain → LLM last.
+- **Generic route:** cache → USDA FoodData Central (only if `USDA_API_KEY` is set) → LLM (if enabled) as the final fallback. Open Food Facts is never queried here. There is intentionally **no hand-authored local nutrition dataset** in this chain — a small built-in table of kcal/macro values would not be a trustworthy, reproducible nutrition source, so when USDA is unconfigured and the LLM is disabled, a generic ingredient honestly resolves to nothing rather than a fabricated number.
+- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → the same generic (USDA) fallback → LLM last.
 
-`BLS_LOCAL_IMPORT_PATH` is a reserved config slot for a future local/licensed generic dataset (such as BLS): it is **not yet implemented** — no BLS data is bundled, redistributed, or read by this project pending a licensing review, and setting the variable currently has no effect. It exists so a local-import provider can be added later without a config/env break.
+A local dataset may still carry deterministic **unit/density/piece-weight metadata** (see `src/services/food-density.ts`) — e.g. "1 EL olive oil ≈ 13.6g" or "1 Stück egg ≈ 53g" are culinary/physical constants, not nutrition facts, and are fine to hand-author and document. That is separate from, and must never substitute for, an actual nutrition provider.
+
+`BLS_LOCAL_IMPORT_PATH` is a reserved config slot for a future local/licensed generic **nutrition** dataset (such as BLS): it is **not yet implemented** — no BLS data is bundled, redistributed, or read by this project pending a licensing review, and setting the variable currently has no effect. It exists so a local-import provider can be added later without a config/env break.
 
 ### Auto-Tagging
 
@@ -158,7 +160,7 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 | `POST` | `/estimate/:slug` | On-demand estimation for a single recipe. Query params: `force=true` bypasses the unchanged-ingredients skip and re-estimates (never overwrites manually-entered nutrition by itself); `overrideManual=true` (used together with `force=true`) is the separate, explicit confirmation required to overwrite a genuinely manual entry |
 | `POST` | `/backfill` | Estimate nutrition for all existing recipes (never forces, never overrides manual entries) |
 
-Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess.
+Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
 
 ## Motivation
 
