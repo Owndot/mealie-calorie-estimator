@@ -11,7 +11,7 @@ import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict,
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v15"
+const BLS_MATCH_ALGORITHM_VERSION = "v16"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every

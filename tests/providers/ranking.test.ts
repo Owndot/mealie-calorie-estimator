@@ -460,6 +460,53 @@ describe("inferStateFromName — English candidate state inference (USDA)", () =
     // useful behavior of conflicting with a "raw" query.
     expect(inferStateFromName("Pickled red onion")).toBe("cooked")
   })
+
+  it("infers 'raw' from 'fresh' — a dried query must still conflict with a fresh candidate", () => {
+    // Found live: "getrocknete Petersilie"/"getrockneter Thymian"/"getrockneter Basilikum" (all
+    // explicitly DRIED queries) matched USDA's "Parsley, fresh"/"Thyme, fresh"/"Basil, fresh" —
+    // the opposite state — because "fresh" wasn't recognized as raw-equivalent, so the
+    // dried-vs-raw state conflict never fired.
+    expect(inferStateFromName("Parsley, fresh")).toBe("raw")
+    expect(inferStateFromName("Thyme, fresh")).toBe("raw")
+    expect(inferStateFromName("Basil, fresh")).toBe("raw")
+  })
+})
+
+describe("regression: generic descriptor words no longer count as unexplained extra content", () => {
+  it("does not penalize USDA's own classificatory prefix words (spices/seed)", () => {
+    // Found live: adding "spices"/"seed" here fixed a REGRESSION the core-identity mechanism
+    // itself introduced — cumin and coriander, both previously correct via USDA's "Spices, X
+    // seed" naming convention, were pushed to an unnecessary LLM fallback because "spices"/"seed"
+    // weren't recognized as generic classificatory words, not a different food.
+    const cumin = coreIdentityScoreAdjustment("cumin", "cumin", "Spices, cumin seed")
+    const coriander = coreIdentityScoreAdjustment("coriander", "coriander", "Spices, coriander seed")
+    expect(cumin).toBeGreaterThanOrEqual(0)
+    expect(coriander).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe("regression: qualified-water and reversed-order dairy mismatches found in the structural-fix live audit", () => {
+  it("rejects plain water matching coconut water", () => {
+    // Found live: "Wasser" (plain water) matched BLS's "Kokoswasser (Fruchtwasser)" — coconut
+    // water, a real product with meaningful sugar/calories. coreIdentityConflict alone can't
+    // catch this since "wasser" is genuinely a substring of the German compound.
+    expect(findMismatch("Wasser", "Kokoswasser (Fruchtwasser)")).not.toBeNull()
+  })
+
+  it("rejects cream matching USDA's reversed-order \"Cheese, cream\" (cream cheese)", () => {
+    // Found live: "Sahne" (liquid cream) matched USDA's "Cheese, cream" — cream cheese, a solid/
+    // spreadable dairy product, via USDA's "Cheese, <descriptor>" naming convention which puts
+    // the category word first (the reverse of the English "cream cheese" the original marker
+    // only matched in forward order).
+    expect(categoryConflict("dairy", "Cheese, cream")).toBe(true)
+  })
+
+  it("rejects red onion matching a chutney/relish/preserve product", () => {
+    // Found live: "Rote Zwiebel" (raw red onion) scored 33/100 against OFF's "Red onion
+    // chutney" — just above MIN_ACCEPTABLE_SCORE (30) even with the core-identity penalty
+    // applied, because "chutney" wasn't recognized as a composite/preserved-condiment marker.
+    expect(categoryConflict("vegetable", "Red onion chutney")).toBe(true)
+  })
 })
 
 describe("tokenize — German umlaut handling (regression for the NFKD-corruption bug)", () => {

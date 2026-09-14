@@ -65,7 +65,11 @@ const ENGLISH_STATE_PATTERNS: [FoodState, RegExp][] = [
   // FoodState has no dedicated "pickled" value, but grouping it with "cooked" still gets the
   // useful behavior: it correctly conflicts with a "raw" query, which is the case that matters.
   ["cooked", /\b(cooked|boiled|baked|fried|roasted|grilled|steamed|braised|poached|stewed|pickled|eingelegt)\b/i],
-  ["raw", /\braw\b/i],
+  // "fresh" found live: "getrocknete Petersilie"/"getrockneter Thymian"/"getrockneter Basilikum"
+  // (all explicitly DRIED queries) matched USDA's "Parsley, fresh"/"Thyme, fresh"/"Basil, fresh"
+  // — the exact opposite state — because "fresh" wasn't recognized as raw-equivalent, so the
+  // dried-vs-raw state conflict never fired against these candidates.
+  ["raw", /\b(raw|fresh)\b/i],
 ]
 
 export function inferStateFromName(name: string): FoodState {
@@ -112,6 +116,12 @@ const GENERIC_DESCRIPTOR_WORDS = new Set([
   "whole", "ground", "pure", "plain", "style", "tender", "petite", "small", "large", "mild",
   "sweet", "ripe", "nfs", "unspecified", "generic", "bottled", "prepared", "unprepared", "extra",
   "premium", "select", "product", "products", "type", "flavor", "flavour", "flavored", "flavoured",
+  // USDA's own classificatory/category-prefix words (e.g. "Spices, cumin seed", "Spices, oregano,
+  // dried") — these describe what KIND of database entry it is, not a different food, so they must
+  // never count as "extra unexplained content". Found live: their absence regressed several
+  // previously-correct spice matches (cumin, coriander, black pepper) to an unnecessary LLM
+  // fallback purely because "spices"/"seed" weren't recognized as generic.
+  "spice", "spices", "seed", "seeds", "herb", "herbs", "powder", "powdered",
 ])
 
 /** Minimum length for a core-identity token to participate in substring containment checks — a
@@ -213,7 +223,15 @@ const MISMATCH_RULES: MismatchRule[] = [
   // raw" — actually a leafy VEGETABLE (water spinach), not water — via a single shared token. Also
   // found live in the mandatory manual-provenance audit: matched OFF's "Tonic Water" — a
   // sweetened, flavored soft drink with real calories/sugar, not plain water.
-  { queryPattern: /\b(wasser|water)\b/i, forbiddenCandidatePattern: /\b(convolvulus|chestnut|kastanie|melon|melone|cress|kresse|tonic|sparkling|soda water|mineral)\b/i, description: "plain water vs a different food whose name happens to contain \"water\"" },
+  // "kokos"/"coconut" found live: "Wasser" (plain water) matched BLS's "Kokoswasser
+  // (Fruchtwasser)" — coconut water, a real product with meaningful sugar/calories, not plain
+  // water. coreIdentityConflict alone can't catch this: "wasser" IS a substring of "Kokoswasser"
+  // (the core is genuinely present in the compound), so this needs the same lexical treatment as
+  // the other qualified-water cases below.
+  // "kokos" deliberately has NO trailing \b — "Kokoswasser" is one fused German compound with no
+  // word break before "wasser", so a trailing boundary would never match inside it (the same
+  // insight COMPOSITE_PRODUCT_MARKERS below already relies on for German compounds).
+  { queryPattern: /\b(wasser|water)\b/i, forbiddenCandidatePattern: /\b(convolvulus|chestnut|kastanie|melon|melone|cress|kresse|tonic|sparkling|soda water|mineral|coconut)\b|kokos/i, description: "plain water vs a different food whose name happens to contain \"water\"" },
   // Found live in the mandatory manual-provenance audit, in two separate recipes: bare "Pfeffer"
   // (pepper, the spice) matched OFF's "Dr pepper" — a branded carbonated soft drink, via the
   // single shared word "pepper".
@@ -372,9 +390,16 @@ const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] 
   // Gewürzmischung" (a dry spice blend) matched USDA's "Creamy Italian dressing" — a liquid
   // condiment/composite product in every case, not the raw ingredient or dry seasoning itself.
   { pattern: /suppe|eintopf|\bstuffed\b|\bcurry\b|\bsoup\b|\bstew\b|chowder|\bsauce\b|so(ß|ss)e|\bdressing\b/i, impliesCategory: "prepared-dish" },
+  // "chutney" found live: "Rote Zwiebel" (raw red onion) matched OFF's "Red onion chutney" — a
+  // cooked, vinegar/sugar-preserved condiment, not the raw vegetable. Grouped with other
+  // preserve-style condiments that are never the correct answer for a raw-vegetable query.
+  { pattern: /chutney|relish|marmalade|compote/i, impliesCategory: "preserved-condiment" },
   // Found live: "Paprikapulver" (a dry spice) matched OFF's "Paprika Frischkäsezubereitung" — a
   // paprika-flavored cream cheese SPREAD, a dairy product wholly unrelated to the spice itself.
-  { pattern: /frischkäse|frischkaese|cream cheese|\bspread\b/i, impliesCategory: "dairy-product" },
+  // "cheese,? cream" (reversed order) found live: "Sahne" (liquid cream) matched USDA's "Cheese,
+  // cream" — USDA's "Cheese, <descriptor>" naming convention puts the category word FIRST, the
+  // reverse of English "cream cheese", so the forward-order pattern alone missed it.
+  { pattern: /frischkäse|frischkaese|cream cheese|cheese,?\s*cream|\bspread\b/i, impliesCategory: "dairy-product" },
   { pattern: /stangen|brezel|chips|pretzel|\bsnack\b/i, impliesCategory: "snack" },
   // "focaccia" found live: "italienische Gewürzmischung" (a dry Italian spice blend) matched
   // USDA's "Focaccia, Italian, plain" — the same "shared descriptive word only" failure class as
