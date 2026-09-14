@@ -1,38 +1,41 @@
 import type { FastifyInstance } from "fastify"
-import { getRecipe, getRecipeHouseholdId } from "../services/mealie-client.js"
-import { computeIngredientHash, shouldEstimate } from "../services/estimator.js"
-import { estimateAndTag } from "../services/tagging.js"
+import { runEstimationPipeline, type PipelineOptions } from "../services/pipeline.js"
 import { logger } from "../utils/logger.js"
 
-async function processEstimate(slug: string): Promise<void> {
+async function processEstimate(slug: string, opts: PipelineOptions): Promise<void> {
   try {
-    logger.info({ slug }, "On-demand estimation processing")
-
-    const recipe = await getRecipe(slug)
-
-    if (!shouldEstimate(recipe)) {
-      logger.info({ slug }, "Recipe skipped (not tagged for estimation)")
-      return
-    }
-
-    const householdId = getRecipeHouseholdId(recipe)
-    const hash = computeIngredientHash(recipe)
-    const { calories, tagSlugs } = await estimateAndTag(recipe, hash, householdId)
-
-    logger.info({ slug, calories, tags: tagSlugs }, "On-demand estimation complete")
+    logger.info({ slug, opts }, "On-demand estimation processing")
+    const outcome = await runEstimationPipeline(slug, opts)
+    logger.info({ slug, outcome }, "On-demand estimation complete")
   } catch (err) {
     logger.error({ slug, err }, "Estimate background processing failed")
   }
 }
 
+function parseBool(v: unknown): boolean {
+  return v === true || v === "true" || v === "1"
+}
+
 export async function estimateRoutes(app: FastifyInstance): Promise<void> {
-  app.post<{ Params: { slug: string } }>("/estimate", async (req, reply) => {
-    const { slug } = (req as any).body.content as any
+  /**
+   * Force-recalculate one recipe: POST /estimate/:slug?force=true
+   * force bypasses the ingredient-hash-unchanged skip only. It never overwrites genuinely
+   * manual nutrition by itself — that requires the separate, explicit overrideManual=true.
+   */
+  app.post<{ Params: { slug: string }; Querystring: { force?: string; overrideManual?: string } }>(
+    "/estimate/:slug",
+    async (req, reply) => {
+      const { slug } = req.params
+      const opts: PipelineOptions = {
+        force: parseBool(req.query.force),
+        overrideManual: parseBool(req.query.overrideManual),
+      }
 
-    logger.info({ slug }, "On-demand estimation requested")
+      logger.info({ slug, opts }, "On-demand estimation requested")
 
-    reply.status(202).send({ status: "accepted" })
+      reply.status(202).send({ status: "accepted" })
 
-    setImmediate(() => processEstimate(slug))
-  })
+      setImmediate(() => processEstimate(slug, opts))
+    },
+  )
 }

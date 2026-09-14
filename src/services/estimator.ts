@@ -1,14 +1,19 @@
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
-  NutrientSet, MealieNutrition,
+  NutrientSet, MealieNutrition, Completeness, FoodState,
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
-import { lookupNutrients } from "./off-client.js"
-import { estimateGrams, estimateNutrients } from "./llm-estimator.js"
+import { resolveNutrients } from "./nutrient-resolver.js"
+import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
+import { estimateGrams } from "./llm-estimator.js"
 import { logger } from "../utils/logger.js"
 
+/**
+ * Hashed from structured fields only (quantity/unit.name/food.name, plus yield/servings text) —
+ * recipeIngredient[].originalText is never read here or anywhere else in the pipeline.
+ */
 export function computeIngredientHash(recipe: MealieRecipe): string {
   const parts: string[] = []
 
@@ -32,6 +37,7 @@ export function shouldEstimate(recipe: MealieRecipe): boolean {
   return (recipe.tags || []).some(t => t.slug === tagName || t.name.toLowerCase() === tagName)
 }
 
+/** Informational only — recipeYield text is never used to divide nutrition. See recipe.recipeServings for that. */
 export function parseYield(recipeYield: string | null): number | null {
   if (!recipeYield) return null
 
@@ -86,8 +92,17 @@ function addToTotal(total: NutrientSet, nutrients: NutrientSet, grams: number): 
   }
 }
 
+/**
+ * Divides whole-recipe totals by servings exactly once. servings must be recipe.recipeServings —
+ * never recipeYield (a free-text field like "1 loaf" that is not reliably a serving count) and
+ * never used anywhere in provider lookup or ingredient-level math.
+ */
 function divideByServings(total: NutrientSet, servings: number): NutrientSet {
   const div = (v: number | null): number | null => (v !== null ? Math.round(v / servings) : null)
+  // Sodium/cholesterol are kept as precise fractional grams here (not rounded to whole grams) —
+  // they're small enough that rounding to an integer gram would collapse them to 0 before the
+  // gram->milligram conversion at the Mealie-patch boundary gets a chance to round sensibly.
+  const divPrecise = (v: number | null): number | null => (v !== null ? v / servings : null)
   return {
     kcalPer100g: div(total.kcalPer100g),
     proteinPer100g: div(total.proteinPer100g),
@@ -98,81 +113,174 @@ function divideByServings(total: NutrientSet, servings: number): NutrientSet {
     unsaturatedFatPer100g: div(total.unsaturatedFatPer100g),
     fiberPer100g: div(total.fiberPer100g),
     sugarPer100g: div(total.sugarPer100g),
-    sodiumPer100g: div(total.sodiumPer100g),
-    cholesterolPer100g: div(total.cholesterolPer100g),
+    sodiumPer100g: divPrecise(total.sodiumPer100g),
+    cholesterolPer100g: divPrecise(total.cholesterolPer100g),
   }
 }
 
+interface ValidIngredient {
+  index: number
+  foodName: string
+  quantity: number
+  unit: import("../types.js").MealieUnit | null
+}
+
+function collectValidIngredients(recipe: MealieRecipe): ValidIngredient[] {
+  const result: ValidIngredient[] = []
+  recipe.recipeIngredient.forEach((ing, index) => {
+    const foodName = ing.food?.name
+    const quantity = ing.quantity
+    if (!foodName || quantity == null || quantity <= 0) return
+    result.push({ index, foodName, quantity, unit: ing.unit })
+  })
+  return result
+}
+
+/** Significance threshold: unresolved weight above this fraction of total known weight withholds nutrition entirely. */
+const WITHHOLD_WEIGHT_FRACTION = 0.3
+
+function classifyCompleteness(
+  unmatchedCount: number,
+  resolvedWeight: number,
+  totalKnownWeight: number,
+  hasAnyMatch: boolean,
+): { completeness: Completeness; reason: string | null } {
+  if (unmatchedCount === 0) {
+    return { completeness: "complete", reason: null }
+  }
+
+  if (!hasAnyMatch) {
+    return { completeness: "withheld", reason: "No ingredient could be resolved to nutrition data" }
+  }
+
+  const unresolvedFraction = totalKnownWeight > 0 ? (totalKnownWeight - resolvedWeight) / totalKnownWeight : 1
+
+  if (unresolvedFraction > WITHHOLD_WEIGHT_FRACTION) {
+    return {
+      completeness: "withheld",
+      reason: `${Math.round(unresolvedFraction * 100)}% of known ingredient weight is unresolved — nutrition withheld to avoid a misleading result`,
+    }
+  }
+
+  return { completeness: "partial", reason: `${unmatchedCount} ingredient(s) unresolved but weight share is minor` }
+}
+
 export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResult> {
+  const validIngredients = collectValidIngredients(recipe)
+
+  const normalizerInputs: NormalizerInput[] = validIngredients.map((v) => ({
+    index: v.index,
+    foodName: v.foodName,
+    unitName: v.unit?.name ?? null,
+  }))
+  const classifications = await normalizeIngredients(normalizerInputs)
+  const classificationByIndex = new Map(classifications.map((c) => [c.index, c]))
+
   const matchedIngredients: IngredientMatch[] = []
   const unmatchedNames: string[] = []
   let totalNutrients = emptyNutrients()
+  let resolvedWeight = 0
+  let totalKnownWeight = 0
+  let hasAnyMatch = false
 
-  for (const ing of recipe.recipeIngredient) {
-    const foodName = ing.food?.name
-    const quantity = ing.quantity
+  for (const ing of validIngredients) {
+    const classification = classificationByIndex.get(ing.index)
+    const canonicalName = classification?.canonicalName ?? ing.foodName
+    const brand = classification?.brand ?? null
+    const route = classification?.route ?? "generic"
+    const state: FoodState = classification?.state ?? "unknown"
 
-    if (!foodName || quantity == null || quantity <= 0) {
-      continue
-    }
+    let grams: number | null = null
+    let gramsEstimated = false
 
-    let grams = convertToGrams(quantity, ing.unit)
-    let llmEstimated = false
-
-    if (grams === null) {
-      const unitName = ing.unit?.name
-      if (unitName) {
-        const llmGrams = await estimateGrams(quantity, unitName, foodName)
-        if (llmGrams !== null) {
-          grams = llmGrams
-          llmEstimated = true
-        }
+    const converted = convertToGrams(ing.quantity, ing.unit, canonicalName)
+    if (converted) {
+      grams = converted.grams
+      gramsEstimated = converted.estimated
+    } else if (ing.unit?.name) {
+      const llmGrams = await estimateGrams(ing.quantity, ing.unit.name, canonicalName)
+      if (llmGrams !== null) {
+        grams = llmGrams
+        gramsEstimated = true
       }
     }
 
     if (grams === null) {
-      unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams: null, matched: false, nutrients: null })
+      unmatchedNames.push(ing.foodName)
+      matchedIngredients.push({
+        name: ing.foodName, canonicalName, brand, route, grams: null, gramsEstimated: false,
+        matched: false, nutrients: null, provider: null, providerId: null, confidence: null,
+        fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
+      })
       continue
     }
 
-    const result = await lookupNutrients(foodName, ing.unit?.name)
+    totalKnownWeight += grams
 
-    if (!result.matched || result.nutrients === null) {
-      const llmNutrients = await estimateNutrients(foodName)
-      if (llmNutrients !== null) {
-        totalNutrients = addToTotal(totalNutrients, llmNutrients, grams)
-        matchedIngredients.push({ name: foodName, grams, matched: true, nutrients: llmNutrients, llmEstimated: true })
-        continue
-      }
-      unmatchedNames.push(foodName)
-      matchedIngredients.push({ name: foodName, grams, matched: false, nutrients: null })
+    const resolved = await resolveNutrients({ foodName: canonicalName, brand, category: classification?.category ?? null, state }, route)
+
+    if (!resolved) {
+      unmatchedNames.push(ing.foodName)
+      matchedIngredients.push({
+        name: ing.foodName, canonicalName, brand, route, grams, gramsEstimated,
+        matched: false, nutrients: null, provider: null, providerId: null, confidence: null,
+        fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
+      })
       continue
     }
 
-    totalNutrients = addToTotal(totalNutrients, result.nutrients, grams)
-    matchedIngredients.push({ name: foodName, grams, matched: true, nutrients: result.nutrients, llmEstimated })
+    totalNutrients = addToTotal(totalNutrients, resolved.match.nutrients, grams)
+    resolvedWeight += grams
+    hasAnyMatch = true
+
+    matchedIngredients.push({
+      name: ing.foodName,
+      canonicalName: resolved.match.canonicalName,
+      brand: resolved.match.brand,
+      route,
+      grams,
+      gramsEstimated,
+      matched: true,
+      nutrients: resolved.match.nutrients,
+      provider: resolved.match.provider,
+      providerId: resolved.match.providerId,
+      confidence: resolved.match.confidence,
+      fallbackStatus: resolved.fallbackStatus,
+      llmParticipated: (classification?.llmClassified ?? false) || resolved.fallbackStatus === "llm-nutrient",
+    })
   }
 
-  const servings = parseYield(recipe.recipeYield) ?? recipe.recipeServings
-  const perServingNutrients = servings && servings > 0 ? divideByServings(totalNutrients, servings) : emptyNutrients()
+  const { completeness, reason: completenessReason } = classifyCompleteness(
+    unmatchedNames.length,
+    resolvedWeight,
+    totalKnownWeight,
+    hasAnyMatch,
+  )
+
+  const servings = recipe.recipeServings
+  const perServingNutrients =
+    completeness !== "withheld" && servings && servings > 0 ? divideByServings(totalNutrients, servings) : emptyNutrients()
+  const effectiveTotal = completeness === "withheld" ? emptyNutrients() : totalNutrients
 
   const result: EstimateResult = {
     slug: recipe.slug,
     servings,
-    totalNutrients,
+    totalNutrients: effectiveTotal,
     perServingNutrients,
     matchedCount: matchedIngredients.filter((i) => i.matched).length,
     unmatchedCount: unmatchedNames.length,
     unmatchedIngredients: unmatchedNames,
     matchedIngredients,
+    completeness,
+    completenessReason,
   }
 
   logger.info(
     {
       slug: recipe.slug,
       servings,
-      totalKcal: totalNutrients.kcalPer100g,
+      completeness,
+      totalKcal: effectiveTotal.kcalPer100g,
       kcalPerServing: perServingNutrients.kcalPer100g,
       matched: result.matchedCount,
       unmatched: result.unmatchedCount,
@@ -206,25 +314,44 @@ function n(v: number | null): string {
   return v != null ? v.toString() : ""
 }
 
+/** schema.org NutritionInformation (which Mealie follows) expects sodium/cholesterol in milligrams; every other field in grams. */
+function toMilligrams(gramsValue: number | null): number | null {
+  return gramsValue != null ? Math.round(gramsValue * 1000) : null
+}
+
 export function buildNutritionPatch(
   result: EstimateResult,
   hash: string,
   recipeYield: string | null,
 ): NutritionPatch {
-  const llmIngredients = result.matchedIngredients
-    .filter((i) => i.llmEstimated)
-    .map((i) => i.name)
-
   const extras: Record<string, string> = {
     calorie_estimator_hash: hash,
     calorie_estimator_unmatched: JSON.stringify(result.unmatchedIngredients),
+    calorie_estimator_status: result.completeness,
   }
 
+  if (result.completenessReason) {
+    extras.calorie_estimator_status_reason = result.completenessReason
+  }
+
+  const llmIngredients = result.matchedIngredients.filter((i) => i.llmParticipated).map((i) => i.name)
   if (llmIngredients.length > 0) {
     extras.calorie_estimator_llm_ingredients = JSON.stringify(llmIngredients)
   }
 
-  const p = result.perServingNutrients
+  const provenance = result.matchedIngredients.map((i) => ({
+    name: i.name,
+    canonical: i.canonicalName,
+    brand: i.brand,
+    grams: i.grams,
+    gramsEstimated: i.gramsEstimated,
+    matched: i.matched,
+    provider: i.provider,
+    confidence: i.confidence,
+    fallback: i.fallbackStatus,
+  }))
+  extras.calorie_estimator_provenance = JSON.stringify(provenance)
+
   const totalKcal = result.totalNutrients.kcalPer100g
   if (totalKcal !== null && totalKcal > 0) {
     extras.calorie_estimator_total_kcal = totalKcal.toString()
@@ -236,21 +363,27 @@ export function buildNutritionPatch(
   }
 
   const nutrition: Partial<MealieNutrition> = {}
-  const add = (key: keyof MealieNutrition, val: string) => {
-    if (val !== "") nutrition[key] = val
-  }
 
-  add("calories", n(p.kcalPer100g))
-  add("proteinContent", n(p.proteinPer100g))
-  add("carbohydrateContent", n(p.carbsPer100g))
-  add("fatContent", n(p.fatPer100g))
-  add("saturatedFatContent", n(p.saturatedFatPer100g))
-  add("transFatContent", n(p.transFatPer100g))
-  add("unsaturatedFatContent", n(p.unsaturatedFatPer100g))
-  add("fiberContent", n(p.fiberPer100g))
-  add("sugarContent", n(p.sugarPer100g))
-  add("sodiumContent", n(p.sodiumPer100g))
-  add("cholesterolContent", n(p.cholesterolPer100g))
+  // Withheld results write no nutrition numbers at all — an important unresolved calorie-dense
+  // ingredient must not produce a misleadingly "complete"-looking nutrition entry.
+  if (result.completeness !== "withheld") {
+    const p = result.perServingNutrients
+    const add = (key: keyof MealieNutrition, val: string) => {
+      if (val !== "") nutrition[key] = val
+    }
+
+    add("calories", n(p.kcalPer100g))
+    add("proteinContent", n(p.proteinPer100g))
+    add("carbohydrateContent", n(p.carbsPer100g))
+    add("fatContent", n(p.fatPer100g))
+    add("saturatedFatContent", n(p.saturatedFatPer100g))
+    add("transFatContent", n(p.transFatPer100g))
+    add("unsaturatedFatContent", n(p.unsaturatedFatPer100g))
+    add("fiberContent", n(p.fiberPer100g))
+    add("sugarContent", n(p.sugarPer100g))
+    add("sodiumContent", n(toMilligrams(p.sodiumPer100g)))
+    add("cholesterolContent", n(toMilligrams(p.cholesterolPer100g)))
+  }
 
   return { nutrition, extras }
 }

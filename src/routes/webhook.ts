@@ -1,13 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import type { AppriseWebhookPayload, EventRecipeData } from "../types.js"
-import { getRecipe, getRecipeHouseholdId, patchRecipe } from "../services/mealie-client.js"
-import {
-  computeIngredientHash,
-  hasManualCalories,
-  buildManualAckPatch,
-  shouldEstimate,
-} from "../services/estimator.js"
-import { perServingFromRecipeNutrition, tagsAreComplete, resolveAndMergeTags, estimateAndTag } from "../services/tagging.js"
+import { runEstimationPipeline } from "../services/pipeline.js"
 import { logger } from "../utils/logger.js"
 
 function isEventRecipeData(v: unknown): v is EventRecipeData {
@@ -27,43 +20,9 @@ function normalizeEventData(raw: Record<string, unknown>): EventRecipeData {
 
 async function processWebhook(slug: string): Promise<void> {
   try {
-    const recipe = await getRecipe(slug)
-
-    if (!shouldEstimate(recipe)) {
-      logger.info({ slug }, "Recipe skipped (not tagged for estimation)")
-      return
-    }
-
-    const householdId = getRecipeHouseholdId(recipe)
-
-    const hash = computeIngredientHash(recipe)
-    const existingHash = recipe.extras?.calorie_estimator_hash
-
-    if (existingHash === hash) {
-      if (tagsAreComplete(recipe)) {
-        logger.info({ slug }, "Tags up to date, skipping")
-        return
-      }
-
-      const perServing = perServingFromRecipeNutrition(recipe.nutrition)
-      const { tags, tagSlugs } = await resolveAndMergeTags(recipe, perServing, householdId)
-      await patchRecipe(slug, {
-        tags,
-        extras: { ...recipe.extras, calorie_estimator_tags: JSON.stringify(tagSlugs) },
-      }, householdId)
-      logger.info({ slug, tags: tagSlugs }, "Added missing auto-tags")
-      return
-    }
-
-    if (hasManualCalories(recipe)) {
-      logger.info({ slug, calories: recipe.nutrition?.calories }, "Manual calories detected, acknowledging without overwriting")
-      const patch = buildManualAckPatch(recipe, hash)
-      await patchRecipe(slug, patch, householdId)
-      return
-    }
-
-    const { calories, tagSlugs } = await estimateAndTag(recipe, hash, householdId)
-    logger.info({ slug, calories, tags: tagSlugs }, "Updated recipe nutrition and tags")
+    // Webhooks never force or override-manual — a webhook-triggered patch that itself fires
+    // another webhook must always be able to settle into a no-op on the next pass.
+    await runEstimationPipeline(slug)
   } catch (err) {
     logger.error({ slug, err }, "Webhook background processing failed")
   }

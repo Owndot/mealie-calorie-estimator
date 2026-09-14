@@ -21,11 +21,14 @@ mealie-calorie-estimator
 
 <!-- List features as bullet points -->
 
-- Estimates nutrition from [Open Food Facts](https://world.openfoodfacts.org/) (configurable language)
-- Optional LLM fallback for unmatched foods and custom units (Dose, Glas, Päckchen, Bund)
-- Built-in unit conversion (g, kg, tbsp, tsp, cup, oz, lb)
-- Skips re-estimation via a SHA256 ingredient hash and preserves manually entered calories
-- Webhook, on-demand, and bulk backfill entry points
+- Routing-aware provider chain: a built-in generic ingredient dataset and (optionally) USDA FoodData Central for generic foods; [Open Food Facts](https://world.openfoodfacts.org/) for branded/product foods — OFF is never queried for a plain generic ingredient
+- Brand detection is evidence-based only: a brand is used only when it's explicitly present in the structured `food.name`, never inferred from general knowledge
+- Sanity-checks every candidate (implausible kcal, salt/sodium unit mistakes, macro inconsistencies) and rejects/falls through to the next provider rather than trusting it blindly
+- One whole-recipe LLM batch request for ingredient normalization (never one call per ingredient); per-ingredient LLM calls remain only for unresolved unit gram estimates and a final per-food nutrient fallback
+- Food-specific unit conversion — 1 EL/TL of oil, flour, sugar, honey etc. resolve to different gram weights; German units (EL, TL, Prise, Dose, Glas, Bund, Packung, Päckchen, Becher, Tasse, Stange, Zehe, Stück) are supported alongside metric/imperial
+- Recipes with a significant unresolved ingredient are marked withheld rather than written with misleadingly "complete" numbers; minor unresolved seasonings are marked partial and don't block the rest
+- Skips re-estimation via a SHA256 ingredient hash, preserves manually entered calories, and supports an explicit force-recalculate endpoint that still protects manual entries unless overridden
+- Webhook, on-demand, and bulk backfill entry points, all sharing one estimation pipeline
 - **Auto-tags** recipes with calorie range and digestibility tags
 
 ## Purpose
@@ -33,10 +36,19 @@ mealie-calorie-estimator
 This small service enriches [Mealie](https://mealie.io/) (self-hosted recipe manager) with nutritional data by:
 
 1. **Listening for webhooks** triggered when a recipe is created or updated.
-2. **Resolving ingredients** — each `food.name` is searched on Open Food Facts, with an optional LLM estimate per 100g when there is no match.
-3. **Patching nutrition** back into Mealie's nutrition fields.
+2. **Resolving ingredients** from structured Mealie data only (`food.name` / `quantity` / `unit` — `originalText` is never read) through a routing-aware provider chain, with sanity checks on every candidate.
+3. **Patching nutrition** back into Mealie's nutrition fields, dividing the whole-recipe total by `recipeServings` exactly once.
 
-Unit conversion uses a built-in table for common units. Custom units are estimated via LLM when enabled. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved.
+Unit conversion prioritizes Mealie's own structured conversion metadata, then deterministic conversions, then food-specific density/piece-weight tables, and only falls back to an LLM gram estimate when nothing else resolves it. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved unless explicitly overridden.
+
+### Provider strategy
+
+Ingredients are routed as **generic** or **branded** based on evidence-based classification (a brand is only used when the structured food name explicitly contains it):
+
+- **Generic route:** cache → built-in local generic dataset → USDA FoodData Central (if `USDA_API_KEY` is set) → LLM (if enabled) as the final fallback. Open Food Facts is never queried here.
+- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → the same generic fallback chain → LLM last.
+
+`BLS_LOCAL_IMPORT_PATH` is a reserved config slot for a future local/licensed generic dataset (such as BLS): it is **not yet implemented** — no BLS data is bundled, redistributed, or read by this project pending a licensing review, and setting the variable currently has no effect. It exists so a local-import provider can be added later without a config/env break.
 
 ### Auto-Tagging
 
@@ -107,13 +119,21 @@ It's recommended to install it next to your Mealie instance using docker-compose
 | `OFF_BASE_URL` | `https://world.openfoodfacts.org` | Open Food Facts base URL |
 | `OFF_MAX_RETRIES` | `3` | Retries for transient OFF search errors (429/5xx) |
 | `OFF_RETRY_BACKOFF_MS` | `500` | Base backoff between retries (doubles each attempt) |
-| `LLM_ENABLED` | `false` | Enable LLM fallback for custom units and unmatched foods |
+| `USDA_API_KEY` | — | Optional. Enables the USDA FoodData Central generic-route fallback provider; omitted entirely from the provider chain when unset (no dummy placeholder) |
+| `USDA_BASE_URL` | `https://api.nal.usda.gov/fdc/v1` | USDA FoodData Central base URL |
+| `USDA_RATE_LIMIT` | `10` | USDA requests per minute |
+| `BLS_LOCAL_IMPORT_PATH` | — | Reserved for a future local/licensed generic dataset (e.g. BLS). **Not yet implemented** — has no effect today |
+| `LLM_ENABLED` | `false` | Enable the LLM: one whole-recipe batch normalization request, plus narrowly-scoped per-ingredient gram/nutrient fallback |
 | `LLM_API_KEY` | — | API key for OpenAI-compatible endpoint |
 | `LLM_BASE_URL` | `https://api.mistral.ai/v1` | LLM API base URL |
 | `LLM_ENDPOINT_URL` | `/chat/completions` | LLM API endpoint path (supports OpenAI-compatible providers) |
 | `LLM_MODEL` | `mistral-small-latest` | Model name |
 | `ESTIMATE_STRATEGY` | `all` | Estimation strategy: `all` (estimate every recipe) or `tagged` (only estimate recipes with the `ESTIMATE_TAG` tag) |
 | `ESTIMATE_TAG` | `estimate` | Tag name to check when `ESTIMATE_STRATEGY=tagged` |
+| `CACHE_DB_PATH` | `data/cache.db` | SQLite cache file path |
+| `CACHE_MATCH_TTL` | `604800` (7 days) | TTL in seconds for successful provider matches |
+| `CACHE_MISS_TTL` | `86400` (1 day) | TTL in seconds for negative/miss results (avoids repeat rate-limited lookups) |
+| `CACHE_LLM_TTL` | `43200` (12 hours) | TTL in seconds for LLM gram/nutrient estimates (least authoritative, shortest-lived) |
 | `PORT` | `8000` | Server port |
 | `LOG_LEVEL` | `info` | Pino log level |
 
@@ -135,8 +155,10 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 |---|---|---|
 | `GET` | `/health` | Health check |
 | `POST` | `/webhook` | Apprise webhook for recipe created/updated events |
-| `POST` | `/estimate` | On-demand estimation for a single recipe |
-| `POST` | `/backfill` | Estimate nutrition for all existing recipes |
+| `POST` | `/estimate/:slug` | On-demand estimation for a single recipe. Query params: `force=true` bypasses the unchanged-ingredients skip and re-estimates (never overwrites manually-entered nutrition by itself); `overrideManual=true` (used together with `force=true`) is the separate, explicit confirmation required to overwrite a genuinely manual entry |
+| `POST` | `/backfill` | Estimate nutrition for all existing recipes (never forces, never overrides manual entries) |
+
+Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess.
 
 ## Motivation
 

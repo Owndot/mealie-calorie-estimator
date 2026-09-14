@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
-import { estimateGrams } from "../src/services/llm-estimator.js"
+import { estimateGrams, estimateNutrients } from "../src/services/llm-estimator.js"
 import { initCache, clearLlmCache } from "../src/utils/cache.js"
 import { config } from "../src/config.js"
 
@@ -108,6 +108,89 @@ describe("estimateGrams", () => {
     vi.stubGlobal("fetch", mockFetch)
 
     const result = await estimateGrams(1, "Stange", "Lauch")
+    expect(result).toBeNull()
+  })
+})
+
+describe("estimateNutrients — final per-ingredient fallback only", () => {
+  it("returns null when LLM is disabled", async () => {
+    const result = await estimateNutrients("Quinoa")
+    expect(result).toBeNull()
+  })
+
+  it("parses a valid nutrient JSON response, computing unsaturated fat from fat - sat - trans", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [{
+          message: {
+            content: JSON.stringify({ kcal: 150, protein: 5, carbs: 10, fat: 8, saturatedFat: 2, transFat: 0, fiber: 1, sugar: 2, sodium: 0.1, cholesterol: 0.01 }),
+          },
+        }],
+      }),
+    })
+    vi.stubGlobal("fetch", mockFetch)
+
+    const result = await estimateNutrients("Obscure Dish")
+    expect(result?.kcalPer100g).toBe(150)
+    expect(result?.unsaturatedFatPer100g).toBe(6)
+    expect(result?.sodiumPer100g).toBe(0.1)
+  })
+
+  it("caches results and does not re-call the API for a repeat food", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 90, protein: 1, carbs: 20, fat: 0.5, saturatedFat: 0, transFat: 0, fiber: 2, sugar: 15, sodium: 0.001, cholesterol: 0 }) } }] }),
+    })
+    vi.stubGlobal("fetch", mockFetch)
+
+    await estimateNutrients("Repeatfood")
+    await estimateNutrients("Repeatfood")
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it("discards a zero-kcal response rather than caching/returning it", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 0, protein: 0, carbs: 0, fat: 0, saturatedFat: 0, transFat: 0, fiber: 0, sugar: 0, sodium: 0, cholesterol: 0 }) } }] }),
+    })
+    vi.stubGlobal("fetch", mockFetch)
+
+    const result = await estimateNutrients("Zerokcalfood")
+    expect(result).toBeNull()
+  })
+
+  it("fails safely on malformed JSON rather than throwing", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: "not valid json" } }] }),
+    })
+    vi.stubGlobal("fetch", mockFetch)
+
+    const result = await estimateNutrients("Malformedfood")
+    expect(result).toBeNull()
+  })
+
+  it("returns null on API error", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 })
+    vi.stubGlobal("fetch", mockFetch)
+
+    const result = await estimateNutrients("Errorfood")
     expect(result).toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-import type { NutrientSet, MealieNutrition, MealieTag, MealieRecipe } from "../types.js"
+import type { NutrientSet, MealieNutrition, MealieTag, MealieRecipe, EstimateResult } from "../types.js"
 import { getOrCreateTags, patchRecipe } from "./mealie-client.js"
 import { estimateRecipe, buildNutritionPatch } from "./estimator.js"
 
@@ -47,6 +47,13 @@ export function perServingFromRecipeNutrition(nutrition: MealieNutrition | null)
     return Number.isNaN(n) ? null : n
   }
 
+  // sodiumContent/cholesterolContent are stored in Mealie as milligrams (schema.org
+  // NutritionInformation convention); NutrientSet keeps every field in grams internally.
+  const pMg = (v: string | null): number | null => {
+    const mg = p(v)
+    return mg !== null ? mg / 1000 : null
+  }
+
   return {
     kcalPer100g: p(nutrition.calories),
     proteinPer100g: p(nutrition.proteinContent),
@@ -57,8 +64,8 @@ export function perServingFromRecipeNutrition(nutrition: MealieNutrition | null)
     unsaturatedFatPer100g: p(nutrition.unsaturatedFatContent),
     fiberPer100g: p(nutrition.fiberContent),
     sugarPer100g: p(nutrition.sugarContent),
-    sodiumPer100g: p(nutrition.sodiumContent),
-    cholesterolPer100g: p(nutrition.cholesterolContent),
+    sodiumPer100g: pMg(nutrition.sodiumContent),
+    cholesterolPer100g: pMg(nutrition.cholesterolContent),
   }
 }
 
@@ -103,7 +110,7 @@ export async function estimateAndTag(
   recipe: MealieRecipe,
   hash: string,
   householdId?: string | null,
-): Promise<{ calories: number | null; tagSlugs: string[] }> {
+): Promise<{ calories: number | null; tagSlugs: string[]; completeness: EstimateResult["completeness"] }> {
   const result = await estimateRecipe(recipe)
   const nutritionPatch = buildNutritionPatch(result, hash, recipe.recipeYield)
   const { tags, tagSlugs } = await resolveAndMergeTags(recipe, result.perServingNutrients, householdId)
@@ -112,5 +119,5 @@ export async function estimateAndTag(
     tags,
     extras: { ...nutritionPatch.extras, calorie_estimator_tags: JSON.stringify(tagSlugs) },
   }, householdId)
-  return { calories: result.perServingNutrients.kcalPer100g, tagSlugs }
+  return { calories: result.perServingNutrients.kcalPer100g, tagSlugs, completeness: result.completeness }
 }

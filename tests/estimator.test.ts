@@ -150,6 +150,8 @@ describe("buildNutritionPatch", () => {
       unmatchedCount: 0,
       unmatchedIngredients: [],
       matchedIngredients: [],
+      completeness: "complete",
+      completenessReason: null,
     }
 
     const patch = buildNutritionPatch(result, "abc123", "4 servings")
@@ -161,6 +163,7 @@ describe("buildNutritionPatch", () => {
     expect(patch.extras.calorie_estimator_total_kcal).toBe("1400")
     expect(patch.extras.calorie_estimator_yield).toBe("4")
     expect(patch.extras.calorie_estimator_unmatched).toBe("[]")
+    expect(patch.extras.calorie_estimator_status).toBe("complete")
   })
 
   it("builds patch with empty nutrition when no servings", () => {
@@ -173,6 +176,8 @@ describe("buildNutritionPatch", () => {
       unmatchedCount: 0,
       unmatchedIngredients: [],
       matchedIngredients: [],
+      completeness: "complete",
+      completenessReason: null,
     }
 
     const patch = buildNutritionPatch(result, "def456", null)
@@ -192,6 +197,8 @@ describe("buildNutritionPatch", () => {
       unmatchedCount: 3,
       unmatchedIngredients: ["salt", "pepper", "herbs"],
       matchedIngredients: [],
+      completeness: "partial",
+      completenessReason: "3 ingredient(s) unresolved but weight share is minor",
     }
 
     const patch = buildNutritionPatch(result, "ghi789", "4 servings")
@@ -199,6 +206,78 @@ describe("buildNutritionPatch", () => {
     expect(patch.nutrition.calories).toBe("0")
     expect(patch.extras.calorie_estimator_total_kcal).toBeUndefined()
     expect(patch.extras.calorie_estimator_unmatched).toBe(JSON.stringify(["salt", "pepper", "herbs"]))
+    expect(patch.extras.calorie_estimator_status).toBe("partial")
+    expect(patch.extras.calorie_estimator_status_reason).toContain("minor")
+  })
+
+  it("converts sodium/cholesterol from internal grams to milligrams for Mealie (schema.org convention)", () => {
+    const result: EstimateResult = {
+      slug: "test",
+      servings: 4,
+      totalNutrients: n(400, { sodiumPer100g: 3.2, cholesterolPer100g: 0.4 }),
+      perServingNutrients: n(100, { sodiumPer100g: 0.8, cholesterolPer100g: 0.1 }),
+      matchedCount: 3,
+      unmatchedCount: 0,
+      unmatchedIngredients: [],
+      matchedIngredients: [],
+      completeness: "complete",
+      completenessReason: null,
+    }
+
+    const patch = buildNutritionPatch(result, "mg-test", "4 servings")
+
+    expect(patch.nutrition.sodiumContent).toBe("800")
+    expect(patch.nutrition.cholesterolContent).toBe("100")
+  })
+
+  it("withholds nutrition values entirely when completeness is 'withheld', but still writes hash/status/unmatched", () => {
+    const result: EstimateResult = {
+      slug: "test",
+      servings: 4,
+      totalNutrients: n(null),
+      perServingNutrients: n(null),
+      matchedCount: 1,
+      unmatchedCount: 1,
+      unmatchedIngredients: ["Rinderhack"],
+      matchedIngredients: [],
+      completeness: "withheld",
+      completenessReason: "60% of known ingredient weight is unresolved — nutrition withheld to avoid a misleading result",
+    }
+
+    const patch = buildNutritionPatch(result, "withheld-hash", "4 servings")
+
+    expect(patch.nutrition).toEqual({})
+    expect(patch.extras.calorie_estimator_hash).toBe("withheld-hash")
+    expect(patch.extras.calorie_estimator_status).toBe("withheld")
+    expect(patch.extras.calorie_estimator_status_reason).toContain("withheld")
+    expect(patch.extras.calorie_estimator_unmatched).toBe(JSON.stringify(["Rinderhack"]))
+  })
+
+  it("includes per-ingredient provenance in extras", () => {
+    const result: EstimateResult = {
+      slug: "test",
+      servings: 2,
+      totalNutrients: n(200),
+      perServingNutrients: n(100),
+      matchedCount: 1,
+      unmatchedCount: 0,
+      unmatchedIngredients: [],
+      matchedIngredients: [
+        {
+          name: "Mehl", canonicalName: "Mehl", brand: null, route: "generic",
+          grams: 100, gramsEstimated: false, matched: true,
+          nutrients: n(364), provider: "local-generic", providerId: "Mehl",
+          confidence: 0.7, fallbackStatus: "local-generic", llmParticipated: false,
+        },
+      ],
+      completeness: "complete",
+      completenessReason: null,
+    }
+
+    const patch = buildNutritionPatch(result, "prov-hash", "2 servings")
+    const provenance = JSON.parse(patch.extras.calorie_estimator_provenance)
+    expect(provenance).toHaveLength(1)
+    expect(provenance[0]).toMatchObject({ name: "Mehl", provider: "local-generic", confidence: 0.7, matched: true })
   })
 })
 

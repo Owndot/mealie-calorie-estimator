@@ -40,7 +40,6 @@ export const config = {
     language: process.env.OFF_LANGUAGE || "de",
     searchRateLimit: parseInt(process.env.OFF_SEARCH_RATE_LIMIT || "10", 10),
     productRateLimit: parseInt(process.env.OFF_PRODUCT_RATE_LIMIT || "15", 10),
-    cacheTtlMs: parseInt(process.env.OFF_CACHE_TTL || "86400", 10) * 1000,
     maxRetries: parseInt(process.env.OFF_MAX_RETRIES || "3", 10),
     retryBackoffMs: parseInt(process.env.OFF_RETRY_BACKOFF_MS || "500", 10),
     userAgent: process.env.OFF_USER_AGENT || `mealie-calorie-estimator/${version} (mail@timo-reymann.de)`,
@@ -55,6 +54,24 @@ export const config = {
     rateLimit: parseInt(process.env.LLM_RATE_LIMIT || "30", 10),
   },
 
+  // USDA FoodData Central — optional generic-route fallback provider. Only wired into the
+  // provider registry when USDA_API_KEY is set; there is no dummy/placeholder provider when
+  // it's absent, the generic chain simply has one fewer provider.
+  usda: {
+    apiKey: process.env.USDA_API_KEY || "",
+    baseUrl: process.env.USDA_BASE_URL || "https://api.nal.usda.gov/fdc/v1",
+    rateLimit: parseInt(process.env.USDA_RATE_LIMIT || "10", 10),
+    maxRetries: parseInt(process.env.USDA_MAX_RETRIES || "3", 10),
+    retryBackoffMs: parseInt(process.env.USDA_RETRY_BACKOFF_MS || "500", 10),
+  },
+
+  // Optional local/licensed generic dataset (e.g. BLS once cleared for local import) — a plain
+  // file path a deployer can point at their own licensed export. Never bundled by this project.
+  // When unset, the generic route simply has no such provider (no dummy/no-op placeholder).
+  bls: {
+    localImportPath: process.env.BLS_LOCAL_IMPORT_PATH || "",
+  },
+
   estimate: {
     strategy: (process.env.ESTIMATE_STRATEGY || "all") as "all" | "tagged",
     tag: process.env.ESTIMATE_TAG || "estimate",
@@ -62,6 +79,12 @@ export const config = {
 
   cache: {
     dbPath: process.env.CACHE_DB_PATH || "data/cache.db",
+    // Successful provider matches change rarely — cache them longest.
+    matchTtlMs: parseInt(process.env.CACHE_MATCH_TTL || "604800", 10) * 1000, // 7 days
+    // Negative results are retried sooner in case a provider gets better data over time.
+    missTtlMs: parseInt(process.env.CACHE_MISS_TTL || "86400", 10) * 1000, // 1 day
+    // LLM estimates (gram + nutrient fallback) are the least authoritative — shortest TTL.
+    llmTtlMs: parseInt(process.env.CACHE_LLM_TTL || "43200", 10) * 1000, // 12 hours
   },
 
   logLevel: process.env.LOG_LEVEL || "info",

@@ -75,8 +75,9 @@ export interface OffSearchResult {
 
 export interface OffProduct {
   product_name: string
-  nutriments?: OffNutriments
+  brands?: string | null
   nutriscore_grade?: string
+  nutriments?: OffNutriments
 }
 
 export interface OffNutriments {
@@ -123,13 +124,61 @@ export interface NutrientSet {
   cholesterolPer100g: number | null
 }
 
+/** Preparation state of a resolved food, used for provider matching only — never derived from originalText. */
+export type FoodState = "raw" | "cooked" | "dried" | "unknown"
+
+/** Which side of the routing split an ingredient was classified into. Branded requires explicit structured evidence. */
+export type FoodRoute = "generic" | "branded"
+
+/**
+ * Evidence-based classification of one structured ingredient, produced by the single
+ * whole-recipe batch normalizer (or by deterministic fallback when the batch fails or LLM is disabled).
+ * brand is non-null only when explicit evidence for it was present in structured food.name/aliases.
+ */
+export interface IngredientClassification {
+  index: number
+  canonicalName: string
+  brand: string | null
+  state: FoodState
+  category: string | null
+  route: FoodRoute
+  /** true when the LLM batch normalizer actually produced this row (vs. deterministic fallback) */
+  llmClassified: boolean
+}
+
+export type FallbackStatus = "local-generic" | "usda" | "off" | "llm-nutrient" | "unresolved"
+
+export interface ProviderMatch {
+  nutrients: NutrientSet
+  canonicalName: string
+  brand: string | null
+  state: FoodState
+  provider: string
+  providerId: string | null
+  productName: string | null
+  /** 0..1, provider-reported confidence in this being the right match */
+  confidence: number
+}
+
 export interface IngredientMatch {
   name: string
+  canonicalName: string | null
+  brand: string | null
+  route: FoodRoute | null
   grams: number | null
+  gramsEstimated: boolean
   matched: boolean
   nutrients: NutrientSet | null
+  provider: string | null
+  providerId: string | null
+  confidence: number | null
+  fallbackStatus: FallbackStatus
+  llmParticipated: boolean
+  /** @deprecated use fallbackStatus === "unresolved" ? gramsEstimated via LLM : false */
   llmEstimated?: boolean
 }
+
+export type Completeness = "complete" | "partial" | "withheld"
 
 export interface EstimateResult {
   slug: string
@@ -140,6 +189,8 @@ export interface EstimateResult {
   unmatchedCount: number
   unmatchedIngredients: string[]
   matchedIngredients: IngredientMatch[]
+  completeness: Completeness
+  completenessReason: string | null
 }
 
 export interface NutritionPatch {
