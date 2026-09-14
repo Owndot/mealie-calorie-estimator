@@ -210,7 +210,14 @@ function nameScore(queryTokens: string[], candidateTokens: string[]): number {
 
   if (queryTokens.length === 1) {
     const q = queryTokens[0]
-    const suffixHit = candidateTokens.find((t) => t.length >= q.length && t.endsWith(q) && t.length <= q.length + 8)
+    // Strictly LONGER, not just endsWith: a genuine German compound like "Speisezwiebel" is one
+    // fused token strictly longer than its head word "zwiebel". Requiring t.length > q.length
+    // (not >=) excludes the trivial t === q case — found live: "Koriander" was matching
+    // "Rote-Linsensuppe mit Koriander" (a whole lentil-soup dish) because "koriander" trivially
+    // "ends with" itself as a bare standalone token in an unrelated multi-word dish name. That
+    // exact-token-among-other-words case is weaker evidence and is left to the jaccard fallback
+    // below, which naturally penalizes it via the dish's other, unrelated tokens.
+    const suffixHit = candidateTokens.find((t) => t.length > q.length && t.endsWith(q) && t.length <= q.length + 8)
     if (suffixHit) return 0.6
   }
 

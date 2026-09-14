@@ -150,6 +150,25 @@ describe("BlsProvider — synthetic fixtures (deterministic algorithmic behavior
     expect(match!.nutrients.transFatPer100g).toBeNull()
   })
 
+  it("regression: an exact token buried inside an unrelated multi-word DISH name must not be treated as a compound-suffix match", async () => {
+    // Found live: "Koriander" (coriander, a herb) matched "Rote-Linsensuppe mit Koriander10" (a
+    // whole lentil-soup dish) because "koriander10" trivially "ends with" itself as a bare
+    // standalone token — the suffix rule didn't originally require the matched token to be
+    // strictly LONGER than the query (genuine compounding, e.g. "Speisezwiebel"/"zwiebel"), so an
+    // exact token buried among clearly-different food words got the same confident bonus.
+    __resetBlsDataForTests(
+      Promise.resolve(
+        __buildTestBlsData([
+          { blsCode: "X002", nameDe: "Rote-Linsensuppe mit Koriander10", inferredState: "unknown", nutrients: nutrients({ kcalPer100g: 90, proteinPer100g: 5, carbsPer100g: 12, fatPer100g: 2 }) },
+        ]),
+      ),
+    )
+    const provider = new BlsProvider()
+    const match = await provider.lookup(query({ foodName: "Koriander10", structuredName: "Koriander10" }))
+
+    expect(match).toBeNull()
+  })
+
   it("regression: a hyphen-joined compound DISH name must not prefix-match a bare generic-food query", async () => {
     // Found live: "Kartoffel" incorrectly prefix-matched "Kartoffel-Tomaten-Gratin mit
     // Mozzarella" (a casserole) because the shared tokenizer turns hyphens into token
