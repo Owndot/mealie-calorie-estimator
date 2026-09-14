@@ -66,6 +66,26 @@ describe("cache", () => {
       expect(getCachedProviderMatch("usda", buildQueryKey("nonexistent-food", null))).toBeUndefined()
     })
 
+    it("round-trips foodType and matchReason through a cache write + read", () => {
+      // Found live in the mandatory manual-provenance audit: foodType/matchReason were added to
+      // ProviderMatch without a matching cache-column migration, so every cache HIT silently lost
+      // them — a fresh provider fetch had them populated in memory, but a subsequent cache hit for
+      // the identical query returned undefined for both, inconsistently, across recipes.
+      const key = buildQueryKey("Kreuzkümmel", null)
+      setCachedProviderMatch("usda", key, match({ foodType: "simple", matchReason: "fuzzy" }))
+      const cached = getCachedProviderMatch("usda", key)
+      expect(cached?.foodType).toBe("simple")
+      expect(cached?.matchReason).toBe("fuzzy")
+    })
+
+    it("round-trips a null/absent foodType and matchReason as undefined, not the literal string \"null\"", () => {
+      const key = buildQueryKey("Unbekannt", null)
+      setCachedProviderMatch("usda", key, match({ foodType: undefined, matchReason: undefined }))
+      const cached = getCachedProviderMatch("usda", key)
+      expect(cached?.foodType).toBeUndefined()
+      expect(cached?.matchReason).toBeUndefined()
+    })
+
     it("does not poison cache between a generic and branded lookup of the same food name", () => {
       const genericKey = buildQueryKey("Joghurt", null)
       const brandedKey = buildQueryKey("Joghurt", "Danone")

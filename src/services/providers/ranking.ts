@@ -58,7 +58,11 @@ const ENGLISH_STATE_PATTERNS: [FoodState, RegExp][] = [
   // "powder" wasn't recognized as a dried-state indicator, so no state conflict ever fired
   // against the query's "raw" state.
   ["dried", /\b(dried|dehydrated|dry|powder(ed)?)\b/i],
-  ["cooked", /\b(cooked|boiled|baked|fried|roasted|grilled|steamed|braised|poached|stewed)\b/i],
+  // "pickled" found live: raw "Rote Zwiebel" (red onion) matched OFF's "Pickled red onion" — a
+  // vinegar-preserved product with a materially different nutrient profile than fresh onion.
+  // FoodState has no dedicated "pickled" value, but grouping it with "cooked" still gets the
+  // useful behavior: it correctly conflicts with a "raw" query, which is the case that matters.
+  ["cooked", /\b(cooked|boiled|baked|fried|roasted|grilled|steamed|braised|poached|stewed|pickled|eingelegt)\b/i],
   ["raw", /\braw\b/i],
 ]
 
@@ -114,8 +118,20 @@ const MISMATCH_RULES: MismatchRule[] = [
   { queryPattern: /\b(kaffee|coffee)\b/i, forbiddenCandidatePattern: /\b(likör|liqueur|eiscreme|ice cream)\b/i, description: "coffee vs coffee liqueur/ice cream" },
   { queryPattern: /\b(vanille|vanilla)\b/i, forbiddenCandidatePattern: /\b(eiscreme|ice cream|pudding)\b/i, description: "vanilla vs vanilla ice cream/pudding" },
   // Found live: bare "Wasser"/"Water" (plain water, ~0 kcal) matched USDA's "Water convolvulus,
-  // raw" — actually a leafy VEGETABLE (water spinach), not water — via a single shared token.
-  { queryPattern: /\b(wasser|water)\b/i, forbiddenCandidatePattern: /\b(convolvulus|chestnut|kastanie|melon|melone|cress|kresse)\b/i, description: "plain water vs a different food whose name happens to contain \"water\"" },
+  // raw" — actually a leafy VEGETABLE (water spinach), not water — via a single shared token. Also
+  // found live in the mandatory manual-provenance audit: matched OFF's "Tonic Water" — a
+  // sweetened, flavored soft drink with real calories/sugar, not plain water.
+  { queryPattern: /\b(wasser|water)\b/i, forbiddenCandidatePattern: /\b(convolvulus|chestnut|kastanie|melon|melone|cress|kresse|tonic|sparkling|soda water|mineral)\b/i, description: "plain water vs a different food whose name happens to contain \"water\"" },
+  // Found live in the mandatory manual-provenance audit, in two separate recipes: bare "Pfeffer"
+  // (pepper, the spice) matched OFF's "Dr pepper" — a branded carbonated soft drink, via the
+  // single shared word "pepper".
+  { queryPattern: /\b(pfeffer|pepper)\b/i, forbiddenCandidatePattern: /\bdr\.?\s*pepper\b/i, description: "pepper (spice) vs the Dr Pepper soft drink brand" },
+  // Found live: "rote Paprika"/"grüne Paprika" (bell pepper, a VEGETABLE, translated by the LLM to
+  // canonicalEnglish "red/green bell pepper") matched USDA's "Spices, pepper, red or cayenne" — a
+  // dried chili SPICE product, via the shared word "pepper". Both "simple" foodType (foodTypeConflict
+  // can't catch a within-simple category mismatch), so this needs its own rule. A 90g "vegetable"
+  // quantity of cayenne spice nutrition is a severe distortion, not just a labeling nicety.
+  { queryPattern: /\bbell pepper\b/i, forbiddenCandidatePattern: /\bspices?,?\s*(pepper|paprika)\b/i, description: "bell pepper (vegetable) vs a dried pepper/paprika SPICE product" },
   // Found live: "Minze" (mint, an herb) matched USDA's "Candies, NESTLE, AFTER EIGHT Mints" — a
   // branded chocolate confection, not the herb.
   { queryPattern: /\b(minze|mint)\b/i, forbiddenCandidatePattern: /\b(candy|candies|chocolate|schokolade|bonbon)\b/i, description: "mint (herb) vs mint-flavored candy/chocolate" },
@@ -149,7 +165,11 @@ const MISMATCH_RULES: MismatchRule[] = [
   // short-circuits the rule for it, same mechanism as every other rule here.
   {
     queryPattern: /(?<!\p{L})(öl|oil)(?!\p{L})/iu,
-    forbiddenCandidatePattern: /\b(coconut|kokos|olive|oliven|sesame|sesam|sunflower|sonnenblumen|canola|raps|palm|walnut|walnuss|avocado|peanut|erdnuss|corn|maiskeim|flaxseed|leinsamen)\b/i,
+    // Found live in the mandatory manual-provenance audit, in two separate recipes: bare "Öl"
+    // matched USDA's "Oil, almond" — "almond"/"mandel" was missing from this list entirely,
+    // exactly the bug class this rule exists to prevent.
+    forbiddenCandidatePattern:
+      /\b(coconut|kokos|olive|oliven|sesame|sesam|sunflower|sonnenblumen|canola|raps|palm|walnut|walnuss|avocado|peanut|erdnuss|corn|maiskeim|flaxseed|leinsamen|almond|mandel|hazelnut|haselnuss|grapeseed|traubenkern|pumpkin seed|kürbiskern|rice bran)\b/i,
     description: "generic oil vs a specific oil type the query never named",
   },
 ]
@@ -211,7 +231,15 @@ const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] 
   // "stuffed"/"curry" found live: "grüne Paprika" (raw green bell pepper) matched "Stuffed green
   // pepper, Puerto Rican style"; "Rote Linse" (raw red lentil) matched "Lentil curry" — both
   // whole prepared dishes built AROUND the query ingredient, not the ingredient itself.
-  { pattern: /suppe|eintopf|\bstuffed\b|\bcurry\b|\bsoup\b|\bstew\b|chowder/i, impliesCategory: "prepared-dish" },
+  // "sauce"/"dressing" found live in the mandatory manual-provenance audit: "grüne Paprika" (raw
+  // green bell pepper) matched OFF's "Green Pepper Sauce"; "Kirschtomate" (raw cherry tomato)
+  // matched USDA's "Tomato products, canned, sauce, with tomato tidbits"; "italienische
+  // Gewürzmischung" (a dry spice blend) matched USDA's "Creamy Italian dressing" — a liquid
+  // condiment/composite product in every case, not the raw ingredient or dry seasoning itself.
+  { pattern: /suppe|eintopf|\bstuffed\b|\bcurry\b|\bsoup\b|\bstew\b|chowder|\bsauce\b|so(ß|ss)e|\bdressing\b/i, impliesCategory: "prepared-dish" },
+  // Found live: "Paprikapulver" (a dry spice) matched OFF's "Paprika Frischkäsezubereitung" — a
+  // paprika-flavored cream cheese SPREAD, a dairy product wholly unrelated to the spice itself.
+  { pattern: /frischkäse|frischkaese|cream cheese|\bspread\b/i, impliesCategory: "dairy-product" },
   { pattern: /stangen|brezel|chips|pretzel|\bsnack\b/i, impliesCategory: "snack" },
   { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit|brot|\bbread\b/i, impliesCategory: "baked-good" },
   { pattern: /limonade|saft|getränk|juice|drink|\b(soda|cola|tea|tee|ale)\b/i, impliesCategory: "beverage" },

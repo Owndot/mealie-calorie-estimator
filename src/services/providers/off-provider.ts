@@ -4,7 +4,7 @@ import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
 import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderMatch, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { rankCandidates, MIN_ACCEPTABLE_SCORE, type RankableCandidate } from "./ranking.js"
+import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, type RankableCandidate } from "./ranking.js"
 
 const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
@@ -153,7 +153,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v5"
+const OFF_MATCH_ALGORITHM_VERSION = "v6"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -190,12 +190,17 @@ export class OffProvider implements NutrientProvider {
       brand: normalizeOffBrand(product.brands),
       hasCompleteNutrients: product.nutriments?.["energy-kcal_100g"] != null,
       foodType: offFoodType(product.categories_tags),
+      // Found live in the mandatory manual-provenance audit: OFF candidates never had a `state`
+      // set at all, so the raw-vs-processed state conflict check (already relied on by USDA) never
+      // ran here — "Rote Zwiebel" (raw red onion) matched OFF's "Pickled red onion" with nothing
+      // to flag the state mismatch.
+      state: typeof product.product_name === "string" ? inferStateFromName(product.product_name) : "unknown",
     }))
 
     // categoryConflict participates here too (query-side data only — no new OFF response field
     // needed) for the same reason BLS/USDA reject it: a strict raw-ingredient category query
     // should never accept an OFF product that reads as a composite/manufactured item.
-    const ranked = rankCandidates(query.foodName, query.brand, rankable, { queryCategory: query.category, queryFoodType: query.foodType })
+    const ranked = rankCandidates(query.foodName, query.brand, rankable, { queryState: query.state, queryCategory: query.category, queryFoodType: query.foodType })
     const top = ranked[0]
 
     if (!top) {

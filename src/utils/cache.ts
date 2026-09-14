@@ -76,17 +76,25 @@ export async function initCache(): Promise<void> {
     nutrients TEXT NOT NULL,
     updated_at INTEGER NOT NULL,
     data_type TEXT,
+    food_type TEXT,
+    match_reason TEXT,
     PRIMARY KEY (provider, query_key)
   )`)
 
-  // Migration: data_type (USDA's Foundation/SR Legacy/Survey (FNDDS)/Branded tier, for
-  // provenance) was added after provider_match_cache already existed on deployed volumes —
-  // CREATE TABLE IF NOT EXISTS is a no-op there, so this ALTER TABLE covers the upgrade. Ignore
-  // the "duplicate column" error on a fresh table that already has it from the CREATE above.
-  try {
-    db.run(`ALTER TABLE provider_match_cache ADD COLUMN data_type TEXT`)
-  } catch {
-    // already present
+  // Migration: data_type/food_type/match_reason were added after provider_match_cache already
+  // existed on deployed volumes — CREATE TABLE IF NOT EXISTS is a no-op there, so these ALTER
+  // TABLEs cover the upgrade. Ignore the "duplicate column" error on a fresh table that already
+  // has them from the CREATE above. Found live: food_type/match_reason were added to ProviderMatch
+  // without a matching cache migration, so every cache HIT (as opposed to a fresh provider fetch)
+  // silently returned them as undefined — provenance looked fine on the first resolution of an
+  // ingredient and silently lost its foodType/matchReason on every subsequent cache hit for the
+  // same query, inconsistently, across recipes.
+  for (const col of ["data_type", "food_type", "match_reason"]) {
+    try {
+      db.run(`ALTER TABLE provider_match_cache ADD COLUMN ${col} TEXT`)
+    } catch {
+      // already present
+    }
   }
 
   // Negative cache: a provider had no acceptable match for this query. Avoids re-hitting rate
@@ -135,7 +143,7 @@ function isExpired(updatedAt: number, ttlMs: number): boolean {
 
 export function getCachedProviderMatch(provider: string, queryKey: string): ProviderMatch | undefined {
   const stmt = db.prepare(
-    "SELECT canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type FROM provider_match_cache WHERE provider = ? AND query_key = ?",
+    "SELECT canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason FROM provider_match_cache WHERE provider = ? AND query_key = ?",
   )
   stmt.bind([provider, queryKey])
   try {
@@ -150,6 +158,8 @@ export function getCachedProviderMatch(provider: string, queryKey: string): Prov
       nutrients: string
       updated_at: number
       data_type: string | null
+      food_type: string | null
+      match_reason: string | null
     }
     if (isExpired(row.updated_at, config.cache.matchTtlMs)) {
       db.run("DELETE FROM provider_match_cache WHERE provider = ? AND query_key = ?", [provider, queryKey])
@@ -166,6 +176,8 @@ export function getCachedProviderMatch(provider: string, queryKey: string): Prov
       productName: row.product_name,
       confidence: row.confidence,
       dataType: row.data_type,
+      foodType: (row.food_type ?? undefined) as ProviderMatch["foodType"],
+      matchReason: row.match_reason ?? undefined,
     }
   } catch {
     return undefined
@@ -178,8 +190,8 @@ export function setCachedProviderMatch(provider: string, queryKey: string, match
   const now = Date.now()
   db.run(
     `INSERT INTO provider_match_cache
-       (provider, query_key, canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (provider, query_key, canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(provider, query_key) DO UPDATE SET
        canonical_name = excluded.canonical_name,
        brand = excluded.brand,
@@ -189,7 +201,9 @@ export function setCachedProviderMatch(provider: string, queryKey: string, match
        confidence = excluded.confidence,
        nutrients = excluded.nutrients,
        updated_at = excluded.updated_at,
-       data_type = excluded.data_type`,
+       data_type = excluded.data_type,
+       food_type = excluded.food_type,
+       match_reason = excluded.match_reason`,
     [
       provider,
       queryKey,
@@ -202,6 +216,8 @@ export function setCachedProviderMatch(provider: string, queryKey: string, match
       JSON.stringify(match.nutrients),
       now,
       match.dataType ?? null,
+      match.foodType ?? null,
+      match.matchReason ?? null,
     ],
   )
   scheduleSave()

@@ -143,12 +143,40 @@ describe("findMismatch — obvious mismatch rejection", () => {
     expect(findMismatch("Öl", "Vegetable oil")).toBeNull()
   })
 
+  it("rejects a bare oil query matching almond oil specifically", () => {
+    // Found live in the mandatory manual-provenance audit, in two separate recipes: bare "Öl"
+    // matched USDA's "Oil, almond" — "almond" was missing from the forbidden-oil-type list.
+    expect(findMismatch("Öl", "Oil, almond")).not.toBeNull()
+  })
+
   it("does not reject a bare pepper query matching plain black pepper — the correct match", () => {
     // Positive case: "Pfeffer" must still be able to match its correct BLS/USDA target (plain
     // black pepper spice) — only composite dishes STYLED with "-pfeffer" are rejected.
     expect(findMismatch("Pfeffer", "Pfeffer, schwarz, gemahlen")).toBeNull()
     expect(findMismatch("Pfeffer", "Spices, pepper, black")).toBeNull()
     expect(categoryConflict("spice", "Pfeffer, schwarz, gemahlen")).toBe(false)
+  })
+
+  it("rejects pepper (spice) matching the Dr Pepper soft drink brand", () => {
+    // Found live in the mandatory manual-provenance audit, in two separate recipes: bare
+    // "Pfeffer" matched OFF's "Dr pepper" — a branded soda, via the shared word "pepper".
+    expect(findMismatch("Pfeffer", "Dr pepper")).not.toBeNull()
+    expect(findMismatch("pepper", "Dr. Pepper")).not.toBeNull()
+  })
+
+  it("rejects bell pepper (vegetable) matching a dried pepper/paprika SPICE product", () => {
+    // Found live: "rote Paprika"/"grüne Paprika" (bell pepper, a vegetable) translated to
+    // canonicalEnglish "red/green bell pepper" matched USDA's "Spices, pepper, red or cayenne" —
+    // a dried chili spice, via the shared word "pepper". Both are "simple" foodType, so
+    // foodTypeConflict alone can't catch this within-simple category mismatch.
+    expect(findMismatch("red bell pepper", "Spices, pepper, red or cayenne")).not.toBeNull()
+    expect(findMismatch("green bell pepper", "Spices, paprika")).not.toBeNull()
+  })
+
+  it("rejects plain water matching a branded tonic water product", () => {
+    // Found live: "Wasser" (plain water) matched OFF's "Tonic Water" — a sweetened, flavored
+    // soft drink with real calories/sugar, not plain water.
+    expect(findMismatch("Wasser", "Tonic Water Hofer")).not.toBeNull()
   })
 })
 
@@ -334,6 +362,26 @@ describe("categoryConflict", () => {
       expect(categoryConflict("beverage", "Crackers, water biscuits")).toBe(true)
       expect(categoryConflict("water", "Crackers, water biscuits")).toBe(true)
     })
+
+    it("rejects a vegetable query against a sauce/condiment product built around it", () => {
+      // Found live in the mandatory manual-provenance audit: "grüne Paprika" (raw green bell
+      // pepper) matched OFF's "Green Pepper Sauce"; "Kirschtomate" (raw cherry tomato) matched
+      // USDA's "Tomato products, canned, sauce, with tomato tidbits".
+      expect(categoryConflict("vegetable", "Green Pepper Sauce")).toBe(true)
+      expect(categoryConflict("fruit", "Tomato products, canned, sauce, with tomato tidbits")).toBe(true)
+    })
+
+    it("rejects a spice query against a liquid salad dressing sharing a descriptive word", () => {
+      // Found live: "italienische Gewürzmischung" (a dry Italian spice blend) matched USDA's
+      // "Creamy Italian dressing" — a liquid condiment, not a dry seasoning.
+      expect(categoryConflict("spice", "Creamy Italian dressing")).toBe(true)
+    })
+
+    it("rejects a spice query against a cream cheese spread sharing a descriptive word", () => {
+      // Found live, in two separate recipes: "Paprikapulver" (a dry spice) matched OFF's "Paprika
+      // Frischkäsezubereitung" — a paprika-flavored cream cheese SPREAD, a dairy product.
+      expect(categoryConflict("spice", "Paprika Frischkäsezubereitung")).toBe(true)
+    })
   })
 })
 
@@ -355,5 +403,13 @@ describe("inferStateFromName — English candidate state inference (USDA)", () =
 
   it("returns 'unknown' when no state word is present", () => {
     expect(inferStateFromName("Chicken, breast")).toBe("unknown")
+  })
+
+  it("infers 'cooked' (a raw-conflicting state) from 'pickled'", () => {
+    // Found live: raw "Rote Zwiebel" (red onion) matched OFF's "Pickled red onion" — a
+    // vinegar-preserved product with a materially different profile than fresh onion.
+    // FoodState has no dedicated "pickled" value; grouping it with "cooked" still gets the
+    // useful behavior of conflicting with a "raw" query.
+    expect(inferStateFromName("Pickled red onion")).toBe("cooked")
   })
 })
