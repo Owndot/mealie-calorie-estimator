@@ -149,6 +149,19 @@ describe("findMismatch — obvious mismatch rejection", () => {
     expect(findMismatch("Öl", "Oil, almond")).not.toBeNull()
   })
 
+  it("rejects a bare oil query matching ANY specific USDA \"Oil, <type>\" candidate structurally, not just enumerated names", () => {
+    // Found live on the next redeploy: bare "Öl" matched USDA's "Oil, babassu" — a specific oil
+    // type not in the enumerated name list, proving enumeration alone is whack-a-mole. The
+    // structural "Oil, <type>" check catches this and any other USDA-named oil type generically.
+    expect(findMismatch("Öl", "Oil, babassu")).not.toBeNull()
+    expect(findMismatch("oil", "Oil, grapeseed")).not.toBeNull()
+  })
+
+  it("does not reject a bare oil query against USDA's generic \"Oil, vegetable\"/\"Oil, cooking\" naming", () => {
+    expect(findMismatch("Öl", "Oil, vegetable")).toBeNull()
+    expect(findMismatch("Öl", "Oil, cooking, NFS")).toBeNull()
+  })
+
   it("does not reject a bare pepper query matching plain black pepper — the correct match", () => {
     // Positive case: "Pfeffer" must still be able to match its correct BLS/USDA target (plain
     // black pepper spice) — only composite dishes STYLED with "-pfeffer" are rejected.
@@ -171,6 +184,34 @@ describe("findMismatch — obvious mismatch rejection", () => {
     // foodTypeConflict alone can't catch this within-simple category mismatch.
     expect(findMismatch("red bell pepper", "Spices, pepper, red or cayenne")).not.toBeNull()
     expect(findMismatch("green bell pepper", "Spices, paprika")).not.toBeNull()
+  })
+
+  it("rejects pepper (spice) matching a raw vegetable pepper variety", () => {
+    // Found live on the redeploy right after the Dr-Pepper fix: bare "Pfeffer" then matched
+    // USDA's "Pepper, banana, raw" — a raw vegetable pepper variety, not the ground spice.
+    expect(findMismatch("Pfeffer", "Pepper, banana, raw")).not.toBeNull()
+    expect(findMismatch("pepper", "Peppers, sweet, red, raw")).not.toBeNull()
+  })
+
+  it("does not reject bare pepper matching the correct black/white spice candidates", () => {
+    expect(findMismatch("Pfeffer", "Spices, pepper, black")).toBeNull()
+    expect(findMismatch("pepper", "Spices, pepper, white")).toBeNull()
+  })
+
+  it("does not reject a bell-pepper query against its correct vegetable-pepper candidate (positive case)", () => {
+    // The vegetable-pepper rule must never fire for the legitimate "bell pepper" query the rule
+    // above exists to protect — only for the bare spice query "Pfeffer"/"pepper".
+    expect(findMismatch("red bell pepper", "Peppers, sweet, red, raw")).toBeNull()
+  })
+
+  it("rejects cherry tomato (vegetable) matching cherries (the fruit)", () => {
+    // Found live: "Kirschtomate" (cherry tomato) translated to canonicalEnglish "cherry tomato"
+    // matched USDA's "Cherries, sweet, raw" — the fruit, via the shared word "cherry".
+    expect(findMismatch("cherry tomato", "Cherries, sweet, raw")).not.toBeNull()
+  })
+
+  it("does not reject cherry tomato against a candidate that legitimately mentions both words", () => {
+    expect(findMismatch("cherry tomato", "Tomatoes, cherry, raw")).toBeNull()
   })
 
   it("rejects plain water matching a branded tonic water product", () => {

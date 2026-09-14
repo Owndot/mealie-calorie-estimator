@@ -132,6 +132,17 @@ const MISMATCH_RULES: MismatchRule[] = [
   // can't catch a within-simple category mismatch), so this needs its own rule. A 90g "vegetable"
   // quantity of cayenne spice nutrition is a severe distortion, not just a labeling nicety.
   { queryPattern: /\bbell pepper\b/i, forbiddenCandidatePattern: /\bspices?,?\s*(pepper|paprika)\b/i, description: "bell pepper (vegetable) vs a dried pepper/paprika SPICE product" },
+  // The reverse direction, found live on the very next redeploy after the Dr-Pepper fix above:
+  // bare "Pfeffer" (spice) then matched USDA's "Pepper, banana, raw" — a raw VEGETABLE pepper
+  // variety (USDA's "Pepper(s), <variety>, raw" naming convention), not the ground spice. Excludes
+  // "bell pepper" query text via the negative lookbehind so this never fires for the legitimate
+  // vegetable-pepper queries the rule above protects; excludes "black"/"white"/"red or cayenne" from
+  // the forbidden side since those ARE the correct spice-side candidates.
+  {
+    queryPattern: /(?<!bell )\b(pfeffer|pepper)\b(?!\s*,)/i,
+    forbiddenCandidatePattern: /^peppers?,\s*(?!black\b|white\b|red or cayenne\b)[a-z]/i,
+    description: "pepper (spice) vs a raw vegetable pepper variety (USDA \"Pepper, <variety>, raw\" naming)",
+  },
   // Found live: "Minze" (mint, an herb) matched USDA's "Candies, NESTLE, AFTER EIGHT Mints" — a
   // branded chocolate confection, not the herb.
   { queryPattern: /\b(minze|mint)\b/i, forbiddenCandidatePattern: /\b(candy|candies|chocolate|schokolade|bonbon)\b/i, description: "mint (herb) vs mint-flavored candy/chocolate" },
@@ -165,12 +176,26 @@ const MISMATCH_RULES: MismatchRule[] = [
   // short-circuits the rule for it, same mechanism as every other rule here.
   {
     queryPattern: /(?<!\p{L})(öl|oil)(?!\p{L})/iu,
-    // Found live in the mandatory manual-provenance audit, in two separate recipes: bare "Öl"
-    // matched USDA's "Oil, almond" — "almond"/"mandel" was missing from this list entirely,
-    // exactly the bug class this rule exists to prevent.
+    // Found live in the mandatory manual-provenance audit, in THREE separate recipes across two
+    // redeploys: bare "Öl" matched USDA's "Oil, almond", then (after adding "almond" to a name
+    // list) "Oil, babassu" — proving a per-name enumeration is whack-a-mole against USDA's long
+    // tail of specific oil types. Fixed structurally instead: USDA's SR Legacy naming convention
+    // for oils is "Oil, <type>" — ANY such candidate the query didn't itself name a specific type
+    // for is guessing, regardless of which type. The enumerated German-compound list stays for
+    // OFF/BLS candidates that don't follow USDA's comma-qualified naming (e.g. bare "Kokosöl").
     forbiddenCandidatePattern:
-      /\b(coconut|kokos|olive|oliven|sesame|sesam|sunflower|sonnenblumen|canola|raps|palm|walnut|walnuss|avocado|peanut|erdnuss|corn|maiskeim|flaxseed|leinsamen|almond|mandel|hazelnut|haselnuss|grapeseed|traubenkern|pumpkin seed|kürbiskern|rice bran)\b/i,
+      /\b(coconut|kokos|olive|oliven|sesame|sesam|sunflower|sonnenblumen|canola|raps|palm|walnut|walnuss|avocado|peanut|erdnuss|corn|maiskeim|flaxseed|leinsamen|almond|mandel|hazelnut|haselnuss|grapeseed|traubenkern|pumpkin seed|kürbiskern|rice bran)\b|^oils?,\s*(?!vegetable\b|cooking\b|salad\b|blend\b)[a-z]/i,
     description: "generic oil vs a specific oil type the query never named",
+  },
+  // "Kirschtomate" (cherry tomato, a vegetable) translated to canonicalEnglish "cherry tomato"
+  // matched USDA's "Cherries, sweet, raw" — the FRUIT, via the shared word "cherry"/"cherries".
+  // Anchored whole-string checks (not a simple substring test) so a legitimate "Tomatoes, cherry,
+  // raw" candidate — which also contains "cherry" — is never wrongly excluded just because
+  // "tomato" happens to appear before rather than after "cherry" in its name.
+  {
+    queryPattern: /\bcherry tomato(es)?\b/i,
+    forbiddenCandidatePattern: /^(?!.*tomato).*\bcherr(y|ies)\b/i,
+    description: "cherry tomato (a vegetable) vs cherries (the fruit)",
   },
 ]
 
@@ -241,7 +266,13 @@ const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] 
   // paprika-flavored cream cheese SPREAD, a dairy product wholly unrelated to the spice itself.
   { pattern: /frischkäse|frischkaese|cream cheese|\bspread\b/i, impliesCategory: "dairy-product" },
   { pattern: /stangen|brezel|chips|pretzel|\bsnack\b/i, impliesCategory: "snack" },
-  { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit|brot|\bbread\b/i, impliesCategory: "baked-good" },
+  // "focaccia" found live: "italienische Gewürzmischung" (a dry Italian spice blend) matched
+  // USDA's "Focaccia, Italian, plain" — the same "shared descriptive word only" failure class as
+  // the Salami/Italian-Ice/dressing cases above, just a different specific baked good. This
+  // "Italian X" pattern is a known long tail (see final report) — the underlying weakness is that
+  // a single shared adjective token can carry too much weight in nameSimilarity for a multi-word
+  // query; each specific collision found live is patched here, but this is not an exhaustive fix.
+  { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit|brot|\bbread\b|focaccia/i, impliesCategory: "baked-good" },
   { pattern: /limonade|saft|getränk|juice|drink|\b(soda|cola|tea|tee|ale)\b/i, impliesCategory: "beverage" },
   // Found live: "italienische Gewürzmischung" (Italian spice mix) matched "Italian Ice" (a frozen
   // dessert); "Kirschtomate" (raw cherry tomato) matched "Cobbler, cherry" (a fruit dessert) —
