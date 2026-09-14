@@ -87,6 +87,12 @@ const MISMATCH_RULES: MismatchRule[] = [
   { queryPattern: /\b(zitrone|lemon)\b/i, forbiddenCandidatePattern: /\b(soda|limonade|sprite|7up)\b/i, description: "lemon vs lemon soda" },
   { queryPattern: /\b(kaffee|coffee)\b/i, forbiddenCandidatePattern: /\b(likör|liqueur|eiscreme|ice cream)\b/i, description: "coffee vs coffee liqueur/ice cream" },
   { queryPattern: /\b(vanille|vanilla)\b/i, forbiddenCandidatePattern: /\b(eiscreme|ice cream|pudding)\b/i, description: "vanilla vs vanilla ice cream/pudding" },
+  // Found live: bare "Wasser"/"Water" (plain water, ~0 kcal) matched USDA's "Water convolvulus,
+  // raw" — actually a leafy VEGETABLE (water spinach), not water — via a single shared token.
+  { queryPattern: /\b(wasser|water)\b/i, forbiddenCandidatePattern: /\b(convolvulus|chestnut|kastanie|melon|melone|cress|kresse)\b/i, description: "plain water vs a different food whose name happens to contain \"water\"" },
+  // Found live: "Minze" (mint, an herb) matched USDA's "Candies, NESTLE, AFTER EIGHT Mints" — a
+  // branded chocolate confection, not the herb.
+  { queryPattern: /\b(minze|mint)\b/i, forbiddenCandidatePattern: /\b(candy|candies|chocolate|schokolade|bonbon)\b/i, description: "mint (herb) vs mint-flavored candy/chocolate" },
 ]
 
 /** Returns a description of the violated rule, or null if no obvious mismatch applies. */
@@ -138,10 +144,21 @@ const STRICT_RAW_INGREDIENT_CATEGORIES = new Set([
  */
 const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] = [
   { pattern: /wurst|sausage/i, impliesCategory: "meat-product" },
-  { pattern: /suppe|eintopf|\bsoup\b|\bstew\b|chowder/i, impliesCategory: "prepared-dish" },
+  // "stuffed"/"curry" found live: "grüne Paprika" (raw green bell pepper) matched "Stuffed green
+  // pepper, Puerto Rican style"; "Rote Linse" (raw red lentil) matched "Lentil curry" — both
+  // whole prepared dishes built AROUND the query ingredient, not the ingredient itself.
+  { pattern: /suppe|eintopf|\bstuffed\b|\bcurry\b|\bsoup\b|\bstew\b|chowder/i, impliesCategory: "prepared-dish" },
   { pattern: /stangen|brezel|chips|pretzel|\bsnack\b/i, impliesCategory: "snack" },
   { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit|brot|\bbread\b/i, impliesCategory: "baked-good" },
   { pattern: /limonade|saft|getränk|juice|drink|\b(soda|cola|tea|tee|ale)\b/i, impliesCategory: "beverage" },
+  // Found live: "italienische Gewürzmischung" (Italian spice mix) matched "Italian Ice" (a frozen
+  // dessert); "Kirschtomate" (raw cherry tomato) matched "Cobbler, cherry" (a fruit dessert) —
+  // both via a single shared descriptive word ("Italian"/"cherry"), unrelated to the actual food.
+  { pattern: /\bice\b|sorbet|cobbler|\bpie\b|dessert|pudding|gelato/i, impliesCategory: "dessert" },
+  // Found live: "Hähnchenbrustfilets" (plain chicken breast) matched "Chicken breast tenders,
+  // breaded, uncooked" — a coated/composite product with significantly different macros
+  // (added carbs/fat from the breading) than the plain cut the query actually named.
+  { pattern: /breaded|paniert|battered|\bcrumbed\b/i, impliesCategory: "processed-product" },
   // German dish-naming convention: MEAT-PREFIX + dish-type suffix names a whole prepared dish,
   // not the suffix word's literal food identity. Found live: "Schweinepfeffer" ("Schweine-" =
   // pork + "-pfeffer", a savoury pork goulash) matched a bare "Pfeffer" (pepper spice) query via
@@ -152,7 +169,9 @@ const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] 
   // is never flagged, and excludes an "ei"/"eier" (egg) continuation specifically — "Hühnerei"
   // (chicken's EGG, a confirmed-correct BLS match found earlier) is animal-prefix + egg, not
   // animal-prefix + dish-suffix, and must not collide with this rule.
-  { pattern: /\b(schweine|rinder|kalbs|lamm|hähnchen|haehnchen|hühner|huehner|enten|puten|wild|reh)(?!ei\b|eier\b)\w+/i, impliesCategory: "meat-dish" },
+  // "hase" excludes an "ln" continuation too — "Haselnuss" (hazelnut) starts with "hase" but is
+  // not remotely rabbit-related; "Hasenpfeffer" (rabbit pepper stew) is the real target.
+  { pattern: /\b(schweine|rinder|kalbs|lamm|hähnchen|haehnchen|hühner|huehner|enten|puten|wild|reh|hase)(?!ei\b|eier\b|ln)\w+/i, impliesCategory: "meat-dish" },
 ]
 
 /**

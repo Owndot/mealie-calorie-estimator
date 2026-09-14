@@ -57,6 +57,19 @@ describe("findMismatch — obvious mismatch rejection", () => {
   it("does not flag unrelated foods", () => {
     expect(findMismatch("Mehl", "Weizenmehl")).toBeNull()
   })
+
+  it("rejects plain water matching a differently-named food that happens to contain \"water\"", () => {
+    // Found live: "Wasser" matched USDA's "Water convolvulus, raw" — actually water spinach, a
+    // leafy vegetable, not water — via a single shared token.
+    expect(findMismatch("Wasser", "Water convolvulus, raw")).not.toBeNull()
+    expect(findMismatch("Water", "Water chestnut")).not.toBeNull()
+  })
+
+  it("rejects mint (herb) matching mint-flavored candy/chocolate", () => {
+    // Found live: "Minze" matched USDA's "Candies, NESTLE, AFTER EIGHT Mints" — a branded
+    // chocolate confection, not the herb.
+    expect(findMismatch("Minze", "Candies, NESTLE, AFTER EIGHT Mints")).not.toBeNull()
+  })
 })
 
 describe("rankCandidates", () => {
@@ -175,6 +188,39 @@ describe("categoryConflict", () => {
 
     it("still flags a genuine animal-prefixed compound that isn't an egg (e.g. pork meat vs dairy category)", () => {
       expect(categoryConflict("dairy", "Schweinefleisch")).toBe(true)
+    })
+
+    it("rejects a spice query against 'Hasenpfeffer' (rabbit pepper stew)", () => {
+      expect(categoryConflict("spice", "Hasenbraten mariniert (Hasenpfeffer) mit Sauce")).toBe(true)
+    })
+
+    it("does NOT flag 'Haselnuss' (hazelnut) even though it starts with the same 4 letters as 'Hase' (rabbit)", () => {
+      expect(categoryConflict("nut", "Haselnuss")).toBe(false)
+      expect(categoryConflict("fat", "Haselnussöl")).toBe(false)
+    })
+  })
+
+  describe("dessert, prepared-dish, and processed-product markers", () => {
+    it("rejects a spice query against a frozen dessert sharing a descriptive word", () => {
+      // Found live: "italienische Gewürzmischung" (Italian spice mix) matched USDA's "Italian
+      // Ice" — a frozen dessert, unrelated to the seasoning blend.
+      expect(categoryConflict("spice", "Italian Ice")).toBe(true)
+    })
+
+    it("rejects a fruit query against a dessert sharing the fruit's name", () => {
+      // Found live: "Kirschtomate" (raw cherry tomato) matched USDA's "Cobbler, cherry".
+      expect(categoryConflict("fruit", "Cobbler, cherry")).toBe(true)
+    })
+
+    it("rejects a legume query against a whole prepared dish built around it", () => {
+      // Found live: "Rote Linse" (raw red lentil) matched USDA's "Lentil curry".
+      expect(categoryConflict("legume", "Lentil curry")).toBe(true)
+    })
+
+    it("rejects a vegetable query against a stuffed/composite dish built around it", () => {
+      // Found live: "grüne Paprika" (raw green bell pepper) matched USDA's "Stuffed green
+      // pepper, Puerto Rican style".
+      expect(categoryConflict("vegetable", "Stuffed green pepper, Puerto Rican style")).toBe(true)
     })
   })
 })
