@@ -333,8 +333,11 @@ export function hasManuallyModifiedNutrition(recipe: MealieRecipe): boolean {
 export type ManualProtectionReason = "never-estimated" | "modified-after-estimate"
 
 export function buildManualAckPatch(recipe: MealieRecipe, hash: string, reason: ManualProtectionReason): NutritionPatch {
+  // No `nutrition` key at all — confirmed live against Mealie: PATCHing `nutrition: {}` does NOT
+  // leave existing values alone, it WIPES every field to null, since Mealie replaces the whole
+  // sub-object rather than merging it field-by-field. Omitting the key entirely is the only way
+  // to truly preserve what's there, which is the whole point of an "ack without overwriting".
   return {
-    nutrition: {},
     extras: {
       calorie_estimator_hash: hash,
       calorie_estimator_unmatched: JSON.stringify([]),

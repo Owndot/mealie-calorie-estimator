@@ -98,7 +98,9 @@ describe("runEstimationPipeline", () => {
 
     const outcome = await runEstimationPipeline("test-recipe")
     expect(outcome.status).toBe("manual-preserved")
-    expect(patchCalls[0].patch.nutrition).toEqual({})
+    // No `nutrition` key at all -- Mealie replaces the whole sub-object on any PATCH that
+    // includes the key (confirmed live), so omitting it is the only way to leave "500" alone.
+    expect(patchCalls[0].patch.nutrition).toBeUndefined()
   })
 
   it("keeps protecting manual nutrition across a LATER ingredient change, not just on the very first ack", async () => {
@@ -133,7 +135,7 @@ describe("runEstimationPipeline", () => {
 
     const secondRun = await runEstimationPipeline("test-recipe")
     expect(secondRun.status).toBe("manual-preserved")
-    expect(patchCalls[0].patch.nutrition).toEqual({})
+    expect(patchCalls[0].patch.nutrition).toBeUndefined()
     expect(patchCalls[0].patch.extras?.calorie_estimator_manual).toBe("true")
   })
 
@@ -167,7 +169,7 @@ describe("runEstimationPipeline", () => {
 
       const outcome = await runEstimationPipeline("test-recipe", { force: true })
       expect(outcome.status).toBe("manual-preserved")
-      expect(patchCalls[0].patch.nutrition).toEqual({})
+      expect(patchCalls[0].patch.nutrition).toBeUndefined()
     })
 
     it("overrideManual=true (with force) does overwrite manual nutrition — the distinct, explicit path", async () => {
@@ -215,7 +217,7 @@ describe("runEstimationPipeline", () => {
       const outcome = await runEstimationPipeline("test-recipe", { force: true })
 
       expect(outcome.status).toBe("manual-preserved")
-      expect(patchCalls[0].patch.nutrition).toEqual({})
+      expect(patchCalls[0].patch.nutrition).toBeUndefined()
       expect(patchCalls[0].patch.extras?.calorie_estimator_note).toContain("edited after estimation")
     })
 

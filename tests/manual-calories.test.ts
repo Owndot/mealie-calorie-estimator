@@ -54,7 +54,9 @@ describe("Manual calories flow", () => {
     const hash = computeIngredientHash(recipe)
     const patch = buildManualAckPatch(recipe, hash, "never-estimated")
 
-    expect(patch.nutrition).toEqual({}) // calories unchanged
+    // No `nutrition` key at all -- Mealie replaces the whole sub-object on any PATCH that
+    // includes the key (confirmed live), so omitting it is the only way to leave "500" alone.
+    expect(patch.nutrition).toBeUndefined()
     expect(patch.extras.calorie_estimator_hash).toBe(hash)
     expect(patch.extras.calorie_estimator_note).toContain("Manual")
   })

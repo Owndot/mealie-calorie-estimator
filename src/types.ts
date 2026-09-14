@@ -198,6 +198,12 @@ export interface EstimateResult {
 }
 
 export interface NutritionPatch {
-  nutrition: Partial<MealieNutrition>
+  /**
+   * Omit this field entirely (not `{}`) to leave Mealie's nutrition untouched. Confirmed live:
+   * Mealie's recipe PATCH treats `nutrition` as an atomic sub-object — including the key at all,
+   * even as `{}`, REPLACES every field with what's provided (unmentioned fields become null).
+   * Only actually omitting the key from the JSON body preserves the existing value.
+   */
+  nutrition?: Partial<MealieNutrition>
   extras: Record<string, string>
 }

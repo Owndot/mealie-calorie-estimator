@@ -408,7 +408,12 @@ describe("buildManualAckPatch", () => {
     })
     const patch = buildManualAckPatch(recipe, "manual-hash", "never-estimated")
 
-    expect(patch.nutrition).toEqual({})
+    // No `nutrition` key at all (not even {}) — confirmed live against Mealie: PATCHing
+    // nutrition:{} wipes every field to null instead of leaving them alone, since Mealie
+    // replaces the whole sub-object rather than merging it. Omitting the key is the only way
+    // to truly leave existing nutrition untouched.
+    expect(patch.nutrition).toBeUndefined()
+    expect("nutrition" in patch).toBe(false)
     expect(patch.extras.calorie_estimator_hash).toBe("manual-hash")
     expect(patch.extras.calorie_estimator_note).toBe("Manual — preserved existing calorie entry")
     // Persists manual ownership across future runs — see isManuallyOwned.
@@ -422,5 +427,20 @@ describe("buildManualAckPatch", () => {
     })
     const patch = buildManualAckPatch(recipe, "manual-hash", "modified-after-estimate")
     expect(patch.extras.calorie_estimator_note).toContain("edited after estimation")
+  })
+
+  it("the JSON actually sent to Mealie has no 'nutrition' key at all -- live-found regression", () => {
+    // Found via the live acceptance suite: PATCHing Mealie with nutrition:{} does not leave
+    // existing values alone -- it wipes every field to null, because Mealie replaces the whole
+    // nutrition sub-object rather than merging it field-by-field. This was silently destroying
+    // the very manual entry the ack path exists to protect. Proving it at the JSON.stringify
+    // level (not just patch.nutrition === undefined) locks in the actual wire behavior.
+    const recipe = makeRecipe({
+      nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: {},
+    })
+    const patch = buildManualAckPatch(recipe, "manual-hash", "never-estimated")
+    const wireJson = JSON.parse(JSON.stringify(patch))
+    expect("nutrition" in wireJson).toBe(false)
   })
 })
