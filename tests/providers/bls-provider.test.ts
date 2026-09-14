@@ -169,6 +169,29 @@ describe("BlsProvider — synthetic fixtures (deterministic algorithmic behavior
     expect(match).toBeNull()
   })
 
+  it("regression: a very short query must not suffix-match a coincidentally-ending, semantically opposite compound", async () => {
+    // Found live: "Ei" (egg, 2 letters) matched "Teigwaren eifrei11, roh" (EGG-FREE pasta) — a
+    // NEGATION compound ("-frei" = "without"), not a real "type of egg". "eifrei11" happens to
+    // end in "ei" purely because "frei" itself ends in "-ei" (a common, unrelated German word
+    // ending: also Bäckerei, Brauerei, Molkerei, ...), not because of any genuine relationship to
+    // "Ei". Below a minimum query length, this kind of coincidental ending is more likely than
+    // real compounding, so the suffix rule doesn't apply at all and the query correctly finds
+    // nothing rather than an inverted nutrition profile.
+    __resetBlsDataForTests(
+      Promise.resolve(
+        __buildTestBlsData([
+          { blsCode: "E401000", nameDe: "Testteigwaren12 eifrei, roh", inferredState: "raw", nutrients: nutrients({ kcalPer100g: 346, proteinPer100g: 12, carbsPer100g: 69, fatPer100g: 2, cholesterolPer100g: 0 }) },
+        ]),
+      ),
+    )
+    const provider = new BlsProvider()
+    // "Ei" is short enough (2 letters) to trigger the guard; this exact string isn't reused as a
+    // query elsewhere in this file, so it can't collide with another test's cached result.
+    const match = await provider.lookup(query({ foodName: "Ei", structuredName: "Ei" }))
+
+    expect(match).toBeNull()
+  })
+
   it("regression: a hyphen-joined compound DISH name must not prefix-match a bare generic-food query", async () => {
     // Found live: "Kartoffel" incorrectly prefix-matched "Kartoffel-Tomaten-Gratin mit
     // Mozzarella" (a casserole) because the shared tokenizer turns hyphens into token

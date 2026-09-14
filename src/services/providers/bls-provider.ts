@@ -9,6 +9,9 @@ import type { NutrientSet, ProviderMatch, FoodState } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { findMismatch } from "./ranking.js"
 
+/** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
+const BLS_MATCH_ALGORITHM_VERSION = "v3"
+
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
  * non-letter character (hyphens included) into a token boundary. That conflates two different
@@ -208,7 +211,18 @@ function isOrderedPrefix(prefix: string[], full: string[]): boolean {
 function nameScore(queryTokens: string[], candidateTokens: string[]): number {
   if (isOrderedPrefix(queryTokens, candidateTokens)) return 0.85
 
-  if (queryTokens.length === 1) {
+  // A minimum query length guards against coincidental endings: found live, "Ei" (egg, 2 letters)
+  // matched "Teigwaren eifrei, roh" (EGG-FREE pasta) because "eifrei" happens to end in "ei" for
+  // an unrelated reason (the German negation suffix "-frei" itself ends in "-ei", as do many
+  // unrelated common words: Bäckerei, Brauerei, Molkerei, ...). Below this length, a coincidental
+  // trailing-letter match is more likely than genuine compounding, and the risk is asymmetric —
+  // an inverted/unrelated nutrition profile is worse than a missed match falling through to the
+  // next provider. This does cost some legitimate short-word matches (e.g. "Ei" -> "Hühnerei"
+  // roh, a real compound) but that trade favors safety, consistent with the conservative-fuzzy-
+  // threshold requirement.
+  const MIN_QUERY_LENGTH_FOR_SUFFIX_MATCH = 4
+
+  if (queryTokens.length === 1 && queryTokens[0].length >= MIN_QUERY_LENGTH_FOR_SUFFIX_MATCH) {
     const q = queryTokens[0]
     // Strictly LONGER, not just endsWith: a genuine German compound like "Speisezwiebel" is one
     // fused token strictly longer than its head word "zwiebel". Requiring t.length > q.length
@@ -316,7 +330,16 @@ export class BlsProvider implements NutrientProvider {
     // Unlike OFF/USDA, BLS matching is state-sensitive (pickBestByState) — the shared
     // buildQueryKey(foodName, brand) alone would let a "cooked" resolution get wrongly reused for
     // an "unknown"/"raw" query of the same food name. State is folded into the key text itself.
-    const queryKey = buildQueryKey(`${queryTexts.join("|")}|${query.state}`, query.brand)
+    //
+    // BLS_MATCH_ALGORITHM_VERSION is prefixed the same way llmNutrientCacheKey's "v2:" is
+    // (cache.ts) — the matching *algorithm* here (nameScore's prefix/suffix/jaccard rules) has
+    // already changed twice within one deployment (fixing a trivial-exact-token false positive,
+    // then a short-query coincidental-suffix false positive: "Ei" matching "eifrei" = EGG-FREE
+    // pasta). provider_match_cache has no other versioning, so a future algorithm fix would
+    // otherwise be silently masked by up to CACHE_MATCH_TTL (7 days by default) of stale matches
+    // for any ingredient text already resolved once. Bump this string whenever nameScore's
+    // matching behavior changes.
+    const queryKey = buildQueryKey(`${BLS_MATCH_ALGORITHM_VERSION}:${queryTexts.join("|")}|${query.state}`, query.brand)
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) return cached
     if (isProviderMiss(this.name, queryKey)) return null
