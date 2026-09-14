@@ -10,7 +10,7 @@ import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { findMismatch, categoryConflict } from "./ranking.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v7"
+const BLS_MATCH_ALGORITHM_VERSION = "v8"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every

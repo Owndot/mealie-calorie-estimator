@@ -132,6 +132,7 @@ export interface RankedCandidate<T> {
  */
 const STRICT_RAW_INGREDIENT_CATEGORIES = new Set([
   "spice", "herb", "seasoning", "vegetable", "fruit", "dairy", "egg", "grain", "legume", "fat", "oil", "condiment",
+  "beverage", "liquid", "water",
 ])
 
 /**
@@ -143,7 +144,9 @@ const STRICT_RAW_INGREDIENT_CATEGORIES = new Set([
  * ("tea" inside "steak", "ale" inside "kale") keep both boundaries.
  */
 const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] = [
-  { pattern: /wurst|sausage/i, impliesCategory: "meat-product" },
+  // Found live: "italienische Gewürzmischung" (Italian spice mix) matched USDA's "Salami,
+  // Italian, pork" — a cured meat, unrelated to the seasoning blend, via the shared word "Italian".
+  { pattern: /wurst|sausage|salami|prosciutto|pepperoni|\bbacon\b|\bham\b|schinken|speck/i, impliesCategory: "meat-product" },
   // "stuffed"/"curry" found live: "grüne Paprika" (raw green bell pepper) matched "Stuffed green
   // pepper, Puerto Rican style"; "Rote Linse" (raw red lentil) matched "Lentil curry" — both
   // whole prepared dishes built AROUND the query ingredient, not the ingredient itself.

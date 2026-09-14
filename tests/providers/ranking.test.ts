@@ -222,6 +222,18 @@ describe("categoryConflict", () => {
       // pepper, Puerto Rican style".
       expect(categoryConflict("vegetable", "Stuffed green pepper, Puerto Rican style")).toBe(true)
     })
+
+    it("rejects a spice query against a cured meat sharing a descriptive word", () => {
+      // Found live: "italienische Gewürzmischung" (Italian spice mix) matched USDA's "Salami,
+      // Italian, pork" — a cured meat, via the shared word "Italian".
+      expect(categoryConflict("spice", "Salami, Italian, pork")).toBe(true)
+    })
+
+    it("rejects a beverage/water query against a baked-good sharing the word \"water\"", () => {
+      // Found live: "Wasser" (plain water) matched USDA's "Crackers, water biscuits".
+      expect(categoryConflict("beverage", "Crackers, water biscuits")).toBe(true)
+      expect(categoryConflict("water", "Crackers, water biscuits")).toBe(true)
+    })
   })
 })
 
