@@ -155,18 +155,53 @@ describe("estimateNutrients — final per-ingredient fallback only", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 
-  it("discards a zero-kcal response rather than caching/returning it", async () => {
+  it("accepts a genuine zero-kcal response (e.g. salt/water) instead of discarding it — regression for a live-found bug", async () => {
+    // Real bug found via the live acceptance suite: `Number(json.kcal) || null` silently turned
+    // a correct kcal:0 answer (salt) into null, which then made the caller discard the whole
+    // estimate as if the LLM had failed — even though it had answered correctly. "Unknown does
+    // not mean zero" cuts both ways: a genuine zero must not be laundered into "unknown" either.
     config.llm.enabled = true
     config.llm.apiKey = "sk-test"
 
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 0, protein: 0, carbs: 0, fat: 0, saturatedFat: 0, transFat: 0, fiber: 0, sugar: 0, sodium: 0, cholesterol: 0 }) } }] }),
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 0, protein: 0, carbs: 0, fat: 0, saturatedFat: 0, transFat: 0, fiber: 0, sugar: 0, sodium: 38, cholesterol: 0 }) } }] }),
     })
     vi.stubGlobal("fetch", mockFetch)
 
-    const result = await estimateNutrients("Zerokcalfood")
+    const result = await estimateNutrients("Salz")
+    expect(result).not.toBeNull()
+    expect(result?.kcalPer100g).toBe(0)
+    expect(result?.sodiumPer100g).toBe(38)
+  })
+
+  it("still discards a response with no usable kcal value at all (missing/non-numeric)", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ protein: 0, carbs: 0, fat: 0 }) } }] }), // no "kcal" key at all
+    })
+    vi.stubGlobal("fetch", mockFetch)
+
+    const result = await estimateNutrients("Missingkcalfood")
     expect(result).toBeNull()
+  })
+
+  it("preserves other genuine zero values (e.g. 0g fat) instead of nulling them out", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "sk-test"
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: JSON.stringify({ kcal: 130, protein: 2.7, carbs: 28, fat: 0, saturatedFat: 0, transFat: 0, fiber: 0.4, sugar: 0.1, sodium: 0.001, cholesterol: 0 }) } }] }),
+    })
+    vi.stubGlobal("fetch", mockFetch)
+
+    const result = await estimateNutrients("Zerofatfood")
+    expect(result?.fatPer100g).toBe(0)
+    expect(result?.cholesterolPer100g).toBe(0)
   })
 
   it("fails safely on malformed JSON rather than throwing", async () => {

@@ -4,6 +4,19 @@ import { getCachedLlmEstimate, setCachedLlmEstimate, getCachedLlmNutrients, setC
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
 import type { NutrientSet } from "../types.js"
 
+/**
+ * Parses a possibly-untyped JSON value to a number, preserving a genuine 0 (e.g. salt/water are
+ * legitimately 0 kcal) rather than collapsing it to null. `Number(x) || null` — the previous
+ * implementation — is the classic JS falsy-zero footgun: it silently turned every real zero
+ * value into "unknown", which then caused the caller to discard the whole estimate as if the
+ * LLM had failed, even when it had answered correctly.
+ */
+function numOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 export async function estimateGrams(quantity: number, unitName: string, foodName: string): Promise<number | null> {
   if (!config.llm.enabled) return null
   if (!config.llm.apiKey) {
@@ -115,17 +128,17 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
     const json = JSON.parse(content.replace(/```json\n?|\n?```/g, ""))
 
     const nutrients: NutrientSet = {
-      kcalPer100g: Number(json.kcal) || null,
-      proteinPer100g: Number(json.protein) || null,
-      carbsPer100g: Number(json.carbs) || null,
-      fatPer100g: Number(json.fat) || null,
-      saturatedFatPer100g: Number(json.saturatedFat) || null,
-      transFatPer100g: Number(json.transFat) || null,
+      kcalPer100g: numOrNull(json.kcal),
+      proteinPer100g: numOrNull(json.protein),
+      carbsPer100g: numOrNull(json.carbs),
+      fatPer100g: numOrNull(json.fat),
+      saturatedFatPer100g: numOrNull(json.saturatedFat),
+      transFatPer100g: numOrNull(json.transFat),
       unsaturatedFatPer100g: null,
-      fiberPer100g: Number(json.fiber) || null,
-      sugarPer100g: Number(json.sugar) || null,
-      sodiumPer100g: Number(json.sodium) || null,
-      cholesterolPer100g: Number(json.cholesterol) || null,
+      fiberPer100g: numOrNull(json.fiber),
+      sugarPer100g: numOrNull(json.sugar),
+      sodiumPer100g: numOrNull(json.sodium),
+      cholesterolPer100g: numOrNull(json.cholesterol),
     }
 
     if (nutrients.fatPer100g !== null) {
@@ -134,13 +147,17 @@ export async function estimateNutrients(foodName: string): Promise<NutrientSet |
       nutrients.unsaturatedFatPer100g = Math.round((nutrients.fatPer100g - s - t) * 10) / 10
     }
 
-    if (nutrients.kcalPer100g !== null && nutrients.kcalPer100g > 0) {
+    // A genuine 0 (salt, water, pure spices) is a valid kcal value, not a failure signal — only
+    // a missing/unparseable kcal (numOrNull returning null) means the LLM didn't give us a
+    // usable estimate. Unknown must never be silently treated the same as zero, and the reverse
+    // (zero silently discarded as "unknown") is just as wrong.
+    if (nutrients.kcalPer100g !== null) {
       setCachedLlmNutrients(foodName, nutrients)
       logger.debug({ foodName, kcal: nutrients.kcalPer100g }, "LLM nutrient estimate obtained")
       return nutrients
     }
 
-    logger.debug({ foodName, content }, "LLM returned zero kcal, discarding")
+    logger.debug({ foodName, content }, "LLM returned no usable kcal value, discarding")
     return null
   } catch (err) {
     logger.warn({ err, foodName }, "LLM nutrient estimation failed")
