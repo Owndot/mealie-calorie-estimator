@@ -2,13 +2,28 @@ import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
-import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderMatch } from "../../types.js"
+import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderMatch, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, type RankableCandidate } from "./ranking.js"
 
-const OFF_FIELDS = ["product_name", "brands", "nutriments"].join(",")
+const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 const SEARCH_PAGE_SIZE = 10
+
+/**
+ * OFF's own taxonomy tags (categories_tags, e.g. "en:meals", "en:desserts") — authoritative
+ * product metadata, lighter-touch than BLS's code-derived/USDA's foodCategory-derived signal
+ * since OFF's category tags are user-editable and the taxonomy is far less consistent, but still
+ * a real structured field rather than a name-text guess.
+ */
+const OFF_COMPOSITE_DISH_TAGS = ["en:meals", "en:desserts", "en:sauces", "en:soups", "en:sandwiches", "en:pizzas", "en:prepared-meals"]
+
+function offFoodType(categoriesTags: unknown): FoodType {
+  if (!Array.isArray(categoriesTags)) return "unknown"
+  const tags = categoriesTags.filter((t): t is string => typeof t === "string").map((t) => t.toLowerCase())
+  if (tags.length === 0) return "unknown"
+  return OFF_COMPOSITE_DISH_TAGS.some((c) => tags.includes(c)) ? "composite_dish" : "simple"
+}
 
 async function fetchWithRetry(url: string, query: string): Promise<Response | null> {
   const { maxRetries, retryBackoffMs, userAgent } = config.openFoodFacts
@@ -138,7 +153,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v4"
+const OFF_MATCH_ALGORITHM_VERSION = "v5"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -174,12 +189,13 @@ export class OffProvider implements NutrientProvider {
       name: typeof product.product_name === "string" ? product.product_name : "",
       brand: normalizeOffBrand(product.brands),
       hasCompleteNutrients: product.nutriments?.["energy-kcal_100g"] != null,
+      foodType: offFoodType(product.categories_tags),
     }))
 
     // categoryConflict participates here too (query-side data only — no new OFF response field
     // needed) for the same reason BLS/USDA reject it: a strict raw-ingredient category query
     // should never accept an OFF product that reads as a composite/manufactured item.
-    const ranked = rankCandidates(query.foodName, query.brand, rankable, { queryCategory: query.category })
+    const ranked = rankCandidates(query.foodName, query.brand, rankable, { queryCategory: query.category, queryFoodType: query.foodType })
     const top = ranked[0]
 
     if (!top) {
@@ -218,6 +234,8 @@ export class OffProvider implements NutrientProvider {
       providerId: typeof product.product_name === "string" ? product.product_name : null,
       productName: typeof product.product_name === "string" ? product.product_name : null,
       confidence: Math.min(0.95, top.score / 100),
+      foodType: offFoodType(product.categories_tags),
+      matchReason: query.foodName.trim().toLowerCase() === (typeof product.product_name === "string" ? product.product_name.trim().toLowerCase() : "") ? "exact-name" : "fuzzy",
     }
 
     setCachedProviderMatch(this.name, queryKey, match)

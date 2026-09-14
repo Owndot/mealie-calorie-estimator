@@ -1,5 +1,31 @@
 /** Shared candidate-ranking helpers for network providers (OFF, USDA) that return multiple hits. */
-import type { FoodState } from "../../types.js"
+import type { FoodState, FoodType } from "../../types.js"
+
+/**
+ * PRIMARY hard-rejection signal (checked before any lexical/confidence score): a
+ * "simple"/"processed_single_food" query must never accept a "composite_dish" candidate,
+ * regardless of how well the candidate's name textually matches. A composite query (e.g. the
+ * ingredient genuinely IS "Linsensuppe") may still match a composite candidate.
+ *
+ * "unknown" is permissive on EITHER side (never itself causes a rejection) — this is the
+ * fallback when authoritative provider/classifier metadata isn't available (LLM disabled/failed,
+ * or a provider that doesn't expose a food-type signal), so the system degrades to the
+ * lexical categoryConflict()/findMismatch() checks below rather than blocking everything.
+ *
+ * Backed by authoritative metadata, not name-guessing, per provider:
+ *   BLS:  the official BLS Code's leading letter (X/Y = "Menükomponenten", composite dishes —
+ *         see scripts/import_bls.py) — every live-discovered BLS false positive this project
+ *         found (Hasenpfeffer, Schweinepfeffer, Rote-Linsensuppe, Kartoffel-Tomaten-Gratin) was
+ *         coded X or Y.
+ *   USDA: FoodData Central's own `foodCategory` field (e.g. "Pudding", "Baby Foods", "Cakes and
+ *         pies", "Nut & Seed Butters" vs. "Vegetables and Vegetable Products") — see
+ *         usda-provider.ts's usdaFoodType().
+ */
+export function foodTypeConflict(queryFoodType: FoodType, candidateFoodType: FoodType): boolean {
+  if (queryFoodType === "unknown" || candidateFoodType === "unknown") return false
+  if (queryFoodType === "composite_dish") return false // a composite query may match a composite candidate
+  return candidateFoodType === "composite_dish"
+}
 
 export function tokenize(s: string): string[] {
   // Defense-in-depth: candidate name/brand fields ultimately come from external provider APIs
@@ -93,6 +119,39 @@ const MISMATCH_RULES: MismatchRule[] = [
   // Found live: "Minze" (mint, an herb) matched USDA's "Candies, NESTLE, AFTER EIGHT Mints" — a
   // branded chocolate confection, not the herb.
   { queryPattern: /\b(minze|mint)\b/i, forbiddenCandidatePattern: /\b(candy|candies|chocolate|schokolade|bonbon)\b/i, description: "mint (herb) vs mint-flavored candy/chocolate" },
+  // A plain meat-cut query (chicken breast/fillet) must not accept a breaded/battered/crumbed
+  // composite product — categoryConflict's STRICT_RAW_INGREDIENT_CATEGORIES deliberately excludes
+  // "meat"/"poultry" (a sausage can legitimately BE the right meat answer), which otherwise leaves
+  // this specific case unguarded. Found live: "Hähnchenbrustfilets" (plain chicken breast) matched
+  // "Chicken breast tenders, breaded, uncooked" — a coated product with materially different macros.
+  // "\b" before the German compound prefix but deliberately NOT after it (matches
+  // COMPOSITE_PRODUCT_MARKERS' own reasoning): "Hähnchenbrustfilets" fuses "brust" directly into
+  // "filets" with no space, so a trailing \b would never match inside the compound at all.
+  {
+    queryPattern: /\b(hähnchenbrust|haehnchenbrust|hähnchenfilet|haehnchenfilet)\w*|\bchicken breast\b|\bchicken fillet\b/i,
+    forbiddenCandidatePattern: /\b(breaded|paniert|battered|crumbed|tenders?)\b/i,
+    description: "plain chicken breast/fillet vs breaded/battered chicken product",
+  },
+  // A bare, unqualified "Ei"/"egg" query means the whole egg — it must not accept a candidate
+  // that's actually just one part (white or yolk) or an egg-CONTAINING/egg-free composite product.
+  // Uses Unicode-aware lookaround rather than \b: JS's \b is ASCII-only and doesn't treat "ö"/"ü"/
+  // "ß" as word characters, which would otherwise misfire on unrelated German compounds. The
+  // forbidden pattern tolerates a comma separator ("Egg, white, raw") — real USDA/OFF descriptions
+  // are comma-separated, not "egg white" as one run of words.
+  {
+    queryPattern: /(?<!\p{L})(ei|egg)(?!\p{L})/iu,
+    forbiddenCandidatePattern: /\begg,?\s*white\b|\begg,?\s*yolk\b|\beiweiß\b|\beiweiss\b|\beigelb\b|\balbumen\b|\begg,?\s*pasta\b|\beierteigwaren\b|\begg,?\s*noodles\b|\beifrei\b/i,
+    description: "whole egg vs egg white/yolk/egg-containing or egg-free composite product",
+  },
+  // A bare, unqualified "Öl"/"oil" query means generic oil — it must not accept a candidate naming
+  // a SPECIFIC oil type the query never asked for (that would be guessing). A query that itself
+  // names a specific oil (e.g. "Olivenöl") is unaffected — forbiddenCandidatePattern.test(query)
+  // short-circuits the rule for it, same mechanism as every other rule here.
+  {
+    queryPattern: /(?<!\p{L})(öl|oil)(?!\p{L})/iu,
+    forbiddenCandidatePattern: /\b(coconut|kokos|olive|oliven|sesame|sesam|sunflower|sonnenblumen|canola|raps|palm|walnut|walnuss|avocado|peanut|erdnuss|corn|maiskeim|flaxseed|leinsamen)\b/i,
+    description: "generic oil vs a specific oil type the query never named",
+  },
 ]
 
 /** Returns a description of the violated rule, or null if no obvious mismatch applies. */
@@ -115,6 +174,8 @@ export interface RankableCandidate {
   state?: FoodState
   /** Provider-specific dataset tier (e.g. USDA dataType) — see RankOptions.dataTypeScore. */
   dataType?: string | null
+  /** Candidate's own food type, from authoritative provider metadata — see foodTypeConflict(). */
+  foodType?: FoodType
 }
 
 export interface RankedCandidate<T> {
@@ -197,8 +258,10 @@ export function categoryConflict(queryCategory: string | null | undefined, candi
 export interface RankOptions {
   /** Query's known preparation state — a known conflict with a known candidate state is hard-rejected. */
   queryState?: FoodState
-  /** Query's known category — see categoryConflict(). */
+  /** Query's known category — see categoryConflict(). Lexical/secondary — foodType is checked first. */
   queryCategory?: string | null
+  /** Query's known food type — the PRIMARY hard-rejection signal. See foodTypeConflict(). */
+  queryFoodType?: FoodType
   /** Scores a provider-specific dataset tier (e.g. USDA dataType) as a ranking signal, not a hard filter. */
   dataTypeScore?: (dataType: string | null | undefined) => number
 }
@@ -216,7 +279,17 @@ export function rankCandidates<T extends RankableCandidate>(
 ): RankedCandidate<T>[] {
   return candidates
     .map((candidate) => {
-      let mismatchReason = findMismatch(queryFoodName, candidate.name)
+      // Hard type-compatibility check FIRST, before any lexical/confidence scoring — a high
+      // textual score must never rescue a semantic type mismatch (a simple query accepting a
+      // composite-dish candidate). Checked ahead of, and independent of, the lexical
+      // categoryConflict/findMismatch checks below, which remain as a secondary/defense-in-depth
+      // layer for providers or cases where authoritative foodType metadata isn't available.
+      let mismatchReason: string | null = foodTypeConflict(options.queryFoodType ?? "unknown", candidate.foodType ?? "unknown")
+        ? `food type conflict: a "${options.queryFoodType}" query cannot accept a "composite_dish" candidate ("${candidate.name}")`
+        : null
+
+      mismatchReason = mismatchReason ?? findMismatch(queryFoodName, candidate.name)
+
       let score = nameSimilarity(queryFoodName, candidate.name) * 60
 
       if (queryBrand && candidate.brand) {
@@ -226,8 +299,8 @@ export function rankCandidates<T extends RankableCandidate>(
       score += candidate.hasCompleteNutrients ? 15 : -50
 
       const queryState = options.queryState
-      if (queryState && queryState !== "unknown" && candidate.state && candidate.state !== "unknown" && candidate.state !== queryState) {
-        mismatchReason = mismatchReason ?? `state conflict: query wants "${queryState}", candidate is "${candidate.state}"`
+      if (!mismatchReason && queryState && queryState !== "unknown" && candidate.state && candidate.state !== "unknown" && candidate.state !== queryState) {
+        mismatchReason = `state conflict: query wants "${queryState}", candidate is "${candidate.state}"`
       }
 
       if (!mismatchReason && categoryConflict(options.queryCategory, candidate.name)) {

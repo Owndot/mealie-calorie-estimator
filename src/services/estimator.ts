@@ -191,6 +191,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     const brand = classification?.brand ?? null
     const route = classification?.route ?? "generic"
     const state: FoodState = classification?.state ?? "unknown"
+    const foodType = classification?.foodType ?? "unknown"
 
     let grams: number | null = null
     let gramsEstimated = false
@@ -220,7 +221,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     totalKnownWeight += grams
 
     const resolved = await resolveNutrients(
-      { foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand, category: classification?.category ?? null, state, route },
+      { foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand, category: classification?.category ?? null, state, foodType, route },
       route,
     )
 
@@ -253,6 +254,8 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       confidence: resolved.match.confidence,
       fallbackStatus: resolved.fallbackStatus,
       dataType: resolved.match.dataType ?? null,
+      foodType: resolved.match.foodType,
+      matchReason: resolved.match.matchReason,
       llmParticipated: (classification?.llmClassified ?? false) || resolved.fallbackStatus === "llm-nutrient",
     })
   }
@@ -435,6 +438,8 @@ export function buildNutritionPatch(
     providerId: i.providerId,
     productName: i.productName,
     dataType: i.dataType ?? null,
+    foodType: i.foodType ?? null,
+    matchReason: i.matchReason ?? null,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,
     matched: i.matched,

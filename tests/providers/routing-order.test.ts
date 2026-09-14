@@ -4,7 +4,7 @@ import type { ProviderQuery } from "../../src/services/providers/types.js"
 
 /**
  * Full-chain routing-order tests: proves the exact sequencing required by the architecture —
- *   generic:  cache -> BLS -> USDA (optional) -> OFF (optional final DB fallback) -> LLM last
+ *   generic:  cache -> BLS -> OFF -> USDA (optional) -> LLM last
  *   branded:  cache -> OFF -> BLS -> USDA (optional) -> LLM last
  * — and specifically that a provider earlier in the chain producing an acceptable match means
  * every later provider is never even called (no wasted network calls / rate-limit spend).
@@ -81,7 +81,7 @@ async function setupChainMocks(opts: {
 }
 
 describe("generic route — exact provider sequencing", () => {
-  it("BLS accepted -> USDA and OFF are never called", async () => {
+  it("BLS accepted -> OFF and USDA are never called", async () => {
     const blsLookup = vi.fn().mockResolvedValue(fakeMatch("bls"))
     const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
     const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
@@ -94,7 +94,7 @@ describe("generic route — exact provider sequencing", () => {
     expect(offLookup).not.toHaveBeenCalled()
   })
 
-  it("BLS miss -> USDA accepted -> OFF and LLM nutrient fallback are never called", async () => {
+  it("BLS miss -> OFF accepted -> USDA and LLM nutrient fallback are never called", async () => {
     const blsLookup = vi.fn().mockResolvedValue(null)
     const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
     const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
@@ -103,26 +103,26 @@ describe("generic route — exact provider sequencing", () => {
 
     const result = await resolveNutrients(query(), "generic")
 
-    expect(result?.fallbackStatus).toBe("usda")
-    expect(offLookup).not.toHaveBeenCalled()
+    expect(result?.fallbackStatus).toBe("off")
+    expect(usdaLookup).not.toHaveBeenCalled()
     expect(llmLookup).not.toHaveBeenCalled()
   })
 
-  it("BLS miss, USDA miss -> OFF (optional final DB fallback) is tried and can be accepted", async () => {
+  it("BLS miss, OFF miss -> USDA is tried and can be accepted", async () => {
     const blsLookup = vi.fn().mockResolvedValue(null)
-    const usdaLookup = vi.fn().mockResolvedValue(null)
-    const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
+    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
+    const offLookup = vi.fn().mockResolvedValue(null)
     const llmLookup = vi.fn().mockResolvedValue(fakeMatch("llm-nutrient"))
     const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup, llm: llmLookup, llmEnabled: true })
 
     const result = await resolveNutrients(query(), "generic")
 
-    expect(result?.fallbackStatus).toBe("off")
-    expect(offLookup).toHaveBeenCalledTimes(1)
+    expect(result?.fallbackStatus).toBe("usda")
+    expect(usdaLookup).toHaveBeenCalledTimes(1)
     expect(llmLookup).not.toHaveBeenCalled()
   })
 
-  it("BLS, USDA, and OFF all miss -> the LLM nutrient fallback runs as the absolute last resort", async () => {
+  it("BLS, OFF, and USDA all miss -> the LLM nutrient fallback runs as the absolute last resort", async () => {
     const blsLookup = vi.fn().mockResolvedValue(null)
     const usdaLookup = vi.fn().mockResolvedValue(null)
     const offLookup = vi.fn().mockResolvedValue(null)
@@ -133,12 +133,12 @@ describe("generic route — exact provider sequencing", () => {
 
     expect(result?.fallbackStatus).toBe("llm-nutrient")
     expect(blsLookup).toHaveBeenCalledTimes(1)
-    expect(usdaLookup).toHaveBeenCalledTimes(1)
     expect(offLookup).toHaveBeenCalledTimes(1)
+    expect(usdaLookup).toHaveBeenCalledTimes(1)
     expect(llmLookup).toHaveBeenCalledTimes(1)
   })
 
-  it("BLS, USDA, OFF all miss and the LLM is disabled -> unresolved, nothing is fabricated", async () => {
+  it("BLS, OFF, USDA all miss and the LLM is disabled -> unresolved, nothing is fabricated", async () => {
     const { resolveNutrients } = await setupChainMocks({
       bls: vi.fn().mockResolvedValue(null),
       usda: vi.fn().mockResolvedValue(null),

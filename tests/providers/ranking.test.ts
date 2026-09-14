@@ -1,5 +1,32 @@
 import { describe, it, expect } from "vitest"
-import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict, inferStateFromName } from "../../src/services/providers/ranking.js"
+import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict, inferStateFromName, foodTypeConflict } from "../../src/services/providers/ranking.js"
+
+describe("foodTypeConflict — PRIMARY hard-rejection signal, checked before any lexical score", () => {
+  it("rejects a simple query against a composite_dish candidate", () => {
+    expect(foodTypeConflict("simple", "composite_dish")).toBe(true)
+  })
+
+  it("rejects a processed_single_food query against a composite_dish candidate", () => {
+    expect(foodTypeConflict("processed_single_food", "composite_dish")).toBe(true)
+  })
+
+  it("allows a composite_dish query to match a composite_dish candidate", () => {
+    // A genuinely composite ingredient (e.g. the Mealie ingredient literally IS "Lasagne") must
+    // still be able to match BLS's own composite entry for it.
+    expect(foodTypeConflict("composite_dish", "composite_dish")).toBe(false)
+  })
+
+  it("never rejects when either side is unknown — permissive degradation, not a block", () => {
+    expect(foodTypeConflict("unknown", "composite_dish")).toBe(false)
+    expect(foodTypeConflict("simple", "unknown")).toBe(false)
+    expect(foodTypeConflict("unknown", "unknown")).toBe(false)
+  })
+
+  it("does not reject a simple query against a simple or processed_single_food candidate", () => {
+    expect(foodTypeConflict("simple", "simple")).toBe(false)
+    expect(foodTypeConflict("simple", "processed_single_food")).toBe(false)
+  })
+})
 
 describe("tokenize — defensive against non-string input from external provider APIs", () => {
   // Live acceptance test finding: OFF's real /search response returns `brands` as a string
@@ -70,6 +97,59 @@ describe("findMismatch — obvious mismatch rejection", () => {
     // chocolate confection, not the herb.
     expect(findMismatch("Minze", "Candies, NESTLE, AFTER EIGHT Mints")).not.toBeNull()
   })
+
+  it("rejects plain chicken breast/fillet matching a breaded/battered chicken product", () => {
+    // Found live: "Hähnchenbrustfilets" (plain chicken breast) matched "Chicken breast tenders,
+    // breaded, uncooked" — categoryConflict alone can't catch this since "meat"/"poultry" are
+    // deliberately excluded from STRICT_RAW_INGREDIENT_CATEGORIES.
+    expect(findMismatch("Hähnchenbrustfilets", "Chicken breast tenders, breaded, uncooked")).not.toBeNull()
+    expect(findMismatch("chicken breast", "Chicken, breast, breaded and fried")).not.toBeNull()
+  })
+
+  it("does not reject a chicken-breast query against a plain, unbreaded candidate", () => {
+    expect(findMismatch("Hähnchenbrustfilets", "Chicken, breast, meat only, raw")).toBeNull()
+  })
+
+  it("rejects a bare whole-egg query matching egg white/yolk or an egg-containing/egg-free composite", () => {
+    expect(findMismatch("Ei", "Egg, white, raw")).not.toBeNull()
+    expect(findMismatch("Ei", "Egg, yolk, raw")).not.toBeNull()
+    expect(findMismatch("egg", "Egg pasta, dry")).not.toBeNull()
+    // Found live: "Ei" matched BLS's own English name for "Teigwaren eifrei, roh" (egg-FREE pasta).
+    expect(findMismatch("Ei", "Teigwaren eifrei, roh")).not.toBeNull()
+  })
+
+  it("does not reject a whole-egg query against a plain whole-egg candidate", () => {
+    expect(findMismatch("Ei", "Egg, whole, raw, fresh")).toBeNull()
+  })
+
+  it("does not reject when the query itself explicitly names the egg part (Eiweiß/Eigelb)", () => {
+    expect(findMismatch("Eiweiß", "Egg, white, raw")).toBeNull()
+    expect(findMismatch("Eigelb", "Egg, yolk, raw")).toBeNull()
+  })
+
+  it("rejects a bare generic-oil query matching a candidate naming a specific oil type", () => {
+    // "generic Öl must remain generic oil, never inventing a specific oil" — selecting a specific
+    // type the query never named would amount to guessing.
+    expect(findMismatch("Öl", "Coconut oil")).not.toBeNull()
+    expect(findMismatch("Oil", "Olive oil, extra virgin")).not.toBeNull()
+  })
+
+  it("does not reject when the query itself names a specific oil (Olivenöl, Kokosöl)", () => {
+    expect(findMismatch("Olivenöl", "Olive oil, extra virgin")).toBeNull()
+    expect(findMismatch("Kokosöl", "Coconut oil")).toBeNull()
+  })
+
+  it("does not reject a bare oil query against a plain, unspecified-oil candidate", () => {
+    expect(findMismatch("Öl", "Vegetable oil")).toBeNull()
+  })
+
+  it("does not reject a bare pepper query matching plain black pepper — the correct match", () => {
+    // Positive case: "Pfeffer" must still be able to match its correct BLS/USDA target (plain
+    // black pepper spice) — only composite dishes STYLED with "-pfeffer" are rejected.
+    expect(findMismatch("Pfeffer", "Pfeffer, schwarz, gemahlen")).toBeNull()
+    expect(findMismatch("Pfeffer", "Spices, pepper, black")).toBeNull()
+    expect(categoryConflict("spice", "Pfeffer, schwarz, gemahlen")).toBe(false)
+  })
 })
 
 describe("rankCandidates", () => {
@@ -122,6 +202,26 @@ describe("rankCandidates", () => {
       { name: "Paprikaspeckwurst", brand: null, hasCompleteNutrients: true },
     ], { queryCategory: "spice" })
     expect(ranked[0].mismatchReason).not.toBeNull()
+  })
+
+  it("rejects a composite_dish candidate for a simple query even with a perfect lexical score", () => {
+    // "A high lexical score must never rescue a semantic mismatch" — the candidate name matches
+    // the query exactly, but foodType conflict must still hard-reject it, checked before scoring.
+    const ranked = rankCandidates("Linsensuppe", null, [
+      { name: "Linsensuppe", brand: null, hasCompleteNutrients: true, foodType: "composite_dish" },
+    ], { queryFoodType: "simple" })
+    expect(ranked[0].mismatchReason).toMatch(/food type conflict/)
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("allows a composite query to match a composite candidate (a genuinely composite ingredient)", () => {
+    // The opposite direction: querying "Lasagne" (the ingredient itself IS a prepared dish) must
+    // still be able to match a composite_dish candidate of the same name.
+    const ranked = rankCandidates("Lasagne", null, [
+      { name: "Lasagne", brand: null, hasCompleteNutrients: true, foodType: "composite_dish" },
+    ], { queryFoodType: "composite_dish" })
+    expect(ranked[0].mismatchReason).toBeNull()
+    expect(ranked[0].score).toBeGreaterThanOrEqual(MIN_ACCEPTABLE_SCORE)
   })
 
   it("applies a dataType scoring function as a ranking signal, not a hard filter", () => {

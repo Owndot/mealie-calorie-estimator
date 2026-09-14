@@ -2,7 +2,7 @@ import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
-import type { NutrientSet, ProviderMatch, FoodRoute } from "../../types.js"
+import type { NutrientSet, ProviderMatch, FoodRoute, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, type RankableCandidate } from "./ranking.js"
 
@@ -19,6 +19,10 @@ interface FdcFood {
   brandOwner?: string | null
   brandName?: string | null
   dataType?: string
+  /** USDA's own structured category tag (e.g. "Vegetables and Vegetable Products", "Pudding",
+   * "Baby Foods", "Nut & Seed Butters") — authoritative metadata, not derived from the free-text
+   * description. See usdaFoodType(). */
+  foodCategory?: string | null
   foodNutrients: FdcNutrient[]
 }
 
@@ -52,7 +56,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v4"
+const USDA_MATCH_ALGORITHM_VERSION = "v5"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -68,6 +72,29 @@ function dataTypeScore(route: FoodRoute, dataType: string | null | undefined): n
   if (dataType === "Survey (FNDDS)") return 10
   if (dataType === "Branded") return route === "branded" ? 5 : 0
   return 0
+}
+
+/**
+ * Category strings (from USDA's OWN `foodCategory` field — authoritative metadata, not a
+ * lexical guess on the description) that reliably signal a multi-ingredient prepared dish/meal,
+ * never a correct answer for a "simple"/"processed_single_food" query regardless of how well its
+ * *name* happens to textually match. Verified against the real API: querying "banana" surfaces a
+ * "BANANA"-branded product whose foodCategory is "Nut & Seed Butters" (a processed product, not a
+ * dish, so intentionally NOT listed here — that case is caught by the Branded-exclusion instead);
+ * "Egg, Benedict"/"Egg, creamed" fall under "Eggs and omelets" (still egg-adjacent, so also not
+ * listed — the lexical layer catches "Benedict"/"creamed" by name). This list only covers
+ * genuinely composite dish/meal/dessert/snack categories confirmed live.
+ */
+const USDA_COMPOSITE_DISH_CATEGORIES = [
+  "pudding", "cakes and pies", "ice cream and frozen dairy desserts", "baby food",
+  "fast foods", "soups, sauces, and gravies", "restaurant foods", "meals, entrees, and side dishes",
+  "sandwiches", "mixed dishes", "cookies and brownies", "candy",
+]
+
+function usdaFoodType(foodCategory: string | null | undefined): FoodType {
+  if (!foodCategory) return "unknown"
+  const normalized = foodCategory.toLowerCase()
+  return USDA_COMPOSITE_DISH_CATEGORIES.some((c) => normalized.includes(c)) ? "composite_dish" : "simple"
 }
 
 async function fetchWithRetry(url: string): Promise<Response | null> {
@@ -215,11 +242,13 @@ export class UsdaProvider implements NutrientProvider {
       hasCompleteNutrients: findNutrient(food, NUTRIENT_IDS.energyKcal) != null,
       dataType: food.dataType ?? null,
       state: inferStateFromName(food.description),
+      foodType: usdaFoodType(food.foodCategory),
     }))
 
     const ranked = rankCandidates(query.foodName, query.brand, rankable, {
       queryState: query.state,
       queryCategory: query.category,
+      queryFoodType: query.foodType,
       dataTypeScore: (dt) => dataTypeScore(route, dt),
     })
     const top = ranked[0]
@@ -261,6 +290,8 @@ export class UsdaProvider implements NutrientProvider {
       productName: food.description,
       confidence: Math.min(0.9, top.score / 100),
       dataType: food.dataType ?? null,
+      foodType: usdaFoodType(food.foodCategory),
+      matchReason: query.foodName.trim().toLowerCase() === food.description.trim().toLowerCase() ? "exact-name" : "fuzzy",
     }
 
     setCachedProviderMatch(this.name, queryKey, match)

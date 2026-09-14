@@ -1,4 +1,4 @@
-import type { FoodState, FoodRoute, ProviderMatch } from "../../types.js"
+import type { FoodState, FoodRoute, FoodType, ProviderMatch } from "../../types.js"
 
 export interface ProviderQuery {
   /** Normalized English identity (LLM canonicalEnglish, or the raw structured name if the LLM is
@@ -21,6 +21,12 @@ export interface ProviderQuery {
   brand: string | null
   category: string | null
   state: FoodState
+  /**
+   * The PRIMARY hard-rejection signal (see FoodType): a "simple"/"processed_single_food" query
+   * must never accept a "composite_dish" candidate, regardless of lexical score. "unknown" is
+   * permissive — never itself causes a rejection (used when the LLM is disabled/failed).
+   */
+  foodType: FoodType
   /**
    * Which route this query is being resolved under. USDA uses this to exclude Branded results
    * outright on the generic route (never a correct generic-ingredient answer) while still

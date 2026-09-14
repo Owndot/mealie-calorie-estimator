@@ -81,6 +81,8 @@ export interface OffProduct {
   // it defensively rather than trusting either shape at runtime.
   brands?: string[] | string | null
   nutriscore_grade?: string
+  /** OFF's own taxonomy tags (e.g. "en:meals", "en:vegetables") — untrusted external data, typed loosely. */
+  categories_tags?: unknown
   nutriments?: OffNutriments
 }
 
@@ -135,6 +137,19 @@ export type FoodState = "raw" | "cooked" | "dried" | "unknown"
 export type FoodRoute = "generic" | "branded"
 
 /**
+ * Coarse food-composition type — the PRIMARY signal for rejecting a semantically-wrong candidate
+ * before any lexical/confidence scoring runs (a high text-similarity score must never rescue a
+ * type mismatch). "unknown" is permissive (never itself causes a rejection) — used when the LLM
+ * is disabled/failed and no authoritative signal is available.
+ *   simple:                  a single raw/minimally-prepared ingredient (tomato, salt, egg, oil)
+ *   processed_single_food:   one food that's been processed but is still one thing, not a dish
+ *                            (tomato paste, canned tuna, cheese, dried herbs, spice powder)
+ *   composite_dish:          a prepared dish/menu component with multiple ingredients (lentil
+ *                            soup, stuffed pepper, a stew, a dessert)
+ */
+export type FoodType = "simple" | "processed_single_food" | "composite_dish" | "unknown"
+
+/**
  * Evidence-based classification of one structured ingredient, produced by the single
  * whole-recipe batch normalizer (or by deterministic fallback when the batch fails or LLM is disabled).
  * brand is non-null only when explicit evidence for it was present in structured food.name/aliases.
@@ -152,6 +167,8 @@ export interface IngredientClassification {
   brand: string | null
   state: FoodState
   category: string | null
+  /** "unknown" (never simple/processed by default) when the LLM is disabled/failed — see FoodType. */
+  foodType: FoodType
   route: FoodRoute
   /** true when the LLM batch normalizer actually produced this row (vs. deterministic fallback) */
   llmClassified: boolean
@@ -171,6 +188,10 @@ export interface ProviderMatch {
   confidence: number
   /** USDA FoodData Central dataset tier (Foundation/SR Legacy/Survey (FNDDS)/Branded) — null for non-USDA providers. */
   dataType?: string | null
+  /** The matched candidate's own food type (BLS's group-letter-derived type, or USDA's foodCategory-derived type) — for provenance/debugging, not itself a query field. */
+  foodType?: FoodType
+  /** Short, human-readable reason the match was accepted — e.g. "exact-name", "synonym", "state-compatible", "category-compatible", "fuzzy". */
+  matchReason?: string
 }
 
 export interface IngredientMatch {
@@ -191,6 +212,10 @@ export interface IngredientMatch {
   llmParticipated: boolean
   /** USDA dataset tier for this match, when the provider was "usda" — null otherwise. */
   dataType?: string | null
+  /** The matched candidate's own food type — see ProviderMatch.foodType. */
+  foodType?: FoodType
+  /** Short, human-readable reason the match was accepted — see ProviderMatch.matchReason. */
+  matchReason?: string
   /** @deprecated use fallbackStatus === "unresolved" ? gramsEstimated via LLM : false */
   llmEstimated?: boolean
 }

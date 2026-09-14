@@ -320,6 +320,13 @@ describe("BLS in the routing-aware provider chain", () => {
     vi.doMock("../../src/services/providers/usda-provider.js", () => ({
       createUsdaProviderIfConfigured: () => ({ name: "usda", lookup: usdaLookup }),
     }))
+    // OFF now comes before USDA in the generic-route chain — mock it out (rather than let a real
+    // network call decide the test) so this test stays about "BLS miss -> USDA", not OFF's live
+    // search behavior for an intentionally-nonsense food name.
+    const offLookup = vi.fn().mockResolvedValue(null)
+    vi.doMock("../../src/services/providers/off-provider.js", () => ({
+      offProvider: { name: "off", lookup: offLookup },
+    }))
 
     await (await import("../../src/utils/cache.js")).initCache()
     const { config } = await import("../../src/config.js")
@@ -337,5 +344,6 @@ describe("BLS in the routing-aware provider chain", () => {
 
     config.usda.apiKey = ""
     vi.doUnmock("../../src/services/providers/usda-provider.js")
+    vi.doUnmock("../../src/services/providers/off-provider.js")
   })
 })

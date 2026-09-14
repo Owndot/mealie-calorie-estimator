@@ -1,7 +1,7 @@
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
-import type { FoodState, IngredientClassification } from "../types.js"
+import type { FoodState, FoodType, IngredientClassification } from "../types.js"
 
 export interface NormalizerInput {
   index: number
@@ -11,6 +11,7 @@ export interface NormalizerInput {
 }
 
 const VALID_STATES: FoodState[] = ["raw", "cooked", "dried", "unknown"]
+const VALID_FOOD_TYPES: FoodType[] = ["simple", "processed_single_food", "composite_dish", "unknown"]
 
 function deterministicClassification(input: NormalizerInput): IngredientClassification {
   const name = input.foodName.trim()
@@ -24,6 +25,10 @@ function deterministicClassification(input: NormalizerInput): IngredientClassifi
     brand: null,
     state: "unknown",
     category: null,
+    // "unknown" is deliberately permissive (see foodTypeConflict in ranking.ts) — without the
+    // LLM there's no reliable signal to hard-reject composite-dish candidates on the query side,
+    // so this degrades to the existing lexical/category checks rather than blocking everything.
+    foodType: "unknown",
     route: "generic",
     llmClassified: false,
   }
@@ -50,6 +55,7 @@ interface RawItem {
   brand: unknown
   state: unknown
   category: unknown
+  foodType: unknown
 }
 
 /** Strict structural validation — malformed output must fail safely, not throw or half-apply. */
@@ -74,6 +80,7 @@ function parseAndValidate(content: string, expectedCount: number): RawItem[] | n
     if (o.brand !== null && typeof o.brand !== "string") return null
     if (typeof o.state !== "string" || !VALID_STATES.includes(o.state as FoodState)) return null
     if (o.category !== null && typeof o.category !== "string") return null
+    if (typeof o.foodType !== "string" || !VALID_FOOD_TYPES.includes(o.foodType as FoodType)) return null
     items.push({
       index: o.index,
       canonicalGerman: o.canonicalGerman,
@@ -81,6 +88,7 @@ function parseAndValidate(content: string, expectedCount: number): RawItem[] | n
       brand: o.brand,
       state: o.state,
       category: o.category,
+      foodType: o.foodType,
     })
   }
 
@@ -97,8 +105,17 @@ For each ingredient, return:
 - brand: a specific product brand ONLY if it is explicitly present as text within the given "name" field — otherwise null; never infer a brand from general knowledge about the food
 - state: one of "raw", "cooked", "dried", "unknown" — only when clearly supported by the given name; do not guess if unsupported
 - category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil"), or null if unclear
+- foodType: one of "simple", "processed_single_food", "composite_dish", or "unknown" — see definitions and examples below. This is the MOST IMPORTANT field: it will be used to hard-reject a database match of the wrong type, so accuracy here matters more than any other field.
 
-CRITICAL: nutritionally-relevant qualifiers already present in the structured name must be PRESERVED in both canonicalGerman and canonicalEnglish — never dropped during cleanup or translation. This includes (German / English): roh/raw, gekocht|gegart/cooked, gebacken/baked, gebraten/fried, getrocknet/dry|dried, frisch/fresh, tiefgefroren/frozen, Dose|Konserve/canned, abgetropft/drained, geschält/peeled, mager/lean, Fett %/fat %, Vollfett/full-fat, fettarm/low-fat, fettfrei/fat-free, gesüßt/sweetened, ungesüßt/unsweetened, gesalzen/salted, ungesalzen/unsalted. Example: "mageres Rinderhackfleisch" -> canonicalGerman "Rinderhackfleisch, mager", canonicalEnglish "lean ground beef". Example: "Tomaten aus der Dose, abgetropft" must keep "canned"/"drained" in canonicalEnglish, not just "tomatoes". Do not invent a qualifier that isn't supported by the given name.
+foodType definitions:
+- "simple": a single raw or minimally-prepared ingredient. Examples: tomato, salt, egg, olive oil, red lentils, chicken breast, green bell pepper, coriander (the herb), mint (the herb), water.
+- "processed_single_food": one food that has been processed/preserved but is still fundamentally ONE food, not a dish with multiple ingredients combined into a new preparation. Examples: tomato paste, canned tuna, pickled cucumber, cheese, yogurt, dried herbs, paprika powder (the spice), garlic powder, breadcrumbs.
+- "composite_dish": a prepared dish or menu component made of multiple ingredients combined together. Examples: lentil soup, stuffed pepper, rabbit stew, potato-tomato gratin, a prepared curry, breaded/coated chicken product, a dessert (cobbler, pudding, ice cream, cake), a sandwich, a sauce made of multiple ingredients, an Italian seasoning BLEND is composite only if it's sold as a finished sauce/dish — a plain dried-herb blend itself is "processed_single_food", not composite.
+- "unknown": only when genuinely unclear from the given name.
+
+If the ingredient name itself already names a composite dish (e.g. the Mealie ingredient literally says "Linsensuppe"/"lentil soup"), foodType must correctly be "composite_dish" — do not force everything to "simple".
+
+CRITICAL: nutritionally-relevant qualifiers already present in the structured name must be PRESERVED in both canonicalGerman and canonicalEnglish — never dropped during cleanup or translation. This includes (German / English): roh/raw, gekocht|gegart/cooked, gebacken/baked, gebraten/fried, getrocknet/dry|dried, frisch/fresh, tiefgefroren/frozen, Dose|Konserve/canned, abgetropft/drained, geschält/peeled, mager/lean, Fett %/fat %, Vollfett/full-fat, fettarm/low-fat, fettfrei/fat-free, gesüßt/sweetened, ungesüßt/unsweetened, gesalzen/salted, ungesalzen/unsalted. Example: "mageres Rinderhackfleisch" -> canonicalGerman "Rinderhackfleisch, mager", canonicalEnglish "lean ground beef". Example: "Tomaten aus der Dose, abgetropft" must keep "canned"/"drained" in canonicalEnglish, not just "tomatoes". Do not invent a qualifier that isn't supported by the given name. Do not narrow "Ei" to egg white/yolk unless the given name explicitly says so — plain "Ei"/"Eier" means the whole egg. A bare "Öl" (oil, no type specified) must stay generic "oil" in canonicalEnglish — never invent a specific oil type (olive, coconut, ...) that isn't in the given name.
 
 WATCH FOR FALSE FRIENDS: German "Paprika" qualified by a color (grüne/rote/gelbe Paprika = green/red/yellow Paprika) means the VEGETABLE (bell pepper) — canonicalEnglish must be "green/red/yellow bell pepper", never literal "green paprika" (in English, "paprika" alone means the ground spice, a completely different food with very different nutrition). Only unqualified "Paprikapulver" or bare "Paprika" meaning the spice should translate to "paprika"/"paprika powder".
 
@@ -106,7 +123,7 @@ Ingredients:
 ${lines.join("\n")}
 
 Return ONLY a JSON array, one object per ingredient, in this exact shape, no explanation, no markdown:
-[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","category":"..."}]`
+[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","category":"...","foodType":"simple"}]`
 }
 
 async function callLlm(prompt: string): Promise<string | null> {
@@ -190,6 +207,7 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
       brand,
       state: item.state as FoodState,
       category: (item.category as string | null) ?? null,
+      foodType: item.foodType as FoodType,
       route: brand ? "branded" : "generic",
       llmClassified: true,
     }

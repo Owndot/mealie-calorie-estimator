@@ -8,19 +8,18 @@ import type { FoodRoute } from "../../types.js"
 
 /**
  * Builds the generic-route provider chain: BLS 4.0 (bundled local reference data, licensed
- * CC BY 4.0 — see resources/bls and README) first, then USDA FoodData Central if USDA_API_KEY is
- * configured, then Open Food Facts as an optional final database fallback (OFF is a real branded/
- * product database — a generic ingredient with no BLS or USDA match may still resolve there
- * before falling all the way to the LLM). There is no dummy/no-op entry for a provider that isn't
- * configured (USDA without a key) — it simply isn't in the list. BLS itself degrades the same way
- * if its bundled database is somehow missing at runtime (bls-provider.ts logs a warning and every
- * lookup returns null) rather than crashing — an honest "unresolved" beats a fabricated number.
+ * CC BY 4.0 — see resources/bls and README) first, then Open Food Facts, then USDA FoodData
+ * Central if USDA_API_KEY is configured last among the structured databases. OFF precedes USDA on
+ * this route deliberately (per explicit routing spec) rather than the other way round. There is no
+ * dummy/no-op entry for a provider that isn't configured (USDA without a key) — it simply isn't in
+ * the list. BLS itself degrades the same way if its bundled database is somehow missing at runtime
+ * (bls-provider.ts logs a warning and every lookup returns null) rather than crashing — an honest
+ * "unresolved" beats a fabricated number.
  */
 function buildGenericProviders(): NutrientProvider[] {
-  const providers: NutrientProvider[] = [createBlsProviderIfAvailable()]
+  const providers: NutrientProvider[] = [createBlsProviderIfAvailable(), offProvider]
   const usda = createUsdaProviderIfConfigured()
   if (usda) providers.push(usda)
-  providers.push(offProvider)
   return providers
 }
 
@@ -39,7 +38,7 @@ function buildBrandedProviders(): NutrientProvider[] {
 
 /**
  * Routing-aware provider chain:
- *   generic:  cache → BLS → USDA (optional) → OFF (optional final DB fallback) → LLM last
+ *   generic:  cache → BLS → OFF → USDA (optional) → LLM last
  *   branded:  cache → OFF → BLS → USDA (optional) → LLM last
  * (each provider checks its own cache first internally). The LLM nutrient estimate is always
  * last, on both routes, and only included when LLM_ENABLED + LLM_API_KEY are set — direct LLM

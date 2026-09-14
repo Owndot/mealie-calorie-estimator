@@ -102,6 +102,30 @@ def infer_state(name_de: str) -> str:
     return "unknown"
 
 
+# Official BLS Code structure (BLS 4.0 Dokumentation section 2.4, cross-referenced against
+# blsdb.de/bls): the code is up to 7 characters, [Letter][6 digits]. The LEADING LETTER is the
+# "Hauptlebensmittelgruppe" (main food group) — this is authoritative structured metadata, not a
+# lexical guess. Two letters are explicitly documented as composite/prepared-dish groups:
+#   X = "Menükomponenten überwiegend pflanzlich" (menu components, predominantly plant-based)
+#   Y = "Menükomponente vorwiegend tierisch" (menu components, predominantly animal-based)
+# Empirically verified against this exact dataset: every BLS entry this project's own regression
+# testing found to be a prepared dish wrongly matching a simple-ingredient query (Hasenpfeffer,
+# Schweinepfeffer, Rote-Linsensuppe mit Koriander, Kartoffel-Tomaten-Gratin) is coded X or Y.
+# Every other letter (B, C, D, E, F, G, H, K, M, N, P, Q, R, S, T, U, V, W) covers a raw/single-
+# food group (bread, cereals, fine baked goods, eggs, fruit, vegetables, legumes/sprouts/tofu,
+# potato/starch, dairy, non-alcoholic drinks, alcoholic drinks, fats/oils, condiments/spices,
+# sugar/honey, fish, meat cuts, offal/game, sausage/cured meat) — BLS's own letter system doesn't
+# further split those into "simple" vs "processed" at the single-letter level, so this import
+# only derives the composite/non-composite distinction from the code; the existing name-based
+# infer_state() continues to carry preparation-state detail.
+COMPOSITE_DISH_LETTERS = {"X", "Y"}
+
+
+def food_type_from_code(bls_code: str) -> str:
+    letter = bls_code[0].upper() if bls_code else ""
+    return "composite_dish" if letter in COMPOSITE_DISH_LETTERS else "simple"
+
+
 def find_column_indices(header_row):
     indices = {}
     for i, cell in enumerate(header_row):
@@ -149,6 +173,8 @@ def main():
             name_de_normalized TEXT NOT NULL,
             name_en TEXT,
             inferred_state TEXT NOT NULL,
+            group_letter TEXT NOT NULL,
+            food_type TEXT NOT NULL,
             kcal_per_100g REAL,
             protein_per_100g REAL,
             carbs_per_100g REAL,
@@ -178,12 +204,14 @@ def main():
         conn.execute(
             """INSERT INTO bls_foods (
                 bls_code, name_de, name_de_normalized, name_en, inferred_state,
+                group_letter, food_type,
                 kcal_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g,
                 saturated_fat_per_100g, unsaturated_fat_per_100g, fiber_per_100g,
                 sugar_per_100g, sodium_per_100g, cholesterol_per_100g
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 bls_code, name_de, normalize_name(name_de), name_en, infer_state(name_de),
+                bls_code[0].upper(), food_type_from_code(bls_code),
                 parse_value(r[idx["ENERCC"]]),
                 parse_value(r[idx["PROT625"]]),
                 parse_value(r[idx["CHO"]]),

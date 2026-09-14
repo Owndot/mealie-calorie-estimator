@@ -51,8 +51,16 @@ describe("resolveNutrients", () => {
   })
 
   it("resolves a generic food via the real USDA provider when configured, with accurate provenance", async () => {
+    // OFF now precedes USDA in the generic chain — give OFF an empty-hits response and USDA the
+    // real fixture, keyed by URL (each fetch() call needs a fresh Response; the body stream can
+    // only be read once, so a single shared mockResolvedValue would break the second caller).
     config.usda.apiKey = "test-key"
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(fdcResponse("Resolvertest Flour", 999111))
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      if (String(url).includes("openfoodfacts")) {
+        return new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return fdcResponse("Resolvertest Flour", 999111)
+    })
 
     const result = await resolveNutrients({ foodName: "Resolvertest Flour", brand: null, category: null, state: "unknown" }, "generic")
 
@@ -62,22 +70,33 @@ describe("resolveNutrients", () => {
     expect(result?.match.productName).toBe("Resolvertest Flour")
   })
 
-  it("does not query OFF when BLS/USDA already produced an acceptable match (OFF is a last-resort DB fallback, not tried on every generic food)", async () => {
+  it("does not query USDA when BLS/OFF already produced an acceptable match (USDA is not tried on every generic food)", async () => {
     config.usda.apiKey = "test-key"
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(fdcResponse("Resolvertest Sugar", 999222))
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ hits: [{ product_name: "Resolvertest Sugar", brands: [], categories_tags: [], nutriments: { "energy-kcal_100g": 387, "proteins_100g": 0, "carbohydrates_100g": 100, "fat_100g": 0 } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    )
 
     await resolveNutrients({ foodName: "Resolvertest Sugar", brand: null, category: null, state: "unknown" }, "generic")
 
-    // Every fetched URL must be a USDA FDC URL, never an Open Food Facts one.
+    // Every fetched URL must be an Open Food Facts one — USDA must never be reached once OFF
+    // already produced an acceptable match earlier in the chain.
     for (const call of fetchMock.mock.calls) {
-      expect(String(call[0])).toContain("api.nal.usda.gov")
-      expect(String(call[0])).not.toContain("openfoodfacts")
+      expect(String(call[0])).toContain("openfoodfacts")
+      expect(String(call[0])).not.toContain("api.nal.usda.gov")
     }
   })
 
   it("returns null when no provider resolves the query, rather than fabricating a match", async () => {
     config.usda.apiKey = "test-key"
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ foods: [] }), { status: 200 }))
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+      if (String(url).includes("openfoodfacts")) {
+        return new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({ foods: [] }), { status: 200 })
+    })
 
     const result = await resolveNutrients({ foodName: "Resolvertestnonexistent", brand: null, category: null, state: "unknown" }, "generic")
     expect(result).toBeNull()

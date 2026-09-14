@@ -9,14 +9,13 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     config.llm.apiKey = ""
   })
 
-  it("generic route includes OFF only as the final optional DB fallback, after BLS and USDA", () => {
-    // Deliberate architecture change: OFF is now an optional final database fallback on the
-    // generic route (tried only after BLS and USDA both fail to produce an acceptable match) —
-    // it is never queried for an ordinary generic ingredient BLS or USDA already resolved, and
-    // it never comes before BLS/USDA in the chain.
+  it("generic route is BLS, then OFF, then USDA last among structured databases", () => {
+    // Explicit routing spec: generic = cache -> BLS -> OFF -> USDA -> LLM. OFF precedes USDA on
+    // this route deliberately (not the other way round) — it is only skipped when BLS already
+    // produced an acceptable match.
     config.usda.apiKey = "some-key"
     const chain = getProviderChain("generic").map((p) => p.name)
-    expect(chain).toEqual(["bls", "usda", "off"])
+    expect(chain).toEqual(["bls", "off", "usda"])
   })
 
   it("generic route is [bls, off] when USDA is unconfigured — BLS is bundled, OFF is the final DB fallback", () => {
@@ -44,10 +43,10 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     expect(branded.map((p) => p.name)).not.toContain("usda")
   })
 
-  it("includes a real USDA provider, after BLS and before OFF, only once USDA_API_KEY is configured", () => {
+  it("includes a real USDA provider, after BLS and OFF, only once USDA_API_KEY is configured", () => {
     config.usda.apiKey = "some-key"
     const generic = getProviderChain("generic")
-    expect(generic.map((p) => p.name)).toEqual(["bls", "usda", "off"])
+    expect(generic.map((p) => p.name)).toEqual(["bls", "off", "usda"])
   })
 
   it("never includes a local hand-authored nutrition dataset (BLS is real bundled data, not hand-authored)", () => {

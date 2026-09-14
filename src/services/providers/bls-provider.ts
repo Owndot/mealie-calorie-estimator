@@ -5,12 +5,12 @@ import initSqlJs from "sql.js"
 import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
-import type { NutrientSet, ProviderMatch, FoodState } from "../../types.js"
+import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict } from "./ranking.js"
+import { findMismatch, categoryConflict, foodTypeConflict } from "./ranking.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v8"
+const BLS_MATCH_ALGORITHM_VERSION = "v9"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -49,6 +49,14 @@ interface BlsFoodRecord {
   nameDeNormalized: string
   nameEn: string | null
   inferredState: FoodState
+  /**
+   * Derived from the OFFICIAL BLS Code's leading letter (scripts/import_bls.py) — X/Y are BLS's
+   * own documented "Menükomponenten" (menu component/composite dish) groups. This is the
+   * PRIMARY, authoritative signal for rejecting a composite dish against a simple query — see
+   * foodTypeConflict() in ranking.ts. Every letter other than X/Y maps to "simple" here; BLS's
+   * own letter system doesn't further split those into simple vs. processed at this level.
+   */
+  foodType: FoodType
   nutrients: NutrientSet
   /** Ordered token sequences (not just sets) — needed for prefix-match scoring, see scoreOne(). */
   tokensDe: string[]
@@ -81,6 +89,7 @@ async function loadBlsData(): Promise<BlsData | null> {
 
   const records: BlsFoodRecord[] = []
   const stmt = db.prepare(`SELECT bls_code, name_de, name_de_normalized, name_en, inferred_state,
+    food_type,
     kcal_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, saturated_fat_per_100g,
     unsaturated_fat_per_100g, fiber_per_100g, sugar_per_100g, sodium_per_100g, cholesterol_per_100g
     FROM bls_foods`)
@@ -96,6 +105,7 @@ async function loadBlsData(): Promise<BlsData | null> {
         nameDeNormalized: row.name_de_normalized as string,
         nameEn,
         inferredState: row.inferred_state as FoodState,
+        foodType: row.food_type as FoodType,
         nutrients: {
           kcalPer100g: row.kcal_per_100g as number | null,
           proteinPer100g: row.protein_per_100g as number | null,
@@ -146,6 +156,8 @@ export interface TestBlsFoodInput {
   nameDe: string
   nameEn?: string | null
   inferredState?: FoodState
+  /** Defaults to "simple" — pass "composite_dish" to simulate an X/Y-coded BLS entry in tests. */
+  foodType?: FoodType
   nutrients: NutrientSet
 }
 
@@ -162,6 +174,7 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
     nameDeNormalized: normalizeKey(input.nameDe),
     nameEn: input.nameEn ?? null,
     inferredState: input.inferredState ?? "unknown",
+    foodType: input.foodType ?? "simple",
     nutrients: input.nutrients,
     tokensDe: tokenizeBls(input.nameDe),
     tokensEn: tokenizeBls(input.nameEn ?? ""),
@@ -263,9 +276,22 @@ interface ScoredRecord {
 /** Conservative threshold for a *fuzzy* (non-exact-normalized-string) BLS match. Exact matches bypass this entirely. */
 const FUZZY_MIN_SCORE = 50
 
-function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null): ScoredRecord[] {
+function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
   return records.map((record) => {
+    // PRIMARY check first, before any lexical scoring: the official BLS Code letter (X/Y =
+    // composite dish) beats a high textual score every time — see foodTypeConflict() in
+    // ranking.ts. The lexical categoryConflict/findMismatch checks below remain as a secondary/
+    // defense-in-depth layer (e.g. for the "unknown" foodType case when the LLM is disabled).
+    if (foodTypeConflict(queryFoodType, record.foodType)) {
+      return {
+        record,
+        score: -1000,
+        mismatchReason: `food type conflict: a "${queryFoodType}" query cannot accept BLS's composite-dish entry "${record.nameDe}" (${record.blsCode})`,
+        matchedViaEnglish: false,
+      }
+    }
+
     const scoreDe = nameScore(queryTokens, record.tokensDe, true)
     const scoreEn = nameScore(queryTokens, record.tokensEn, false)
     const matchedViaEnglish = scoreEn > scoreDe
@@ -321,6 +347,8 @@ function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean
     providerId: scored.record.blsCode,
     productName: scored.matchedViaEnglish && scored.record.nameEn ? `${scored.record.nameDe} (${scored.record.nameEn})` : scored.record.nameDe,
     confidence,
+    foodType: scored.record.foodType,
+    matchReason: isExact ? "exact-name" : "fuzzy",
   }
 }
 
@@ -373,17 +401,21 @@ export class BlsProvider implements NutrientProvider {
       if (exactCandidates && exactCandidates.length > 0) {
         const withKcal = exactCandidates.find((r) => r.nutrients.kcalPer100g !== null) ?? exactCandidates[0]
         const stateOk = query.state === "unknown" || withKcal.inferredState === "unknown" || withKcal.inferredState === query.state
-        if (stateOk) {
+        // Even an exact string match must respect food-type compatibility — the authoritative
+        // BLS-code-derived type outranks string equality (a "simple" query whose text happens to
+        // exactly equal a composite dish's name is a contradiction worth rejecting, not trusting).
+        const typeOk = !foodTypeConflict(query.foodType, withKcal.foodType)
+        if (stateOk && typeOk) {
           const match = buildMatch(query, { record: withKcal, score: 100, mismatchReason: null, matchedViaEnglish: false }, true)
           setCachedProviderMatch(this.name, queryKey, match)
           return match
         }
-        // Exact name match but conflicting state (e.g. query wants "cooked", only a "raw" entry
-        // has this exact name) — fall through to fuzzy scoring, which might find a differently
-        // *named* but state-matching BLS entry (e.g. "Kartoffel gekocht" vs the exact "Kartoffel").
+        // Exact name match but conflicting state/type (e.g. query wants "cooked", only a "raw"
+        // entry has this exact name) — fall through to fuzzy scoring, which might find a
+        // differently *named* but compatible BLS entry (e.g. "Kartoffel gekocht" vs "Kartoffel").
       }
 
-      const scored = scoreCandidates(text, data.records, query.category).sort((a, b) => b.score - a.score)
+      const scored = scoreCandidates(text, data.records, query.category, query.foodType).sort((a, b) => b.score - a.score)
       const picked = pickBestByState(scored, query.state, FUZZY_MIN_SCORE)
       if (picked) {
         const match = buildMatch(query, picked, false)
