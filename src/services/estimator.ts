@@ -292,13 +292,25 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   return result
 }
 
-/** Detects nutrition that was entered by hand and never touched by the estimator at all. */
+/**
+ * Detects nutrition that was entered by hand and never actually computed by a real estimate.
+ *
+ * A `calorie_estimator_hash` being present is NOT sufficient proof of a real prior estimate:
+ * found against real production data (a live legacy-recipe regression check) — an older version
+ * of this service's manual-ack path wrote `calorie_estimator_hash` (to avoid re-detecting the
+ * same manual entry every run) without any other marker distinguishing "hash from an ack" from
+ * "hash from a real estimate". That version predates `calorie_estimator_provenance`, which every
+ * real estimate has always written unconditionally (see buildNutritionPatch) and no ack path
+ * ever has. Its absence is therefore a reliable, version-independent signal that whatever
+ * nutrition is present was never actually computed — whether that's because no hash exists at
+ * all (a brand new manual entry) or a hash exists from an old-style ack (a legacy manual entry).
+ */
 export function hasManualCalories(recipe: MealieRecipe): boolean {
-  const hasHash = recipe.extras?.calorie_estimator_hash != null
   const hasStoredNutrition =
     recipe.nutrition?.calories != null && recipe.nutrition.calories.trim().length > 0
+  const hasEstimatorProvenance = recipe.extras?.calorie_estimator_provenance != null
 
-  return !hasHash && hasStoredNutrition
+  return hasStoredNutrition && !hasEstimatorProvenance
 }
 
 /**

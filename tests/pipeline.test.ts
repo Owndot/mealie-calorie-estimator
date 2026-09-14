@@ -209,7 +209,9 @@ describe("runEstimationPipeline", () => {
         ...mockRecipe,
         // A person changed the calorie value by hand after the estimator last wrote 350.
         nutrition: { ...estimatorWrittenNutrition, calories: "9999" },
-        extras: { calorie_estimator_hash: hash, calorie_estimator_nutrition_fingerprint: writtenFingerprint },
+        // calorie_estimator_provenance present -- proves a real estimate wrote this (see
+        // hasManualCalories), distinguishing it from a legacy manual-ack that also has a hash.
+        extras: { calorie_estimator_hash: hash, calorie_estimator_nutrition_fingerprint: writtenFingerprint, calorie_estimator_provenance: "[]" },
       }
 
       // force ingredient "change" by using a different hash won't apply here — instead force=true
@@ -239,11 +241,56 @@ describe("runEstimationPipeline", () => {
       mockRecipe = {
         ...mockRecipe,
         nutrition: estimatorWrittenNutrition, // untouched since the estimator wrote it
-        extras: { calorie_estimator_hash: hash, calorie_estimator_nutrition_fingerprint: writtenFingerprint },
+        // calorie_estimator_provenance present -- proves a real estimate wrote this (see
+        // hasManualCalories), distinguishing it from a legacy manual-ack that also has a hash.
+        extras: { calorie_estimator_hash: hash, calorie_estimator_nutrition_fingerprint: writtenFingerprint, calorie_estimator_provenance: "[]" },
       }
 
       const outcome = await runEstimationPipeline("test-recipe", { force: true })
       expect(outcome.status).toBe("estimated") // not manual-preserved — safe to overwrite
+    })
+  })
+
+  describe("legacy manual-ack recipes (found via a live regression check against real production data)", () => {
+    it("protects a recipe acknowledged as manual by an older version of this service, even though it has a hash and no calorie_estimator_manual flag", async () => {
+      // Real recipe pattern found live: calorie_estimator_hash + calorie_estimator_note
+      // ("Manual — preserved existing calorie entry") present, but no calorie_estimator_manual
+      // flag and no calorie_estimator_provenance -- both fields postdate this recipe's last
+      // write. force=true must not treat "a hash exists" as "safe to overwrite" here.
+      mockRecipe = baseRecipe({
+        nutrition: { calories: "586", carbohydrateContent: "61.77", cholesterolContent: "80", fatContent: "27.73", fiberContent: "4.81", proteinContent: "24.6", saturatedFatContent: "13.24", sodiumContent: "1142", sugarContent: "5", transFatContent: "0", unsaturatedFatContent: "14.52" },
+        extras: {
+          calorie_estimator_hash: "edcf6789d74e007979f6ea285a9745cf4926c62ee42dcba9a3239720c46d682e",
+          calorie_estimator_unmatched: "[]",
+          calorie_estimator_note: "Manual — preserved existing calorie entry",
+          calorie_estimator_tags: JSON.stringify(["digest-unknown"]),
+        },
+      })
+
+      const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      const outcome = await runEstimationPipeline("test-recipe", { force: true })
+
+      expect(outcome.status).toBe("manual-preserved")
+      expect(patchCalls[0].patch.nutrition).toBeUndefined()
+    })
+
+    it("re-estimates cleanly (no manual value left to protect) when the legacy nutrition is already empty", async () => {
+      // The other real pattern found live: same legacy ack shape, but nutrition itself is
+      // already null (e.g. lost to an earlier version of the nutrition-wipe bug). There's
+      // nothing left to protect, so a fresh real estimate is the correct, safe outcome.
+      mockRecipe = baseRecipe({
+        nutrition: null,
+        extras: {
+          calorie_estimator_hash: "0d222741d9c3223c43ab696a183f4b5c0c92b9e4983d67005444222b52997822",
+          calorie_estimator_unmatched: "[]",
+          calorie_estimator_note: "Manual — preserved existing calorie entry",
+          calorie_estimator_tags: JSON.stringify(["digest-unknown"]),
+        },
+      })
+
+      const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+      const outcome = await runEstimationPipeline("test-recipe", { force: true })
+      expect(outcome.status).toBe("estimated")
     })
   })
 })

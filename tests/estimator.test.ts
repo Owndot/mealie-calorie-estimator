@@ -294,12 +294,27 @@ describe("hasManualCalories", () => {
     expect(hasManualCalories(recipe)).toBe(true)
   })
 
-  it("returns false when hash already exists", () => {
+  it("returns false when a hash AND provenance both exist -- a genuine prior real estimate", () => {
     const recipe = makeRecipe({
       nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
-      extras: { calorie_estimator_hash: "abc123" },
+      extras: { calorie_estimator_hash: "abc123", calorie_estimator_provenance: "[]" },
     })
     expect(hasManualCalories(recipe)).toBe(false)
+  })
+
+  it("returns TRUE when a hash exists but provenance does NOT -- a legacy manual acknowledgment, found via a live regression check against real production recipes", () => {
+    // A real household's Mealie had recipes acknowledged as manual by an older version of this
+    // service, which wrote calorie_estimator_hash (to avoid re-flagging the same entry every
+    // run) but predates calorie_estimator_provenance entirely. Under the old "hash alone means
+    // not manual" logic, force-recalculating such a recipe would have silently overwritten a
+    // real hand-entered value with a fresh computed one. Absence of provenance -- which every
+    // real estimate, in any version, has always written unconditionally -- is what actually
+    // distinguishes "never computed" from "computed for real".
+    const recipe = makeRecipe({
+      nutrition: { calories: "586", carbohydrateContent: "61.77", cholesterolContent: "80", fatContent: "27.73", fiberContent: "4.81", proteinContent: "24.6", saturatedFatContent: "13.24", sodiumContent: "1142", sugarContent: "5", transFatContent: "0", unsaturatedFatContent: "14.52" },
+      extras: { calorie_estimator_hash: "edcf6789d74e007979f6ea285a9745cf4926c62ee42dcba9a3239720c46d682e", calorie_estimator_note: "Manual — preserved existing calorie entry" },
+    })
+    expect(hasManualCalories(recipe)).toBe(true)
   })
 
   it("returns false when nutrition.calories is empty", () => {
@@ -325,19 +340,21 @@ describe("isManuallyOwned — stays true across later runs, not just the very fi
     expect(isManuallyOwned(recipe)).toBe(true)
   })
 
-  it("stays true once the persistent calorie_estimator_manual flag is set, even though a hash is now present (hasManualCalories alone would return false here)", () => {
+  it("stays true once the persistent calorie_estimator_manual flag is set, even for nutrition that WAS genuinely computed by a real estimate (hasManualCalories alone would return false here)", () => {
     const recipe = makeRecipe({
       nutrition: { calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
-      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "true" },
+      // provenance present -- this really was computed by a real estimate, then later
+      // overridden by a human, whom overrideManual explicitly authorized to do so.
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "true", calorie_estimator_provenance: "[]" },
     })
-    expect(hasManualCalories(recipe)).toBe(false) // hash is present now
+    expect(hasManualCalories(recipe)).toBe(false) // it genuinely was computed once
     expect(isManuallyOwned(recipe)).toBe(true) // but the persistent flag still protects it
   })
 
   it("is false once the flag has been explicitly cleared by a real estimate", () => {
     const recipe = makeRecipe({
       nutrition: { calories: "350", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
-      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "false" },
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "false", calorie_estimator_provenance: "[]" },
     })
     expect(isManuallyOwned(recipe)).toBe(false)
   })
