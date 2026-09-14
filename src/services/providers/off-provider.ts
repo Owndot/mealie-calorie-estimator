@@ -170,7 +170,10 @@ export class OffProvider implements NutrientProvider {
       hasCompleteNutrients: product.nutriments?.["energy-kcal_100g"] != null,
     }))
 
-    const ranked = rankCandidates(query.foodName, query.brand, rankable)
+    // categoryConflict participates here too (query-side data only — no new OFF response field
+    // needed) for the same reason BLS/USDA reject it: a strict raw-ingredient category query
+    // should never accept an OFF product that reads as a composite/manufactured item.
+    const ranked = rankCandidates(query.foodName, query.brand, rankable, { queryCategory: query.category })
     const top = ranked[0]
 
     if (!top) {

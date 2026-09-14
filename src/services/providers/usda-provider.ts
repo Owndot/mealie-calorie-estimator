@@ -2,9 +2,9 @@ import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
-import type { NutrientSet, ProviderMatch } from "../../types.js"
+import type { NutrientSet, ProviderMatch, FoodRoute } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { rankCandidates, MIN_ACCEPTABLE_SCORE, type RankableCandidate } from "./ranking.js"
+import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, type RankableCandidate } from "./ranking.js"
 
 interface FdcNutrient {
   nutrientId: number
@@ -17,6 +17,8 @@ interface FdcFood {
   fdcId: number
   description: string
   brandOwner?: string | null
+  brandName?: string | null
+  dataType?: string
   foodNutrients: FdcNutrient[]
 }
 
@@ -26,6 +28,11 @@ interface FdcSearchResult {
 
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 
+/**
+ * USDA FoodData Central nutrient IDs — stable identifiers, never array position. Energy is
+ * reported by USDA as TWO separate entries for the same food (1008 = kcal, 1062 = kJ); we
+ * deliberately only ever read 1008, so a kJ figure can never be mistaken for kcal.
+ */
 const NUTRIENT_IDS = {
   energyKcal: 1008,
   protein: 1003,
@@ -37,6 +44,30 @@ const NUTRIENT_IDS = {
   sugar: 2000,
   sodiumMg: 1093,
   cholesterolMg: 1253,
+}
+
+/**
+ * Bumped whenever ranking/rejection behavior changes (dataType tiering, state/category
+ * conflicts, branded exclusion) — provider_match_cache has no other versioning, so a future
+ * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
+ * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
+ */
+const USDA_MATCH_ALGORITHM_VERSION = "v1"
+
+/**
+ * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
+ * conflicts still apply on top). Foundation and SR Legacy are curated, single-ingredient-focused
+ * datasets; Survey (FNDDS) is the next best generic tier. Branded is excluded outright before
+ * ranking even runs on the generic route (see `lookup()`), so this function never actually scores
+ * a Branded candidate there — only on the branded route, where a small positive nudge reflects
+ * "acceptable if it otherwise ranks well," never enough to beat a clearly better generic tier.
+ */
+function dataTypeScore(route: FoodRoute, dataType: string | null | undefined): number {
+  if (dataType === "Foundation") return 20
+  if (dataType === "SR Legacy") return 15
+  if (dataType === "Survey (FNDDS)") return 10
+  if (dataType === "Branded") return route === "branded" ? 5 : 0
+  return 0
 }
 
 async function fetchWithRetry(url: string): Promise<Response | null> {
@@ -103,42 +134,64 @@ interface RankableFdcFood extends RankableCandidate {
 }
 
 /**
- * USDA FoodData Central provider — a real, optional generic-route fallback. Only constructed
- * and added to the provider registry when USDA_API_KEY is configured; there is no dummy
- * placeholder occupying this slot when it's absent.
+ * USDA FoodData Central provider — a real, optional generic-route fallback (tried after BLS).
+ * Only constructed and added to the provider registry when USDA_API_KEY is configured; there is
+ * no dummy placeholder occupying this slot when it's absent.
+ *
+ * NEVER accepts foods[0] just because FoodData Central returned it first: verified live that a
+ * plain "banana" search returns a branded product literally named "BANANA" as the top full-text
+ * search hit, ahead of any genuine raw-banana entry. This provider always retrieves a page of
+ * candidates and ranks them itself (rankCandidates, with dataType/state/category awareness) —
+ * search relevance order is a hint, never nutritional identity.
  */
 export class UsdaProvider implements NutrientProvider {
   readonly name = "usda"
 
   async lookup(query: ProviderQuery): Promise<ProviderMatch | null> {
-    const queryKey = buildQueryKey(query.foodName, query.brand)
+    const route: FoodRoute = query.route ?? "generic"
+
+    // State participates in cache identity (mirrors bls-provider.ts) — ranking now rejects on a
+    // known state conflict, so a "cooked" resolution must not be silently reused for the same
+    // food name queried "raw"/"unknown". Route also participates: the *same* food name can
+    // legitimately resolve differently on the generic vs branded route (Branded is excluded
+    // outright on generic).
+    const queryKey = buildQueryKey(`${USDA_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${route}`, query.brand)
 
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) return cached
-
     if (isProviderMiss(this.name, queryKey)) return null
 
+    const searchTerm = query.brand ? `${query.brand} ${query.foodName}` : query.foodName
     const params = new URLSearchParams({
       api_key: config.usda.apiKey,
-      query: query.foodName,
-      pageSize: "10",
-      dataType: "Foundation,SR Legacy",
+      query: searchTerm,
+      // Fetch a real page of candidates to rank ourselves — never just the top hit. dataType is
+      // deliberately NOT restricted at the API level: filtering it there would just move the
+      // "trust the API's judgment" problem instead of removing it, and we want Branded results
+      // visible to our own ranking (so branded-route matching can still consider them) rather
+      // than silently absent.
+      pageSize: "25",
     })
     const url = `${config.usda.baseUrl}/foods/search?${params}`
 
     await waitForRateLimit(RateLimitType.Usda)
     const res = await fetchWithRetry(url)
 
-    if (!res || !res.ok) {
-      logger.debug({ foodName: query.foodName, status: res?.status }, "USDA search failed")
-      return null
+    if (!res) {
+      logger.warn({ foodName: query.foodName }, "USDA search failed after retries")
+      return null // transient — never poison the negative cache
+    }
+    if (!res.ok) {
+      logger.warn({ foodName: query.foodName, status: res.status }, "USDA search returned error")
+      return null // transient — never poison the negative cache
     }
 
     let data: FdcSearchResult
     try {
       data = (await res.json()) as FdcSearchResult
     } catch {
-      return null
+      logger.warn({ foodName: query.foodName }, "USDA returned non-JSON response")
+      return null // transient — never poison the negative cache
     }
 
     if (!data.foods || data.foods.length === 0) {
@@ -146,17 +199,47 @@ export class UsdaProvider implements NutrientProvider {
       return null
     }
 
-    const rankable: RankableFdcFood[] = data.foods.map((food) => ({
+    // Branded is excluded outright before ranking on the generic route — never a correct
+    // generic-ingredient answer regardless of textual search score (the "banana" failure mode).
+    const eligible = route === "generic" ? data.foods.filter((f) => f.dataType !== "Branded") : data.foods
+
+    if (eligible.length === 0) {
+      markProviderMiss(this.name, queryKey)
+      return null
+    }
+
+    const rankable: RankableFdcFood[] = eligible.map((food) => ({
       food,
       name: food.description,
-      brand: food.brandOwner ?? null,
+      brand: food.brandOwner ?? food.brandName ?? null,
       hasCompleteNutrients: findNutrient(food, NUTRIENT_IDS.energyKcal) != null,
+      dataType: food.dataType ?? null,
+      state: inferStateFromName(food.description),
     }))
 
-    const ranked = rankCandidates(query.foodName, query.brand, rankable)
+    const ranked = rankCandidates(query.foodName, query.brand, rankable, {
+      queryState: query.state,
+      queryCategory: query.category,
+      dataTypeScore: (dt) => dataTypeScore(route, dt),
+    })
     const top = ranked[0]
 
-    if (!top || top.score < MIN_ACCEPTABLE_SCORE || top.mismatchReason) {
+    if (!top) {
+      markProviderMiss(this.name, queryKey)
+      return null
+    }
+
+    // Checked before the score gate for the same reason off-provider.ts does: a mismatch always
+    // drags the score below MIN_ACCEPTABLE_SCORE too, so checking score first would hide the
+    // specific rejection reason behind a generic "no acceptable candidate" log.
+    if (top.mismatchReason) {
+      logger.info({ foodName: query.foodName, reason: top.mismatchReason }, "USDA: rejected obvious mismatch")
+      markProviderMiss(this.name, queryKey)
+      return null
+    }
+
+    if (top.score < MIN_ACCEPTABLE_SCORE) {
+      logger.debug({ foodName: query.foodName, topScore: top.score }, "USDA: no acceptable candidate")
       markProviderMiss(this.name, queryKey)
       return null
     }
@@ -171,12 +254,13 @@ export class UsdaProvider implements NutrientProvider {
     const match: ProviderMatch = {
       nutrients,
       canonicalName: query.foodName,
-      brand: food.brandOwner ?? query.brand,
+      brand: food.brandOwner ?? food.brandName ?? query.brand,
       state: query.state,
       provider: this.name,
       providerId: String(food.fdcId),
       productName: food.description,
       confidence: Math.min(0.9, top.score / 100),
+      dataType: food.dataType ?? null,
     }
 
     setCachedProviderMatch(this.name, queryKey, match)

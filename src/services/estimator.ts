@@ -186,7 +186,8 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
 
   for (const ing of validIngredients) {
     const classification = classificationByIndex.get(ing.index)
-    const canonicalName = classification?.canonicalName ?? ing.foodName
+    const canonicalEnglish = classification?.canonicalEnglish ?? ing.foodName
+    const canonicalGerman = classification?.canonicalGerman ?? ing.foodName
     const brand = classification?.brand ?? null
     const route = classification?.route ?? "generic"
     const state: FoodState = classification?.state ?? "unknown"
@@ -194,12 +195,12 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     let grams: number | null = null
     let gramsEstimated = false
 
-    const converted = convertToGrams(ing.quantity, ing.unit, canonicalName)
+    const converted = convertToGrams(ing.quantity, ing.unit, canonicalEnglish)
     if (converted) {
       grams = converted.grams
       gramsEstimated = converted.estimated
     } else if (ing.unit?.name) {
-      const llmGrams = await estimateGrams(ing.quantity, ing.unit.name, canonicalName)
+      const llmGrams = await estimateGrams(ing.quantity, ing.unit.name, canonicalEnglish)
       if (llmGrams !== null) {
         grams = llmGrams
         gramsEstimated = true
@@ -209,7 +210,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     if (grams === null) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
-        name: ing.foodName, canonicalName, brand, route, grams: null, gramsEstimated: false,
+        name: ing.foodName, canonicalName: canonicalEnglish, brand, route, grams: null, gramsEstimated: false,
         matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
       })
@@ -219,14 +220,14 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     totalKnownWeight += grams
 
     const resolved = await resolveNutrients(
-      { foodName: canonicalName, structuredName: ing.foodName, brand, category: classification?.category ?? null, state },
+      { foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand, category: classification?.category ?? null, state, route },
       route,
     )
 
     if (!resolved) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
-        name: ing.foodName, canonicalName, brand, route, grams, gramsEstimated,
+        name: ing.foodName, canonicalName: canonicalEnglish, brand, route, grams, gramsEstimated,
         matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
       })
@@ -251,6 +252,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       productName: resolved.match.productName,
       confidence: resolved.match.confidence,
       fallbackStatus: resolved.fallbackStatus,
+      dataType: resolved.match.dataType ?? null,
       llmParticipated: (classification?.llmClassified ?? false) || resolved.fallbackStatus === "llm-nutrient",
     })
   }
@@ -432,6 +434,7 @@ export function buildNutritionPatch(
     brand: i.brand,
     providerId: i.providerId,
     productName: i.productName,
+    dataType: i.dataType ?? null,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,
     matched: i.matched,

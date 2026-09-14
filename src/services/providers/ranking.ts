@@ -1,4 +1,5 @@
 /** Shared candidate-ranking helpers for network providers (OFF, USDA) that return multiple hits. */
+import type { FoodState } from "../../types.js"
 
 export function tokenize(s: string): string[] {
   // Defense-in-depth: candidate name/brand fields ultimately come from external provider APIs
@@ -14,6 +15,28 @@ export function tokenize(s: string): string[] {
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
     .split(/\s+/)
     .filter(Boolean)
+}
+
+/**
+ * Coarse preparation-state inference from an English candidate name (USDA FoodData Central
+ * descriptions are English) — the runtime counterpart to bls-provider.ts's German
+ * infer_state (which runs once, at import time, in scripts/import_bls.py, since BLS's own
+ * names are fixed at import). Used so USDA candidates can participate in the same
+ * queryState-conflict rejection BLS already has (e.g. rejecting "raw" query against a
+ * "boiled"/"cooked" candidate) — without this, RankableCandidate.state would never be set for
+ * USDA and state conflicts could never be detected there.
+ */
+const ENGLISH_STATE_PATTERNS: [FoodState, RegExp][] = [
+  ["dried", /\b(dried|dehydrated|dry)\b/i],
+  ["cooked", /\b(cooked|boiled|baked|fried|roasted|grilled|steamed|braised|poached|stewed)\b/i],
+  ["raw", /\braw\b/i],
+]
+
+export function inferStateFromName(name: string): FoodState {
+  for (const [state, pattern] of ENGLISH_STATE_PATTERNS) {
+    if (pattern.test(name)) return state
+  }
+  return "unknown"
 }
 
 /**
@@ -78,12 +101,69 @@ export interface RankableCandidate {
   name: string
   brand: string | null
   hasCompleteNutrients: boolean
+  /** Candidate's own reported/inferred preparation state, when the provider exposes one. */
+  state?: FoodState
+  /** Provider-specific dataset tier (e.g. USDA dataType) — see RankOptions.dataTypeScore. */
+  dataType?: string | null
 }
 
 export interface RankedCandidate<T> {
   candidate: T
   score: number
   mismatchReason: string | null
+}
+
+/**
+ * Query categories narrow enough that a "composite/manufactured product" name is almost never a
+ * correct match — a raw spice, herb, or piece of produce is not the same food as a sausage, soup,
+ * snack, cake, or beverage that merely contains or references it. Deliberately excludes broader
+ * categories like "meat"/"poultry"/"fish", where a product form (e.g. sausage) can legitimately BE
+ * the right answer.
+ */
+const STRICT_RAW_INGREDIENT_CATEGORIES = new Set([
+  "spice", "herb", "seasoning", "vegetable", "fruit", "dairy", "egg", "grain", "legume", "fat", "oil", "condiment",
+])
+
+/**
+ * Name markers signaling a composite/manufactured product, and the category they imply.
+ * Deliberately WITHOUT a leading `\b` for most markers: German compounds fuse without a space
+ * ("Paprikaspeckwurst", "Kartoffelchips"), so a leading word-boundary would never match inside
+ * them — the same insight bls-provider.ts's own suffix-compound matching relies on. Short,
+ * English loanword markers that risk an accidental substring hit inside an unrelated word
+ * ("tea" inside "steak", "ale" inside "kale") keep both boundaries.
+ */
+const COMPOSITE_PRODUCT_MARKERS: { pattern: RegExp; impliesCategory: string }[] = [
+  { pattern: /wurst|sausage/i, impliesCategory: "meat-product" },
+  { pattern: /suppe|eintopf|\bsoup\b|\bstew\b|chowder/i, impliesCategory: "prepared-dish" },
+  { pattern: /stangen|brezel|chips|pretzel|\bsnack\b/i, impliesCategory: "snack" },
+  { pattern: /kuchen|torte|\bcake\b|gebäck|cookie|biscuit/i, impliesCategory: "baked-good" },
+  { pattern: /limonade|saft|getränk|juice|drink|\b(soda|cola|tea|tee|ale)\b/i, impliesCategory: "beverage" },
+]
+
+/**
+ * Reusable category-compatibility check: true when `candidateName` reads as a composite/
+ * manufactured product (per COMPOSITE_PRODUCT_MARKERS) that conflicts with a known, strict raw-
+ * ingredient `queryCategory`. Generalizes several live-discovered failure classes under one
+ * mechanism instead of one-off ingredient exceptions: "Paprikapulver" (spice) matching
+ * "Paprikaspeckwurst" (meat-product), "Salz" (seasoning) matching "Salzstangen" (snack),
+ * "Koriander" (herb) matching a lentil-soup dish (prepared-dish), "Ingwer" (spice) matching
+ * ginger ale (beverage). Returns false whenever the query category is unknown or not in the
+ * strict set (e.g. "meat" legitimately matches a sausage).
+ */
+export function categoryConflict(queryCategory: string | null | undefined, candidateName: string): boolean {
+  if (!queryCategory) return false
+  const normalized = queryCategory.trim().toLowerCase()
+  if (!STRICT_RAW_INGREDIENT_CATEGORIES.has(normalized)) return false
+  return COMPOSITE_PRODUCT_MARKERS.some((m) => m.pattern.test(candidateName) && m.impliesCategory !== normalized)
+}
+
+export interface RankOptions {
+  /** Query's known preparation state — a known conflict with a known candidate state is hard-rejected. */
+  queryState?: FoodState
+  /** Query's known category — see categoryConflict(). */
+  queryCategory?: string | null
+  /** Scores a provider-specific dataset tier (e.g. USDA dataType) as a ranking signal, not a hard filter. */
+  dataTypeScore?: (dataType: string | null | undefined) => number
 }
 
 /**
@@ -95,10 +175,11 @@ export function rankCandidates<T extends RankableCandidate>(
   queryFoodName: string,
   queryBrand: string | null,
   candidates: T[],
+  options: RankOptions = {},
 ): RankedCandidate<T>[] {
   return candidates
     .map((candidate) => {
-      const mismatchReason = findMismatch(queryFoodName, candidate.name)
+      let mismatchReason = findMismatch(queryFoodName, candidate.name)
       let score = nameSimilarity(queryFoodName, candidate.name) * 60
 
       if (queryBrand && candidate.brand) {
@@ -106,6 +187,20 @@ export function rankCandidates<T extends RankableCandidate>(
       }
 
       score += candidate.hasCompleteNutrients ? 15 : -50
+
+      const queryState = options.queryState
+      if (queryState && queryState !== "unknown" && candidate.state && candidate.state !== "unknown" && candidate.state !== queryState) {
+        mismatchReason = mismatchReason ?? `state conflict: query wants "${queryState}", candidate is "${candidate.state}"`
+      }
+
+      if (!mismatchReason && categoryConflict(options.queryCategory, candidate.name)) {
+        mismatchReason = `category conflict: "${options.queryCategory}" query looks unrelated to a composite/manufactured product name`
+      }
+
+      if (options.dataTypeScore) {
+        score += options.dataTypeScore(candidate.dataType)
+      }
+
       if (mismatchReason) score -= 1000
 
       return { candidate, score, mismatchReason }

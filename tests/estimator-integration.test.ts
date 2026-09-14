@@ -66,6 +66,15 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
     // 400g flour @ 364 kcal/100g = 1456 total kcal; /4 servings = 364/serving
     expect(result.totalNutrients.kcalPer100g).toBeCloseTo(1456, 0)
     expect(result.perServingNutrients.kcalPer100g).toBeCloseTo(364, 0)
+    // Provenance: dataType flows all the way from the USDA response through to IngredientMatch.
+    expect(result.matchedIngredients[0].dataType).toBe("Foundation")
+    expect(result.matchedIngredients[0].providerId).toBeTruthy()
+
+    const { buildNutritionPatch } = await import("../src/services/estimator.js")
+    const patch = buildNutritionPatch(result, "hash", null)
+    const persistedProvenance = JSON.parse(patch.extras.calorie_estimator_provenance)
+    expect(persistedProvenance[0].dataType).toBe("Foundation")
+    expect(persistedProvenance[0].providerId).toBeTruthy()
   })
 
   it("never uses recipeYield for the servings divisor, even when it disagrees with recipeServings", async () => {
@@ -207,6 +216,12 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("originalText never influences the hash or the estimate, even when it contradicts structured data", async () => {
+    // BLS is emptied (see beforeEach) and USDA is unconfigured (default apiKey "" in this file's
+    // beforeEach) — OFF is still unconditionally in the generic chain as a last-resort DB
+    // fallback, so it must be given a controlled empty response rather than hitting the real
+    // network in a test.
+    mockUsdaProvider({})
+
     const withSuspiciousOriginalText = recipe({
       recipeServings: 4,
       recipeIngredient: [

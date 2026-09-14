@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize } from "../../src/services/providers/ranking.js"
+import { nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict } from "../../src/services/providers/ranking.js"
 
 describe("tokenize — defensive against non-string input from external provider APIs", () => {
   // Live acceptance test finding: OFF's real /search response returns `brands` as a string
@@ -88,5 +88,56 @@ describe("rankCandidates", () => {
     const withMatch = rankCandidates("Joghurt", "Danone", [{ name: "Joghurt", brand: "Danone", hasCompleteNutrients: true }])
     const withoutBrand = rankCandidates("Joghurt", null, [{ name: "Joghurt", brand: null, hasCompleteNutrients: true }])
     expect(withMatch[0].score).toBeGreaterThan(withoutBrand[0].score)
+  })
+
+  it("rejects a candidate whose known state conflicts with the query's known state", () => {
+    const ranked = rankCandidates("Kartoffel", null, [
+      { name: "Kartoffel", brand: null, hasCompleteNutrients: true, state: "raw" },
+    ], { queryState: "cooked" })
+    expect(ranked[0].mismatchReason).not.toBeNull()
+  })
+
+  it("does not penalize a candidate whose state is unknown, even when the query's state is known", () => {
+    const ranked = rankCandidates("Kartoffel", null, [
+      { name: "Kartoffel", brand: null, hasCompleteNutrients: true, state: "unknown" },
+    ], { queryState: "cooked" })
+    expect(ranked[0].mismatchReason).toBeNull()
+  })
+
+  it("rejects a candidate via categoryConflict when queryCategory is set", () => {
+    const ranked = rankCandidates("Paprika", null, [
+      { name: "Paprikaspeckwurst", brand: null, hasCompleteNutrients: true },
+    ], { queryCategory: "spice" })
+    expect(ranked[0].mismatchReason).not.toBeNull()
+  })
+
+  it("applies a dataType scoring function as a ranking signal, not a hard filter", () => {
+    const ranked = rankCandidates("Banana", null, [
+      { name: "Banana, raw", brand: null, hasCompleteNutrients: true, dataType: "Foundation" },
+      { name: "BANANA", brand: "Dole", hasCompleteNutrients: true, dataType: "Branded" },
+    ], { dataTypeScore: (dt) => (dt === "Foundation" ? 20 : dt === "Branded" ? -20 : 0) })
+    expect(ranked[0].candidate.name).toBe("Banana, raw")
+  })
+})
+
+describe("categoryConflict", () => {
+  it("rejects a strict raw-ingredient category against a composite/manufactured product name", () => {
+    expect(categoryConflict("spice", "Paprikaspeckwurst")).toBe(true)
+    expect(categoryConflict("seasoning", "Salzstangen")).toBe(true)
+    expect(categoryConflict("herb", "Rote-Linsensuppe mit Koriander")).toBe(true)
+    expect(categoryConflict("vegetable", "Tomatensaft")).toBe(true) // vegetable vs beverage (juice)
+  })
+
+  it("does not reject when the query category is broad enough to legitimately include product forms", () => {
+    // "meat" is deliberately excluded from the strict set — a sausage can BE the right meat answer.
+    expect(categoryConflict("meat", "Bratwurst")).toBe(false)
+  })
+
+  it("does not reject when the category is unknown/null", () => {
+    expect(categoryConflict(null, "Paprikaspeckwurst")).toBe(false)
+  })
+
+  it("does not reject a candidate with no composite-product marker at all", () => {
+    expect(categoryConflict("spice", "Paprika, edelsüß")).toBe(false)
   })
 })

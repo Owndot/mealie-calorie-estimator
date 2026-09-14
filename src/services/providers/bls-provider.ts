@@ -7,10 +7,10 @@ import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch } from "./ranking.js"
+import { findMismatch, categoryConflict } from "./ranking.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v4"
+const BLS_MATCH_ALGORITHM_VERSION = "v5"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -263,14 +263,15 @@ interface ScoredRecord {
 /** Conservative threshold for a *fuzzy* (non-exact-normalized-string) BLS match. Exact matches bypass this entirely. */
 const FUZZY_MIN_SCORE = 50
 
-function scoreCandidates(queryText: string, records: BlsFoodRecord[]): ScoredRecord[] {
+function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
   return records.map((record) => {
     const scoreDe = nameScore(queryTokens, record.tokensDe, true)
     const scoreEn = nameScore(queryTokens, record.tokensEn, false)
     const matchedViaEnglish = scoreEn > scoreDe
     const best = Math.max(scoreDe, scoreEn)
-    const mismatchReason = findMismatch(queryText, matchedViaEnglish ? (record.nameEn ?? "") : record.nameDe)
+    const candidateName = matchedViaEnglish ? (record.nameEn ?? "") : record.nameDe
+    const mismatchReason = findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
 
     let score = best * 70
     score += record.nutrients.kcalPer100g !== null ? 15 : -50
@@ -339,8 +340,14 @@ export class BlsProvider implements NutrientProvider {
     const data = await getBlsData()
     if (!data) return null
 
+    // Tried in order: raw structured name (highest fidelity), the LLM's normalized German name
+    // (catches misspellings/dialect), then the LLM's English translation (last resort, weakened
+    // via nameScore's allowPrefixSuffix=false for English candidates).
     const structuredName = query.structuredName?.trim()
-    const queryTexts = [structuredName, query.foodName].filter((s, i, arr): s is string => !!s && arr.indexOf(s) === i)
+    const canonicalGerman = query.canonicalGerman?.trim()
+    const queryTexts = [structuredName, canonicalGerman, query.foodName].filter(
+      (s, i, arr): s is string => !!s && arr.indexOf(s) === i,
+    )
 
     // Unlike OFF/USDA, BLS matching is state-sensitive (pickBestByState) — the shared
     // buildQueryKey(foodName, brand) alone would let a "cooked" resolution get wrongly reused for
@@ -376,7 +383,7 @@ export class BlsProvider implements NutrientProvider {
         // *named* but state-matching BLS entry (e.g. "Kartoffel gekocht" vs the exact "Kartoffel").
       }
 
-      const scored = scoreCandidates(text, data.records).sort((a, b) => b.score - a.score)
+      const scored = scoreCandidates(text, data.records, query.category).sort((a, b) => b.score - a.score)
       const picked = pickBestByState(scored, query.state, FUZZY_MIN_SCORE)
       if (picked) {
         const match = buildMatch(query, picked, false)

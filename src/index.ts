@@ -44,7 +44,13 @@ async function main() {
 
   try {
     await app.listen({ port: config.port, host: "0.0.0.0" })
-    logger.info({ port: config.port }, "Calorie estimator server started")
+    // Boolean-only — never the key itself — so operators can confirm USDA is wired up from logs
+    // alone, without anyone (including an operator debugging remotely) ever needing to read the
+    // actual secret value out of the environment/config.
+    logger.info(
+      { port: config.port, usdaConfigured: Boolean(config.usda.apiKey), llmEnabled: config.llm.enabled && Boolean(config.llm.apiKey) },
+      "Calorie estimator server started",
+    )
   } catch (err) {
     logger.error({ err }, "Failed to start server")
     process.exit(1)

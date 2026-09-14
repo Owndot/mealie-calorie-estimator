@@ -13,9 +13,14 @@ export interface NormalizerInput {
 const VALID_STATES: FoodState[] = ["raw", "cooked", "dried", "unknown"]
 
 function deterministicClassification(input: NormalizerInput): IngredientClassification {
+  const name = input.foodName.trim()
   return {
     index: input.index,
-    canonicalName: input.foodName.trim(),
+    // No translation possible without the LLM — both fall back to the raw structured name
+    // itself, exactly what every provider already falls back to when canonicalGerman/
+    // canonicalEnglish are unavailable.
+    canonicalGerman: name,
+    canonicalEnglish: name,
     brand: null,
     state: "unknown",
     category: null,
@@ -40,7 +45,8 @@ function verifyBrandEvidence(brand: string | null, sourceFoodName: string): stri
 
 interface RawItem {
   index: unknown
-  canonicalName: unknown
+  canonicalGerman: unknown
+  canonicalEnglish: unknown
   brand: unknown
   state: unknown
   category: unknown
@@ -63,11 +69,19 @@ function parseAndValidate(content: string, expectedCount: number): RawItem[] | n
     if (typeof raw !== "object" || raw === null) return null
     const o = raw as Record<string, unknown>
     if (typeof o.index !== "number") return null
-    if (typeof o.canonicalName !== "string") return null
+    if (typeof o.canonicalGerman !== "string") return null
+    if (typeof o.canonicalEnglish !== "string") return null
     if (o.brand !== null && typeof o.brand !== "string") return null
     if (typeof o.state !== "string" || !VALID_STATES.includes(o.state as FoodState)) return null
     if (o.category !== null && typeof o.category !== "string") return null
-    items.push({ index: o.index, canonicalName: o.canonicalName, brand: o.brand, state: o.state, category: o.category })
+    items.push({
+      index: o.index,
+      canonicalGerman: o.canonicalGerman,
+      canonicalEnglish: o.canonicalEnglish,
+      brand: o.brand,
+      state: o.state,
+      category: o.category,
+    })
   }
 
   return items
@@ -75,15 +89,22 @@ function parseAndValidate(content: string, expectedCount: number): RawItem[] | n
 
 function buildPrompt(inputs: NormalizerInput[]): string {
   const lines = inputs.map((i) => `${i.index}: name="${i.foodName}"${i.unitName ? `, unit="${i.unitName}"` : ""}`)
-  return `You normalize recipe ingredients for a nutrition system. You are given ONLY the structured food name and unit for each ingredient below — there is no other text available, and none exists beyond what is shown.
+  return `You normalize recipe ingredients for a nutrition system. You are given ONLY the structured food name and unit for each ingredient below — there is no other text available, and none exists beyond what is shown. You are helping a downstream system UNDERSTAND each ingredient's identity for database lookup — you are NOT calculating or estimating any nutrient values here.
 
-For each ingredient, return: canonicalName (normalized/translated food name, food identity only), brand (a specific product brand ONLY if it is explicitly present as text within the given "name" field — otherwise null; never infer a brand from general knowledge about the food), state (one of "raw", "cooked", "dried", "unknown"), category (a short generic food category, or null).
+For each ingredient, return:
+- canonicalGerman: a normalized German food identity (fix spelling/dialect, keep it food-identity-only)
+- canonicalEnglish: the English translation of that same identity
+- brand: a specific product brand ONLY if it is explicitly present as text within the given "name" field — otherwise null; never infer a brand from general knowledge about the food
+- state: one of "raw", "cooked", "dried", "unknown" — only when clearly supported by the given name; do not guess if unsupported
+- category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil"), or null if unclear
+
+CRITICAL: nutritionally-relevant qualifiers already present in the structured name must be PRESERVED in both canonicalGerman and canonicalEnglish — never dropped during cleanup or translation. This includes (German / English): roh/raw, gekocht|gegart/cooked, gebacken/baked, gebraten/fried, getrocknet/dry|dried, frisch/fresh, tiefgefroren/frozen, Dose|Konserve/canned, abgetropft/drained, geschält/peeled, mager/lean, Fett %/fat %, Vollfett/full-fat, fettarm/low-fat, fettfrei/fat-free, gesüßt/sweetened, ungesüßt/unsweetened, gesalzen/salted, ungesalzen/unsalted. Example: "mageres Rinderhackfleisch" -> canonicalGerman "Rinderhackfleisch, mager", canonicalEnglish "lean ground beef". Example: "Tomaten aus der Dose, abgetropft" must keep "canned"/"drained" in canonicalEnglish, not just "tomatoes". Do not invent a qualifier that isn't supported by the given name.
 
 Ingredients:
 ${lines.join("\n")}
 
 Return ONLY a JSON array, one object per ingredient, in this exact shape, no explanation, no markdown:
-[{"index":0,"canonicalName":"...","brand":null,"state":"raw","category":"..."}]`
+[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","category":"..."}]`
 }
 
 async function callLlm(prompt: string): Promise<string | null> {
@@ -162,7 +183,8 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
 
     return {
       index: input.index,
-      canonicalName: (item.canonicalName as string).trim() || input.foodName.trim(),
+      canonicalGerman: (item.canonicalGerman as string).trim() || input.foodName.trim(),
+      canonicalEnglish: (item.canonicalEnglish as string).trim() || input.foodName.trim(),
       brand,
       state: item.state as FoodState,
       category: (item.category as string | null) ?? null,

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, beforeAll } from "vitest"
 import { resolveNutrients } from "../src/services/nutrient-resolver.js"
 import { initCache } from "../src/utils/cache.js"
+import { __buildTestBlsData, __resetBlsDataForTests } from "../src/services/providers/bls-provider.js"
 import { config } from "../src/config.js"
 
 beforeAll(async () => {
@@ -12,6 +13,10 @@ beforeEach(() => {
   config.llm.enabled = false
   config.llm.apiKey = ""
   vi.restoreAllMocks()
+  // BLS is unconditionally in the generic chain (real bundled data) — give every test a
+  // controlled, empty dataset so only the specific mocks/config each test sets up decide the
+  // outcome, rather than depending on what the real 7,140-row export happens to contain.
+  __resetBlsDataForTests(Promise.resolve(__buildTestBlsData([])))
 })
 
 function fdcResponse(description: string, fdcId: number) {
@@ -35,7 +40,12 @@ function fdcResponse(description: string, fdcId: number) {
 }
 
 describe("resolveNutrients", () => {
-  it("returns null when no provider is configured for the generic route — no hand-authored data fills the gap", async () => {
+  it("returns null when BLS/OFF find nothing and USDA is unconfigured — no hand-authored data fills the gap", async () => {
+    // BLS is emptied by beforeEach; USDA is unconfigured (apiKey ""); OFF (unconditionally in the
+    // generic chain as an optional final DB fallback) must be given a controlled empty response
+    // rather than hitting the real network in a test.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } }))
+
     const result = await resolveNutrients({ foodName: "Weizenmehl", brand: null, category: null, state: "unknown" }, "generic")
     expect(result).toBeNull()
   })
@@ -52,7 +62,7 @@ describe("resolveNutrients", () => {
     expect(result?.match.productName).toBe("Resolvertest Flour")
   })
 
-  it("does not query OFF for a generic-route food (routing-aware, not a single fixed chain)", async () => {
+  it("does not query OFF when BLS/USDA already produced an acceptable match (OFF is a last-resort DB fallback, not tried on every generic food)", async () => {
     config.usda.apiKey = "test-key"
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(fdcResponse("Resolvertest Sugar", 999222))
 

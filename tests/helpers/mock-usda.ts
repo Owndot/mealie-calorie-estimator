@@ -58,7 +58,7 @@ export function mockUsdaProvider(profiles: Record<string, UsdaTestProfile>): voi
 
     return new Response(
       JSON.stringify({
-        foods: [{ description: query, fdcId: nextFdcId++, foodNutrients: toFdcFoodNutrients(profile) }],
+        foods: [{ description: query, fdcId: nextFdcId++, dataType: "Foundation", foodNutrients: toFdcFoodNutrients(profile) }],
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     )

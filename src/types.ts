@@ -138,10 +138,17 @@ export type FoodRoute = "generic" | "branded"
  * Evidence-based classification of one structured ingredient, produced by the single
  * whole-recipe batch normalizer (or by deterministic fallback when the batch fails or LLM is disabled).
  * brand is non-null only when explicit evidence for it was present in structured food.name/aliases.
+ * canonicalGerman/canonicalEnglish are normalized *identities* for provider matching, not nutrient
+ * calculations — the LLM understands the ingredient here, it never estimates nutrients at this
+ * stage. Both must preserve nutritionally-relevant qualifiers the deterministic fallback already
+ * had (raw/cooked/dried/canned/drained/lean/fat%/...) — translation must not silently drop them.
  */
 export interface IngredientClassification {
   index: number
-  canonicalName: string
+  /** Normalized German identity — BLS's primary query text (after the raw structured name itself). */
+  canonicalGerman: string
+  /** Normalized/translated English identity — USDA/OFF's primary query text. */
+  canonicalEnglish: string
   brand: string | null
   state: FoodState
   category: string | null
@@ -162,6 +169,8 @@ export interface ProviderMatch {
   productName: string | null
   /** 0..1, provider-reported confidence in this being the right match */
   confidence: number
+  /** USDA FoodData Central dataset tier (Foundation/SR Legacy/Survey (FNDDS)/Branded) — null for non-USDA providers. */
+  dataType?: string | null
 }
 
 export interface IngredientMatch {
@@ -180,6 +189,8 @@ export interface IngredientMatch {
   confidence: number | null
   fallbackStatus: FallbackStatus
   llmParticipated: boolean
+  /** USDA dataset tier for this match, when the provider was "usda" — null otherwise. */
+  dataType?: string | null
   /** @deprecated use fallbackStatus === "unresolved" ? gramsEstimated via LLM : false */
   llmEstimated?: boolean
 }
