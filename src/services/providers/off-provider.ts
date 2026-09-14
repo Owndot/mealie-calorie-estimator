@@ -64,7 +64,15 @@ function extractNutrients(n: OffNutriments): NutrientSet {
   }
 }
 
-async function searchCandidates(query: string): Promise<OffProduct[]> {
+/**
+ * Returns null when the search itself couldn't be completed (network/HTTP/parse failure) —
+ * distinct from an empty array, which means OFF was reached and genuinely has no hits. Callers
+ * must only cache a negative result (markProviderMiss) for a confirmed empty array; caching a
+ * transient failure as a miss would poison the negative cache for a full TTL window (up to a
+ * day) every time OFF has a rate-limit flood or blip, silently starving unrelated foods of
+ * branded nutrition long after OFF recovers.
+ */
+async function searchCandidates(query: string): Promise<OffProduct[] | null> {
   const params = new URLSearchParams({
     q: query,
     langs: config.openFoodFacts.language,
@@ -80,12 +88,12 @@ async function searchCandidates(query: string): Promise<OffProduct[]> {
 
   if (!res) {
     logger.warn({ query }, "OFF search failed after retries")
-    return []
+    return null
   }
 
   if (!res.ok) {
     logger.warn({ status: res.status, query }, "OFF search returned error")
-    return []
+    return null
   }
 
   let data: OffSearchResult
@@ -93,7 +101,7 @@ async function searchCandidates(query: string): Promise<OffProduct[]> {
     data = (await res.json()) as OffSearchResult
   } catch {
     logger.warn({ query }, "OFF returned non-JSON response")
-    return []
+    return null
   }
 
   return data.hits ?? []
@@ -129,6 +137,10 @@ export class OffProvider implements NutrientProvider {
     const searchTerm = query.brand ? `${query.brand} ${query.foodName}` : query.foodName
     const hits = await searchCandidates(searchTerm)
 
+    // null = transient failure (network/HTTP/parse) — unknown, not a confirmed miss, so it must
+    // never poison the negative cache. Only a confirmed empty array is a real miss.
+    if (hits === null) return null
+
     if (hits.length === 0) {
       markProviderMiss(this.name, queryKey)
       return null
@@ -144,14 +156,23 @@ export class OffProvider implements NutrientProvider {
     const ranked = rankCandidates(query.foodName, query.brand, rankable)
     const top = ranked[0]
 
-    if (!top || top.score < MIN_ACCEPTABLE_SCORE) {
-      logger.debug({ foodName: query.foodName, topScore: top?.score }, "OFF: no acceptable candidate")
+    if (!top) {
+      logger.debug({ foodName: query.foodName }, "OFF: no acceptable candidate")
       markProviderMiss(this.name, queryKey)
       return null
     }
 
+    // Checked before the score gate: a mismatch always drags the score below
+    // MIN_ACCEPTABLE_SCORE too, so checking score first would make this branch unreachable and
+    // hide the specific "obvious mismatch" reason behind a generic "no acceptable candidate" log.
     if (top.mismatchReason) {
       logger.info({ foodName: query.foodName, reason: top.mismatchReason }, "OFF: rejected obvious mismatch")
+      markProviderMiss(this.name, queryKey)
+      return null
+    }
+
+    if (top.score < MIN_ACCEPTABLE_SCORE) {
+      logger.debug({ foodName: query.foodName, topScore: top.score }, "OFF: no acceptable candidate")
       markProviderMiss(this.name, queryKey)
       return null
     }

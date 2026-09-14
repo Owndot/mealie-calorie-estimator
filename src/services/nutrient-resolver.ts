@@ -9,6 +9,23 @@ export interface ResolvedNutrients {
   fallbackStatus: FallbackStatus
 }
 
+const KNOWN_FALLBACK_STATUSES: FallbackStatus[] = ["usda", "off", "llm-nutrient"]
+
+/**
+ * Maps a provider's `name` to a FallbackStatus without an unchecked cast — a provider whose name
+ * doesn't match one of the known values would otherwise silently produce an invalid
+ * fallbackStatus (this happened once already: the LLM provider was named "llm" while
+ * FallbackStatus expected "llm-nutrient", so llmParticipated/provenance silently lost track of
+ * LLM-resolved ingredients). Falls back to "unresolved" and logs loudly so a future rename can't
+ * fail silently the same way.
+ */
+function toFallbackStatus(providerName: string): FallbackStatus {
+  const match = KNOWN_FALLBACK_STATUSES.find((s) => s === providerName)
+  if (match) return match
+  logger.warn({ providerName }, "Provider name does not match any known FallbackStatus — check for a naming mismatch")
+  return "unresolved"
+}
+
 /**
  * Walks the routing-aware provider chain for one ingredient. Rejects any candidate that fails
  * the sanity check and tries the next provider rather than accepting it, per the skill's
@@ -34,7 +51,7 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
       continue
     }
 
-    return { match, fallbackStatus: provider.name as FallbackStatus }
+    return { match, fallbackStatus: toFallbackStatus(provider.name) }
   }
 
   return null

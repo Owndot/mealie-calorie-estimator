@@ -7,11 +7,6 @@ const searchLimiter = new RateLimiterMemory({
   duration: 60,
 })
 
-const productLimiter = new RateLimiterMemory({
-  points: config.openFoodFacts.productRateLimit,
-  duration: 60,
-})
-
 const llmLimiter = new RateLimiterMemory({
   points: config.llm.rateLimit,
   duration: 60,
@@ -24,7 +19,6 @@ const usdaLimiter = new RateLimiterMemory({
 
 export enum RateLimitType {
   Search = "search",
-  Product = "product",
   Llm = "llm",
   Usda = "usda",
 }
@@ -33,8 +27,6 @@ function getLimiter(type: RateLimitType): RateLimiterMemory {
   switch (type) {
     case RateLimitType.Search:
       return searchLimiter
-    case RateLimitType.Product:
-      return productLimiter
     case RateLimitType.Llm:
       return llmLimiter
     case RateLimitType.Usda:

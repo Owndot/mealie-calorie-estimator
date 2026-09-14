@@ -8,7 +8,7 @@ import { convertToGrams } from "./unit-converter.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
 import { estimateGrams } from "./llm-estimator.js"
-import { computeNutritionFingerprint, perServingFromRecipeNutrition } from "./nutrition-format.js"
+import { computeNutritionFingerprint } from "./nutrition-format.js"
 import { logger } from "../utils/logger.js"
 
 /**
@@ -302,20 +302,32 @@ export function hasManualCalories(recipe: MealieRecipe): boolean {
 }
 
 /**
- * Detects nutrition that the estimator DID write before (a hash is present), but whose current
- * values no longer match the fingerprint of what the estimator last wrote — i.e. a person has
- * edited it by hand since. Returns false (not modified) when there's no stored fingerprint to
- * compare against, either because this recipe was never estimated, or because it was estimated
- * by a version of the service predating this fingerprint — that's a deliberate, conservative
- * default so an upgrade doesn't suddenly treat every existing recipe as manually modified.
+ * True once a recipe has ever been acknowledged as manual — not just on the very first
+ * detection. buildManualAckPatch always writes calorie_estimator_hash, so without a persistent
+ * marker, hasManualCalories alone would only ever fire once: the very next ingredient change
+ * would see a hash present and, absent this flag, fall through to a real estimate and silently
+ * overwrite the human's value. The flag is cleared only by an actual estimate (buildNutritionPatch),
+ * i.e. only via the explicit overrideManual path.
+ */
+export function isManuallyOwned(recipe: MealieRecipe): boolean {
+  return recipe.extras?.calorie_estimator_manual === "true" || hasManualCalories(recipe)
+}
+
+/**
+ * Detects nutrition the estimator wrote and owns (not manually-flagged) whose current values no
+ * longer match the fingerprint of what it last wrote — i.e. a person edited it by hand since,
+ * without the recipe ever going through the manual-ack path. Returns false (not modified) when
+ * there's no stored fingerprint to compare against, either because this recipe was never
+ * estimated, or because it was estimated by a version of the service predating this fingerprint
+ * — a deliberate, conservative default so an upgrade doesn't suddenly treat every existing
+ * recipe as manually modified.
  */
 export function hasManuallyModifiedNutrition(recipe: MealieRecipe): boolean {
   const storedFingerprint = recipe.extras?.calorie_estimator_nutrition_fingerprint
   const hasHash = recipe.extras?.calorie_estimator_hash != null
   if (!hasHash || !storedFingerprint) return false
 
-  const current = perServingFromRecipeNutrition(recipe.nutrition)
-  return computeNutritionFingerprint(current) !== storedFingerprint
+  return computeNutritionFingerprint(recipe.nutrition ?? {}) !== storedFingerprint
 }
 
 export type ManualProtectionReason = "never-estimated" | "modified-after-estimate"
@@ -326,6 +338,8 @@ export function buildManualAckPatch(recipe: MealieRecipe, hash: string, reason: 
     extras: {
       calorie_estimator_hash: hash,
       calorie_estimator_unmatched: JSON.stringify([]),
+      // Persists manual ownership across future runs — see isManuallyOwned.
+      calorie_estimator_manual: "true",
       calorie_estimator_note:
         reason === "modified-after-estimate"
           ? "Manual — nutrition was edited after estimation, preserved"
@@ -348,13 +362,40 @@ export function buildNutritionPatch(
   hash: string,
   recipeYield: string | null,
 ): NutritionPatch {
+  const nutrition: Partial<MealieNutrition> = {}
+
+  // Withheld results write no nutrition numbers at all — an important unresolved calorie-dense
+  // ingredient must not produce a misleadingly "complete"-looking nutrition entry.
+  if (result.completeness !== "withheld") {
+    const p = result.perServingNutrients
+    const add = (key: keyof MealieNutrition, val: string) => {
+      if (val !== "") nutrition[key] = val
+    }
+
+    add("calories", n(p.kcalPer100g))
+    add("proteinContent", n(p.proteinPer100g))
+    add("carbohydrateContent", n(p.carbsPer100g))
+    add("fatContent", n(p.fatPer100g))
+    add("saturatedFatContent", n(p.saturatedFatPer100g))
+    add("transFatContent", n(p.transFatPer100g))
+    add("unsaturatedFatContent", n(p.unsaturatedFatPer100g))
+    add("fiberContent", n(p.fiberPer100g))
+    add("sugarContent", n(p.sugarPer100g))
+    add("sodiumContent", n(toMilligrams(p.sodiumPer100g)))
+    add("cholesterolContent", n(toMilligrams(p.cholesterolPer100g)))
+  }
+
   const extras: Record<string, string> = {
     calorie_estimator_hash: hash,
     calorie_estimator_unmatched: JSON.stringify(result.unmatchedIngredients),
     calorie_estimator_status: result.completeness,
-    // Fingerprints exactly the values below (or the all-null state when withheld), so a later
-    // run can tell "still ours, safe to overwrite" apart from "a person edited this by hand".
-    calorie_estimator_nutrition_fingerprint: computeNutritionFingerprint(result.perServingNutrients),
+    // An actual estimate always clears manual ownership — only the explicit overrideManual path
+    // reaches this function for a recipe that was previously flagged manual.
+    calorie_estimator_manual: "false",
+    // Fingerprints the exact `nutrition` object above (Mealie's own string/mg representation),
+    // so a later run can tell "still ours, safe to overwrite" apart from "a person edited this
+    // by hand" with no float round-trip or rounding involved.
+    calorie_estimator_nutrition_fingerprint: computeNutritionFingerprint(nutrition),
   }
 
   if (result.completenessReason) {
@@ -387,29 +428,6 @@ export function buildNutritionPatch(
   const servings = parseYield(recipeYield)
   if (servings !== null) {
     extras.calorie_estimator_yield = servings.toString()
-  }
-
-  const nutrition: Partial<MealieNutrition> = {}
-
-  // Withheld results write no nutrition numbers at all — an important unresolved calorie-dense
-  // ingredient must not produce a misleadingly "complete"-looking nutrition entry.
-  if (result.completeness !== "withheld") {
-    const p = result.perServingNutrients
-    const add = (key: keyof MealieNutrition, val: string) => {
-      if (val !== "") nutrition[key] = val
-    }
-
-    add("calories", n(p.kcalPer100g))
-    add("proteinContent", n(p.proteinPer100g))
-    add("carbohydrateContent", n(p.carbsPer100g))
-    add("fatContent", n(p.fatPer100g))
-    add("saturatedFatContent", n(p.saturatedFatPer100g))
-    add("transFatContent", n(p.transFatPer100g))
-    add("unsaturatedFatContent", n(p.unsaturatedFatPer100g))
-    add("fiberContent", n(p.fiberPer100g))
-    add("sugarContent", n(p.sugarPer100g))
-    add("sodiumContent", n(toMilligrams(p.sodiumPer100g)))
-    add("cholesterolContent", n(toMilligrams(p.cholesterolPer100g)))
   }
 
   return { nutrition, extras }

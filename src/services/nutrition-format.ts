@@ -44,16 +44,22 @@ export function perServingFromRecipeNutrition(nutrition: MealieNutrition | null)
   }
 }
 
+const NUTRITION_FIELD_ORDER: (keyof MealieNutrition)[] = [
+  "calories", "proteinContent", "carbohydrateContent", "fatContent",
+  "saturatedFatContent", "transFatContent", "unsaturatedFatContent",
+  "fiberContent", "sugarContent", "sodiumContent", "cholesterolContent",
+]
+
 /**
- * Fingerprints a NutrientSet exactly as the estimator wrote it, so a later run can tell whether
- * the same values are still present (estimator-owned, safe to overwrite) or have since been
- * hand-edited by a person (protect them). Deliberately deterministic and field-order-stable.
+ * Fingerprints nutrition in Mealie's own string/milligram representation — the same shape as
+ * both the `nutrition` patch object actually sent to Mealie and the `recipe.nutrition` read back
+ * from it later. Operating on these raw strings (rather than round-tripping through the internal
+ * NutrientSet, which involves float division and milligram rounding) avoids spurious mismatches:
+ * a value that was never touched compares bit-for-bit equal, with no precision loss anywhere in
+ * the path. A later run can then tell "still ours, safe to overwrite" apart from "a person
+ * edited this by hand".
  */
-export function computeNutritionFingerprint(nutrients: NutrientSet): string {
-  const parts = [
-    nutrients.kcalPer100g, nutrients.proteinPer100g, nutrients.carbsPer100g, nutrients.fatPer100g,
-    nutrients.saturatedFatPer100g, nutrients.transFatPer100g, nutrients.unsaturatedFatPer100g,
-    nutrients.fiberPer100g, nutrients.sugarPer100g, nutrients.sodiumPer100g, nutrients.cholesterolPer100g,
-  ].map((v) => (v === null ? "" : v.toString()))
+export function computeNutritionFingerprint(nutrition: Partial<Record<keyof MealieNutrition, string | null>>): string {
+  const parts = NUTRITION_FIELD_ORDER.map((key) => (nutrition[key] ?? "").toString().trim())
   return crypto.createHash("sha256").update(parts.join("|")).digest("hex")
 }

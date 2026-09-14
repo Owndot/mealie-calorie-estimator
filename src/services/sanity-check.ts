@@ -36,7 +36,15 @@ export function sanityCheckNutrients(n: NutrientSet, foodName: string): SanityCh
 
   // Macro sanity: kcal should roughly equal 4*protein + 4*carbs + 9*fat (Atwater factors).
   // Skipped when any of the three macros is unknown, since we can't compute an expected value.
+  // Also skipped for alcoholic beverages: ethanol contributes ~7 kcal/g and NutrientSet has no
+  // field for it, so spirits/fortified wine/wine/beer legitimately carry far more kcal than
+  // protein+carbs+fat alone would predict — flagging that here would reject genuine USDA/OFF
+  // data for every recipe calling for wine, whisky, rum, sherry, etc.
+  // "wein"/"bier" also match as a compound-word suffix (Rotwein, Weißwein, Weißbier, ...) since
+  // German freely compounds nouns without a word boundary before the suffix.
+  const isAlcoholic = /\b(sekt|likör|liqueur|spirituose|schnaps|rum|whisky|whiskey|wodka|vodka|gin|tequila|cognac|brandy|sherry|portwein|vermouth|wine|beer|liquor|spirits?)\b|wein\b|bier\b/i.test(foodName)
   if (
+    !isAlcoholic &&
     n.kcalPer100g !== null &&
     n.proteinPer100g !== null &&
     n.carbsPer100g !== null &&

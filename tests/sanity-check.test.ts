@@ -43,6 +43,33 @@ describe("sanityCheckNutrients", () => {
     expect(result.ok).toBe(true)
   })
 
+  describe("alcoholic beverages: the Atwater check must not reject genuine kcal-from-alcohol data", () => {
+    it("accepts whisky (263 kcal/100g, no protein/carbs/fat — kcal comes entirely from alcohol, which NutrientSet doesn't model)", () => {
+      const result = sanityCheckNutrients(n({ kcalPer100g: 263, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0 }), "Whisky")
+      expect(result.ok).toBe(true)
+    })
+
+    it("accepts a fortified wine (sherry: ~152 kcal vs ~31 expected from macros alone)", () => {
+      const result = sanityCheckNutrients(n({ kcalPer100g: 152, proteinPer100g: 0.2, carbsPer100g: 7.5, fatPer100g: 0 }), "Sherry")
+      expect(result.ok).toBe(true)
+    })
+
+    it("accepts table wine (~85 kcal vs ~11 expected from macros alone)", () => {
+      const result = sanityCheckNutrients(n({ kcalPer100g: 85, proteinPer100g: 0.07, carbsPer100g: 2.6, fatPer100g: 0 }), "Rotwein")
+      expect(result.ok).toBe(true)
+    })
+
+    it("still rejects a genuinely implausible value for an alcoholic beverage (negative kcal)", () => {
+      const result = sanityCheckNutrients(n({ kcalPer100g: -10, proteinPer100g: 0, carbsPer100g: 0, fatPer100g: 0 }), "Whisky")
+      expect(result.ok).toBe(false)
+    })
+
+    it("does not exempt a non-alcoholic food whose name happens to share no alcohol keyword", () => {
+      const result = sanityCheckNutrients(n({ kcalPer100g: 900, proteinPer100g: 10, carbsPer100g: 10, fatPer100g: 10 }), "Mystery Food")
+      expect(result.ok).toBe(false)
+    })
+  })
+
   describe("salt/sodium unit-scale bug detection", () => {
     it("rejects a salt-labeled ingredient with near-zero sodium (classic g/mg scale bug)", () => {
       // e.g. 30g of salt should carry ~11.4g sodium; a value like 0.012 (12mg-as-if-grams) is the bug

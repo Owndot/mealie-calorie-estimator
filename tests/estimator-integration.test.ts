@@ -155,6 +155,52 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
     expect(result.matchedIngredients[0].matched).toBe(false)
   })
 
+  it("an ingredient resolved purely via the LLM nutrient fallback is tagged fallbackStatus 'llm-nutrient' and counted as llmParticipated", async () => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+    // USDA left unconfigured -> the generic route's only provider is the LLM nutrient fallback.
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      const body = JSON.parse((init as RequestInit).body as string)
+      const prompt = body.messages[0].content as string
+
+      if (prompt.includes("Return ONLY a JSON array")) {
+        // whole-recipe batch normalizer request
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: JSON.stringify([{ index: 0, canonicalName: "Seltener Fisch", brand: null, state: "raw", category: "fish" }]) } }] }),
+          { status: 200 },
+        )
+      }
+
+      // per-ingredient LLM nutrient fallback request
+      return new Response(
+        JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({ kcal: 120, protein: 20, carbs: 0, fat: 4, saturatedFat: 1, transFat: 0, fiber: 0, sugar: 0, sodium: 0.08, cholesterol: 0.05 }),
+            },
+          }],
+        }),
+        { status: 200 },
+      )
+    })
+
+    const r = recipe({
+      recipeServings: 4,
+      recipeIngredient: [ing({ quantity: 100, food: { id: "1", name: "Seltener Fisch", pluralName: null, aliases: [] } })],
+    })
+
+    const result = await estimateRecipe(r)
+
+    expect(result.matchedIngredients[0].matched).toBe(true)
+    expect(result.matchedIngredients[0].fallbackStatus).toBe("llm-nutrient")
+    expect(result.matchedIngredients[0].llmParticipated).toBe(true)
+
+    const { buildNutritionPatch } = await import("../src/services/estimator.js")
+    const patch = buildNutritionPatch(result, "hash", null)
+    expect(JSON.parse(patch.extras.calorie_estimator_llm_ingredients)).toContain("Seltener Fisch")
+  })
+
   it("originalText never influences the hash or the estimate, even when it contradicts structured data", async () => {
     const withSuspiciousOriginalText = recipe({
       recipeServings: 4,

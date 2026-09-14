@@ -79,6 +79,36 @@ describe("OffProvider", () => {
     expect(match).toBeNull()
   })
 
+  it("does NOT poison the negative cache on a transient failure (persistent 5xx) — a later retry can still succeed", async () => {
+    const foodName = "Transientfailuretestmilch"
+    const key = buildQueryKey(foodName, null)
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("unavailable", { status: 503 }))
+    const provider = new OffProvider()
+
+    const failed = await provider.lookup(query(foodName))
+    expect(failed).toBeNull()
+    // A transient failure is not a confirmed "OFF has no hits" — must not be cached as a miss,
+    // or the food would be starved of branded nutrition for a full day even after OFF recovers.
+    expect(isProviderMiss("off", key)).toBe(false)
+
+    vi.restoreAllMocks()
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([{ product_name: foodName, nutriments: MILK_NUTRIMENTS }]))
+    const recovered = await provider.lookup(query(foodName))
+    expect(recovered?.nutrients.kcalPer100g).toBe(48)
+  })
+
+  it("DOES cache a confirmed empty result (OFF reached, zero hits) as a miss", async () => {
+    const foodName = "Confirmedemptytestmilch"
+    const key = buildQueryKey(foodName, null)
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([]))
+    const provider = new OffProvider()
+
+    await provider.lookup(query(foodName))
+    expect(isProviderMiss("off", key)).toBe(true)
+  })
+
   it("caches a successful match and does not re-hit the network on a repeat lookup", async () => {
     const foodName = "Cachetestmilch"
     const fetchMock = vi

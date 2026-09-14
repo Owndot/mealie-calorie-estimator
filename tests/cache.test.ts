@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest"
 import {
-  initCache, flushCache, buildQueryKey,
+  initCache, flushCache, buildQueryKey, normalizeKey,
   getCachedProviderMatch, setCachedProviderMatch,
   isProviderMiss, markProviderMiss,
   getCachedLlmEstimate, setCachedLlmEstimate,
-  getCachedLlmNutrients, setCachedLlmNutrients,
+  getCachedLlmNutrients, setCachedLlmNutrients, llmNutrientCacheKey,
   getCacheStats,
 } from "../src/utils/cache.js"
 import type { ProviderMatch } from "../src/types.js"
@@ -118,6 +118,15 @@ describe("cache", () => {
     it("stores and retrieves LLM nutrient estimates", () => {
       setCachedLlmNutrients("obscure-food", match().nutrients)
       expect(getCachedLlmNutrients("obscure-food")?.kcalPer100g).toBe(364)
+    })
+
+    it("keys LLM nutrient cache rows with a version prefix, distinct from the plain normalized name", () => {
+      // Guards against reusing values cached under an older, ambiguous-units LLM prompt after
+      // an upgrade: bumping the version here (see cache.ts) is what makes pre-upgrade rows,
+      // keyed on the plain normalized name, permanently unreadable rather than silently reused.
+      const key = llmNutrientCacheKey("Some Food")
+      expect(key).not.toBe(normalizeKey("Some Food"))
+      expect(key).toMatch(/^v\d+:/)
     })
   })
 

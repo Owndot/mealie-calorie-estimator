@@ -248,8 +248,20 @@ export function setCachedLlmEstimate(unitName: string, foodName: string, grams: 
   scheduleSave()
 }
 
+/**
+ * v2: the LLM nutrient prompt now explicitly requires sodium/cholesterol in grams (previously
+ * ambiguous, which produced milligram-scale cached values). Prefixing the key means pre-v2 rows
+ * are simply never matched again — no silent unit mismatch on upgrade — and they self-expire via
+ * the normal TTL sweep. Bump this again if the value shape/units ever change.
+ */
+const LLM_NUTRIENT_CACHE_KEY_VERSION = "v2"
+
+export function llmNutrientCacheKey(foodName: string): string {
+  return `${LLM_NUTRIENT_CACHE_KEY_VERSION}:${normalizeKey(foodName)}`
+}
+
 export function getCachedLlmNutrients(foodName: string): NutrientSet | undefined {
-  const key = normalizeKey(foodName)
+  const key = llmNutrientCacheKey(foodName)
   const stmt = db.prepare("SELECT nutrients, updated_at FROM llm_nutrient_cache WHERE food_name = ?")
   stmt.bind([key])
   try {
@@ -269,7 +281,7 @@ export function getCachedLlmNutrients(foodName: string): NutrientSet | undefined
 }
 
 export function setCachedLlmNutrients(foodName: string, nutrients: NutrientSet): void {
-  const key = normalizeKey(foodName)
+  const key = llmNutrientCacheKey(foodName)
   const now = Date.now()
   db.run(
     `INSERT INTO llm_nutrient_cache (food_name, nutrients, updated_at) VALUES (?, ?, ?)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { computeIngredientHash, parseYield, buildNutritionPatch, hasManualCalories, hasManuallyModifiedNutrition, buildManualAckPatch } from "../src/services/estimator.js"
+import { computeIngredientHash, parseYield, buildNutritionPatch, hasManualCalories, isManuallyOwned, hasManuallyModifiedNutrition, buildManualAckPatch } from "../src/services/estimator.js"
 import { computeNutritionFingerprint } from "../src/services/nutrition-format.js"
 import type { MealieRecipe, EstimateResult, NutrientSet, MealieNutrition } from "../src/types.js"
 
@@ -165,6 +165,9 @@ describe("buildNutritionPatch", () => {
     expect(patch.extras.calorie_estimator_yield).toBe("4")
     expect(patch.extras.calorie_estimator_unmatched).toBe("[]")
     expect(patch.extras.calorie_estimator_status).toBe("complete")
+    // A real estimate always clears manual ownership — see isManuallyOwned.
+    expect(patch.extras.calorie_estimator_manual).toBe("false")
+    expect(patch.extras.calorie_estimator_nutrition_fingerprint).toBeTruthy()
   })
 
   it("builds patch with empty nutrition when no servings", () => {
@@ -313,6 +316,33 @@ describe("hasManualCalories", () => {
   })
 })
 
+describe("isManuallyOwned — stays true across later runs, not just the very first detection", () => {
+  it("is true on first detection (no hash, has nutrition), same as hasManualCalories", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: {},
+    })
+    expect(isManuallyOwned(recipe)).toBe(true)
+  })
+
+  it("stays true once the persistent calorie_estimator_manual flag is set, even though a hash is now present (hasManualCalories alone would return false here)", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "true" },
+    })
+    expect(hasManualCalories(recipe)).toBe(false) // hash is present now
+    expect(isManuallyOwned(recipe)).toBe(true) // but the persistent flag still protects it
+  })
+
+  it("is false once the flag has been explicitly cleared by a real estimate", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "350", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "false" },
+    })
+    expect(isManuallyOwned(recipe)).toBe(false)
+  })
+})
+
 describe("hasManuallyModifiedNutrition — detects a hand-edit of previously estimator-written nutrition", () => {
   function estimatorWrittenNutrition(): MealieNutrition {
     return {
@@ -323,9 +353,7 @@ describe("hasManuallyModifiedNutrition — detects a hand-edit of previously est
   }
 
   function fingerprintFor(nutrition: MealieNutrition): string {
-    return computeNutritionFingerprint(n(Number(nutrition.calories), {
-      proteinPer100g: Number(nutrition.proteinContent), carbsPer100g: Number(nutrition.carbohydrateContent), fatPer100g: Number(nutrition.fatContent),
-    }))
+    return computeNutritionFingerprint(nutrition)
   }
 
   it("returns false when nutrition still matches the fingerprint the estimator wrote", () => {
@@ -363,9 +391,7 @@ describe("hasManuallyModifiedNutrition — detects a hand-edit of previously est
   })
 
   it("detects a person manually adding nutrition to a recipe the estimator had left withheld (all-null fingerprint)", () => {
-    const emptyFingerprint = computeNutritionFingerprint(n(null, {
-      proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
-    }))
+    const emptyFingerprint = computeNutritionFingerprint({})
     const recipe = makeRecipe({
       nutrition: { calories: "500", proteinContent: null, carbohydrateContent: null, fatContent: null, saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null, fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null },
       extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: emptyFingerprint },
@@ -385,6 +411,8 @@ describe("buildManualAckPatch", () => {
     expect(patch.nutrition).toEqual({})
     expect(patch.extras.calorie_estimator_hash).toBe("manual-hash")
     expect(patch.extras.calorie_estimator_note).toBe("Manual — preserved existing calorie entry")
+    // Persists manual ownership across future runs — see isManuallyOwned.
+    expect(patch.extras.calorie_estimator_manual).toBe("true")
   })
 
   it("uses a different note for nutrition modified after an earlier estimate", () => {

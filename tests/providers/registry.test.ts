@@ -58,7 +58,7 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
 
   it("does not include the LLM provider when LLM is disabled", () => {
     config.llm.enabled = false
-    expect(getProviderChain("generic").map((p) => p.name)).not.toContain("llm")
+    expect(getProviderChain("generic").map((p) => p.name)).not.toContain("llm-nutrient")
   })
 
   it("appends the LLM provider last on both routes when LLM is enabled and configured", () => {
@@ -67,20 +67,20 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     config.llm.apiKey = "test-key"
     const generic = getProviderChain("generic")
     const branded = getProviderChain("branded")
-    expect(generic[generic.length - 1].name).toBe("llm")
-    expect(branded[branded.length - 1].name).toBe("llm")
+    expect(generic[generic.length - 1].name).toBe("llm-nutrient")
+    expect(branded[branded.length - 1].name).toBe("llm-nutrient")
   })
 
   it("LLM is the ONLY provider on the generic route when USDA is unconfigured but LLM is enabled", () => {
     config.usda.apiKey = ""
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
-    expect(getProviderChain("generic").map((p) => p.name)).toEqual(["llm"])
+    expect(getProviderChain("generic").map((p) => p.name)).toEqual(["llm-nutrient"])
   })
 
   it("does not include the LLM provider when enabled but no API key is set", () => {
     config.llm.enabled = true
     config.llm.apiKey = ""
-    expect(getProviderChain("generic").map((p) => p.name)).not.toContain("llm")
+    expect(getProviderChain("generic").map((p) => p.name)).not.toContain("llm-nutrient")
   })
 })

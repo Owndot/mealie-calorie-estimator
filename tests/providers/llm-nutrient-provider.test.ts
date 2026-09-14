@@ -37,7 +37,7 @@ describe("LlmNutrientProvider — final fallback only", () => {
     vi.stubGlobal("fetch", mockFetch)
 
     const match = await llmNutrientProvider.lookup(query("Obscure LLM Food"))
-    expect(match?.provider).toBe("llm")
+    expect(match?.provider).toBe("llm-nutrient")
     expect(match?.brand).toBeNull()
     expect(match?.confidence).toBeLessThan(0.5) // marked clearly lower-confidence than database matches
   })

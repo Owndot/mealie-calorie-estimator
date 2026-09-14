@@ -101,6 +101,42 @@ describe("runEstimationPipeline", () => {
     expect(patchCalls[0].patch.nutrition).toEqual({})
   })
 
+  it("keeps protecting manual nutrition across a LATER ingredient change, not just on the very first ack", async () => {
+    // Regression: buildManualAckPatch always writes calorie_estimator_hash, so a naive
+    // "no hash = manual" check would only ever fire once — the next ingredient edit would see a
+    // hash present and silently overwrite the human's value. The persistent
+    // calorie_estimator_manual flag (set by every ack) must keep protecting it.
+    mockRecipe = baseRecipe({
+      nutrition: { calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: {},
+    })
+    const { runEstimationPipeline } = await import("../src/services/pipeline.js")
+
+    const firstAck = await runEstimationPipeline("test-recipe")
+    expect(firstAck.status).toBe("manual-preserved")
+    expect(patchCalls[0].patch.extras?.calorie_estimator_manual).toBe("true")
+
+    // Reflect the ack patch, then simulate the user editing an ingredient (changes the hash).
+    mockRecipe = {
+      ...mockRecipe,
+      extras: { ...mockRecipe.extras, ...patchCalls[0].patch.extras },
+      recipeIngredient: [
+        {
+          quantity: 200, // was 100
+          unit: { id: "g", name: "g", pluralName: "g", abbreviation: "g", standardQuantity: null, standardUnit: null },
+          food: { id: "1", name: "Mehl", pluralName: null, aliases: [] },
+          note: null, display: "", title: null, originalText: null,
+        },
+      ],
+    }
+    patchCalls.length = 0
+
+    const secondRun = await runEstimationPipeline("test-recipe")
+    expect(secondRun.status).toBe("manual-preserved")
+    expect(patchCalls[0].patch.nutrition).toEqual({})
+    expect(patchCalls[0].patch.extras?.calorie_estimator_manual).toBe("true")
+  })
+
   describe("force / overrideManual (does not bypass manual protection unless explicit)", () => {
     it("force=true re-estimates even when the ingredient hash is unchanged", async () => {
       mockRecipe = baseRecipe()
@@ -160,11 +196,7 @@ describe("runEstimationPipeline", () => {
         saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null,
         fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null,
       }
-      const writtenFingerprint = computeNutritionFingerprint({
-        kcalPer100g: 350, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
-        saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
-        fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
-      })
+      const writtenFingerprint = computeNutritionFingerprint(estimatorWrittenNutrition)
 
       mockRecipe = baseRecipe()
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")
@@ -195,11 +227,7 @@ describe("runEstimationPipeline", () => {
         saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null,
         fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null,
       }
-      const writtenFingerprint = computeNutritionFingerprint({
-        kcalPer100g: 350, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
-        saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
-        fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null,
-      })
+      const writtenFingerprint = computeNutritionFingerprint(estimatorWrittenNutrition)
 
       mockRecipe = baseRecipe()
       const { runEstimationPipeline } = await import("../src/services/pipeline.js")

@@ -34,12 +34,12 @@ export const config = {
     timeoutMs: parseInt(process.env.MEALIE_TIMEOUT_MS || "30000", 10),
   },
 
+  // Only the /search endpoint is used (off-provider.ts) — there is no product-barcode lookup in
+  // this codebase, so no product-endpoint base URL or rate limit is declared here.
   openFoodFacts: {
-    baseUrl: process.env.OFF_BASE_URL || "https://world.openfoodfacts.org",
     searchBaseUrl: process.env.OFF_SEARCH_BASE_URL || "https://search.openfoodfacts.org",
     language: process.env.OFF_LANGUAGE || "de",
     searchRateLimit: parseInt(process.env.OFF_SEARCH_RATE_LIMIT || "10", 10),
-    productRateLimit: parseInt(process.env.OFF_PRODUCT_RATE_LIMIT || "15", 10),
     maxRetries: parseInt(process.env.OFF_MAX_RETRIES || "3", 10),
     retryBackoffMs: parseInt(process.env.OFF_RETRY_BACKOFF_MS || "500", 10),
     userAgent: process.env.OFF_USER_AGENT || `mealie-calorie-estimator/${version} (mail@timo-reymann.de)`,

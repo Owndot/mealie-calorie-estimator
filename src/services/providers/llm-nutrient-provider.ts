@@ -9,7 +9,9 @@ import type { NutrientProvider, ProviderQuery } from "./types.js"
  * have all failed to produce a sanity-checked match for that ingredient.
  */
 export class LlmNutrientProvider implements NutrientProvider {
-  readonly name = "llm"
+  // Matches the "llm-nutrient" FallbackStatus value — resolveNutrients uses provider.name
+  // directly as the fallbackStatus, so these must stay in sync.
+  readonly name = "llm-nutrient"
 
   async lookup(query: ProviderQuery): Promise<ProviderMatch | null> {
     const nutrients = await estimateNutrients(query.foodName)
