@@ -1,0 +1,139 @@
+name: CI
+
+# Pull requests only, against ANY base branch.
+#
+# Before this existed, a PR was effectively unvalidated: the sole GitHub Actions workflow
+# (ort.yml) is license compliance scoped to `base: main`, so stacked or feature-to-feature PRs ran
+# nothing at all, and CircleCI's unit-test job does not report a check back to this repository.
+#
+# Deliberately scoped to `pull_request`. Release and publish behaviour lives in CircleCI
+# (semantic-release on `main`, publish-docker-image on tags) and is left untouched: nothing here
+# triggers on a push to `main` or on a tag, and nothing here logs in to a registry or pushes an
+# image.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Mirrors the Dockerfile: the optional rolldown binding is not resolved by `npm ci` alone on
+      # linux-x64, and vitest fails to start without it.
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm install @rolldown/binding-linux-x64-gnu --no-save
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results.xml
+          if-no-files-found: ignore
+
+  docker:
+    name: Docker build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only — never `push`, never a registry login. Loaded into the local daemon so the
+      # smoke test below runs against the exact image that was just built.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: mealie-calorie-estimator:ci
+
+      # The BLS database is a bundled resource, not a dependency, so a Dockerfile that forgets to
+      # COPY it still builds and still starts — it just silently disables the primary provider.
+      # Asserting the file is present and non-trivial in the image catches that at PR time.
+      - name: Verify bundled BLS database is in the image
+        run: |
+          size=$(docker run --rm --entrypoint sh mealie-calorie-estimator:ci \
+            -c 'wc -c < resources/bls/bls-4.0.sqlite')
+          echo "BLS database size: ${size} bytes"
+          test "${size}" -gt 1000000
+
+      - name: Start container
+        run: |
+          docker run -d --name estimator -p 18000:8000 \
+            -e MEALIE_API_TOKEN=ci-smoke-token \
+            -e MEALIE_URL=http://127.0.0.1:9 \
+            -e LLM_ENABLED=false \
+            -e LOG_LEVEL=info \
+            mealie-calorie-estimator:ci
+
+      - name: Smoke test /health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18000/health >/tmp/health.json 2>/dev/null; then
+              cat /tmp/health.json
+              grep -q '"status":"ok"' /tmp/health.json && exit 0
+              echo "unexpected /health body" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "estimator did not become healthy within 60s" >&2
+          exit 1
+
+      # A process that starts and answers /health can still have failed to load a provider. The
+      # bundled database is opened lazily, so this is the cheapest end-to-end proof that the image
+      # can actually read it.
+      - name: Smoke test the bundled database loads inside the image
+        run: |
+          docker run --rm --entrypoint node \
+            -e MEALIE_API_TOKEN=ci-smoke-token \
+            mealie-calorie-estimator:ci \
+            --input-type=module \
+            -e "const { BlsProvider } = await import('/app/dist/services/providers/bls-provider.js');
+                const { initCache } = await import('/app/dist/utils/cache.js');
+                await initCache();
+                const m = await new BlsProvider().lookup({
+                  foodName: 'onion', structuredName: 'Zwiebel', canonicalGerman: 'Zwiebel',
+                  brand: null, category: null, state: 'raw', foodType: 'simple',
+                  coreFoodGerman: 'Zwiebel', coreFoodEnglish: 'onion', route: 'generic',
+                  attributes: { form: 'unknown', preservation: 'unknown', fatPercent: null },
+                  evidence: { german: true, english: true, core: true, brand: false },
+                });
+                if (!m || m.nutrients.kcalPer100g == null) { console.error('BLS lookup failed', m); process.exit(1); }
+                console.log('BLS ok:', m.providerId, m.productName, m.nutrients.kcalPer100g);"
+
+      - name: Container logs
+        if: always()
+        run: docker logs estimator || true
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f estimator || true

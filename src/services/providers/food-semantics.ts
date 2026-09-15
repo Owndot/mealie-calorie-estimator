@@ -114,9 +114,11 @@ const MIN_SPECIFIER_LENGTH = 3
 export function compoundSpecifier(token: string, core: string, descriptors: ReadonlySet<string>): string | null {
   if (germanTokenMatches(token, core)) return null
 
-  // Match the core as the compound HEAD, tolerating its own plural/inflection ("Kidneybohnen"
-  // against core "Kidneybohne") — otherwise a regular plural reads as an introduced specifier.
-  const heads = [core, germanStem(core)]
+  // Match the core as the compound HEAD, tolerating inflection on EITHER side: the core may be the
+  // plural ("Kidneybohnen" against core "Kidneybohne") or the candidate may be ("Back|erbsen"
+  // against core "Erbse"). Missing the second direction let BLS's "Backerbsen" — deep-fried snack
+  // peas at 469 kcal — pass as plain peas, since the token still merely *contained* the core.
+  const heads = [core, germanStem(core), ...(core.length >= MIN_PLURAL_BASE ? PLURAL_ENDINGS.map((e) => core + e) : [])]
   const head = heads.find((h) => h.length >= MIN_SPECIFIER_LENGTH && token.endsWith(h) && token.length > h.length)
   // The core appears somewhere else in the token (as its prefix, or in the middle). German
   // identity lives in the head, so this is not sub-variety evidence — left permissive, as before.
@@ -209,8 +211,25 @@ export function germanStem(token: string): string {
   return token
 }
 
+/** Regular plural/inflection endings a German noun picks up: Erbse -> Erbsen, Tomate -> Tomaten. */
+const PLURAL_ENDINGS = ["n", "en", "e", "s"]
+
+/**
+ * Minimum length of the SHORTER form before a plural ending is allowed to join two words.
+ *
+ * germanStem() alone is asymmetric near its own floor — it stems "erbsen" to "erbs" but returns
+ * "erbse" untouched, so the two never met and BLS's "Erbse reif" was unreachable from "Erbsen".
+ * Comparing the shorter form against the longer plus an ending fixes that without loosening the
+ * stemmer for everything else: at five characters "erbse"/"erbsen" join while the four-character
+ * "reis"/"reise" (rice vs journey) deliberately still do not.
+ */
+const MIN_PLURAL_BASE = 5
+
 export function germanTokenMatches(a: string, b: string): boolean {
-  return a === b || germanStem(a) === germanStem(b)
+  if (a === b || germanStem(a) === germanStem(b)) return true
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  if (short.length < MIN_PLURAL_BASE) return false
+  return PLURAL_ENDINGS.some((e) => long === short + e)
 }
 
 function halfMatches(half: string, candidateTokens: string[]): boolean {

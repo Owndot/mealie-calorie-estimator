@@ -263,8 +263,6 @@ export function coreIdentityScoreAdjustment(
   coreText: string | null | undefined,
   fullQueryText: string,
   candidateName: string,
-  /** Relaxed second pass: accept a sub-variety when nothing less specific exists — see bls-provider.ts. */
-  options: { allowSubVariety?: boolean } = {},
 ): number {
   const coreTokens = coreTokensOf(coreText)
   if (coreTokens.length === 0) return 0
@@ -284,15 +282,19 @@ export function coreIdentityScoreAdjustment(
   let extraCount = 0
   for (const t of candidateTokens) {
     if (t.length < CORE_TOKEN_MIN_LENGTH) continue
+    // A number is never a different food. BLS grades flour by DIN type ("Weizen Mehl, Type 405")
+    // and the bare "405" was scored as foreign content, which alone kept the correct wheat-flour
+    // record below the acceptance threshold. identityTokens() in bls-provider.ts already drops
+    // these for scoring; the adjustment has to agree.
+    if (/^\d/.test(t)) continue
     // "Halbfettbutter" contains "butter", so containment alone declared it fully explained and it
     // outscored the correct "Butter mild gesäuert". A compound whose PREFIX narrows the core to a
     // sub-variety ("Reis|nudeln", "Eier|teigwaren", "Halbfett|butter") is extra content, not a
     // synonym — unless the query itself asked for that specifier. See compoundSpecifier().
     const specifier = coreTokens.map((c) => compoundSpecifier(t, c, GENERIC_DESCRIPTOR_WORDS)).find(Boolean)
     if (specifier) {
-      const asked = modifierTokens.some((m) => m.startsWith(specifier) || specifier.startsWith(m))
-      if (!asked && !options.allowSubVariety) { extraCount++; continue }
-      if (asked) modifierMatches++
+      if (modifierTokens.some((m) => m.startsWith(specifier) || specifier.startsWith(m))) modifierMatches++
+      else extraCount++
       continue
     }
     if (coreTokens.some((c) => t.includes(c))) continue

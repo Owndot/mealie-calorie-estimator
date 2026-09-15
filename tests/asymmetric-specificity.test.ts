@@ -152,3 +152,86 @@ describe("BLS lemma synonyms make ordinary foods reachable", () => {
     expect(row.kcalPer100g!).toBeGreaterThan(800)
   })
 })
+
+describe("a generic query is never broadened into a different base ingredient", () => {
+  // The rule these share: when BLS has no record for the plain food, the answer is a miss that the
+  // next provider or an LLM estimate can answer honestly — never the nearest sub-variety. An
+  // earlier revision accepted the sub-variety at reduced confidence "to preserve coverage", and
+  // every one of these is a case it got wrong.
+  const generic = (name: string, en: string, core: string, coreEn: string) => resolve({
+    name, canonicalGerman: name, canonicalEnglish: en, coreFoodGerman: core, coreFoodEnglish: coreEn,
+    grams: 100, state: "unknown", foodType: "simple",
+  })
+
+  it("generic flour does not become LUPIN flour", async () => {
+    // H731400 Lupinenmehl is a legume flour: ~40 g protein/100 g against wheat's ~10. Note it is
+    // within 4% of the median BLS flour by ENERGY, so no calorie-based plausibility check could
+    // ever have caught it — only refusing to invent the base grain does.
+    const row = await generic("Mehl", "flour", "Mehl", "flour")
+    expect(row.productName ?? "", describeRow(row)).not.toMatch(/Lupinen|Kichererbsen|Soja|Mandel/i)
+    expect(row.provider, describeRow(row)).not.toBe("bls")
+  })
+
+  it("but a query that NAMES its grain still resolves — the rule is directional", async () => {
+    const row = await generic("Weizenmehl", "wheat flour", "Mehl", "flour")
+    expect(row.provider).toBe("bls")
+    expect(row.productName!).toMatch(/Weizen/)
+    expect(row.kcalPer100g!).toBeGreaterThan(300)
+    expect(row.kcalPer100g!).toBeLessThan(400)
+  })
+
+  it("the parsley herb does not become root parsley", async () => {
+    // G670100 Wurzelpetersilie is a root vegetable at 76 kcal; the herb is 33.
+    const row = await generic("Petersilie", "parsley", "Petersilie", "parsley")
+    expect(row.productName ?? "", describeRow(row)).not.toMatch(/Wurzel/i)
+  })
+
+  it("peas do not become deep-fried snack peas", async () => {
+    // D011000 Backerbsen, 469 kcal against 88 for green peas. It slipped through because the
+    // candidate carried the PLURAL of the core ("back|erbsen" vs core "Erbse"), which the
+    // sub-variety check only recognised in the other direction.
+    //
+    // Scope note, deliberately not asserted here: this resolves to "Erbse reif" (dry mature peas,
+    // 311 kcal) rather than "Erbse grün" (88), because BLS's "reif" is a whitelisted descriptor
+    // while the colour word is not. That is a separate mechanism — and the same whitelisting is
+    // what lets "Kidneybohne reif, Konserve, abgetropft" be reached at all — so it is recorded as
+    // a known limitation rather than papered over with an assertion this change does not earn.
+    const row = await generic("Erbsen", "peas", "Erbse", "pea")
+    expect(row.productName ?? "", describeRow(row)).not.toMatch(/Backerbsen/i)
+    expect(row.kcalPer100g ?? 0, describeRow(row)).toBeLessThan(470)
+  })
+
+  it("a banana does not become a plantain", async () => {
+    const row = await generic("Banane", "banana", "Banane", "banana")
+    expect(row.productName ?? "", describeRow(row)).not.toMatch(/Kochbanane/i)
+    expect(row.provider).toBe("bls")
+  })
+
+  it("margarine does not become a lamination or baking margarine", async () => {
+    const row = await generic("Margarine", "margarine", "Margarine", "margarine")
+    expect(row.productName ?? "", describeRow(row)).not.toMatch(/Zieh|Back/i)
+  })
+})
+
+describe("a record that lists synonyms is not charged for its own alternate spellings", () => {
+  it("resolves salt, whose BLS record is named \"A/B/C\"", async () => {
+    // "Speisesalz/Siedesalz/Tafelsalz" matched on "Speisesalz" but was charged 35 points of
+    // foreign content for "Siedesalz" — its own synonym — which dropped it from 57 to 22.
+    const row = await resolve({
+      name: "Salz", canonicalGerman: "Salz", canonicalEnglish: "salt", coreFoodGerman: "Salz",
+      coreFoodEnglish: "salt", grams: 3, state: "unknown", foodType: "simple",
+    })
+    expect(row.provider).toBe("bls")
+    expect(row.productName!).toMatch(/Speisesalz/)
+    expect(row.kcalPer100g).toBe(0)
+  })
+
+  it("resolves a two-name vegetable record", async () => {
+    const row = await resolve({
+      name: "Karotte", canonicalGerman: "Karotte", canonicalEnglish: "carrot", coreFoodGerman: "Karotte",
+      coreFoodEnglish: "carrot", grams: 100, state: "raw", foodType: "simple",
+    })
+    expect(row.provider).toBe("bls")
+    expect(row.productName!).toMatch(/Karotte|Möhre/)
+  })
+})
