@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import { normalizeIngredients } from "../src/services/llm-normalizer.js"
 import { config } from "../src/config.js"
+import { logger } from "../src/utils/logger.js"
 
 beforeEach(() => {
   config.llm.enabled = false
@@ -210,5 +211,123 @@ describe("normalizeIngredients", () => {
     expect(promptText).toContain("beverage")
     expect(promptText).toContain("condiment")
     expect(promptText).toContain("seasoning")
+  })
+})
+
+// Found live: a real recipe's whole-recipe classification collapsed to the deterministic fallback
+// twice, and production logs could not say why — every failure class logged the same `count`, and
+// a non-string `content` field logged nothing at all. These pin each class to its own phase tag so
+// the next incident is diagnosable from the logs alone. Behaviour is deliberately unchanged: every
+// case below still ends in the all-deterministic fallback.
+describe("batch normalization failure diagnostics", () => {
+  const INPUTS = [
+    { index: 0, foodName: "Gemüsebrühe", unitName: "Milliliter" },
+    { index: 1, foodName: "Rote Linse", unitName: "g" },
+  ]
+
+  function captureWarnings() {
+    return vi.spyOn(logger, "warn").mockImplementation(() => logger as never)
+  }
+  const phasesOf = (spy: ReturnType<typeof captureWarnings>) =>
+    spy.mock.calls.map((c) => (typeof c[0] === "object" && c[0] !== null ? (c[0] as Record<string, unknown>).phase : undefined)).filter(Boolean)
+
+  beforeEach(() => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+  })
+
+  it("distinguishes a network/request failure", async () => {
+    const warn = captureWarnings()
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("boom") }))
+    const result = await normalizeIngredients(INPUTS)
+    expect(phasesOf(warn)).toEqual(["request-network", "request-network"])
+    expect(result.every((r) => r.llmClassified === false)).toBe(true)
+  })
+
+  it("distinguishes an HTTP error status from a network failure", async () => {
+    const warn = captureWarnings()
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })))
+    await normalizeIngredients(INPUTS)
+    expect(phasesOf(warn)).toEqual(["request-status", "request-status"])
+    expect(warn.mock.calls[0][0]).toMatchObject({ status: 503 })
+  })
+
+  it("distinguishes an unparseable-JSON content field", async () => {
+    const warn = captureWarnings()
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse("this is not json")))
+    await normalizeIngredients(INPUTS)
+    expect(phasesOf(warn)).toEqual(["json", "json"])
+  })
+
+  it("distinguishes a wrong response shape (valid JSON, not an array of the expected size)", async () => {
+    const warn = captureWarnings()
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify({ items: [] }))))
+    await normalizeIngredients(INPUTS)
+    expect(phasesOf(warn)).toEqual(["shape", "shape"])
+    expect(warn.mock.calls[0][0]).toMatchObject({ isArray: false, expected: 2 })
+  })
+
+  it("distinguishes a per-item validation failure and names the offending index and field", async () => {
+    const warn = captureWarnings()
+    const good = { index: 0, canonicalGerman: "Gemüsebrühe", canonicalEnglish: "vegetable broth", brand: null,
+      state: "unknown", category: "water", foodType: "processed_single_food", coreFoodGerman: "Brühe", coreFoodEnglish: "broth" }
+    const bad = { ...good, index: 1, canonicalGerman: "Rote Linse", canonicalEnglish: "red lentil", state: "canned" }
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([good, bad]))))
+
+    await normalizeIngredients(INPUTS)
+
+    expect(phasesOf(warn)).toEqual(["items", "items"])
+    expect(warn.mock.calls[0][0]).toMatchObject({
+      expected: 2, validCount: 1, invalidCount: 1,
+      failures: [{ position: 1, index: 1, field: "state", reason: "not in allowed enum", value: "canned" }],
+    })
+  })
+
+  it("reports the previously-silent case where the response envelope has no string content", async () => {
+    const warn = captureWarnings()
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ choices: [{ finish_reason: "length", message: {} }] }) })))
+    await normalizeIngredients(INPUTS)
+    expect(phasesOf(warn)).toEqual(["response-shape", "response-shape"])
+    expect(warn.mock.calls[0][0]).toMatchObject({ contentType: "undefined", finishReason: "length" })
+  })
+
+  // A duplicate/out-of-range index is silently absorbed by byIndex: the affected ingredient just
+  // gets the deterministic fallback while the batch still counts as a success. Without this
+  // warning that is indistinguishable from a clean run, so it is reported even on acceptance.
+  it("reports duplicate indices on an otherwise-accepted batch, without changing acceptance", async () => {
+    const warn = captureWarnings()
+    const item = (index: unknown) => ({ index, canonicalGerman: "X", canonicalEnglish: "x", brand: null,
+      state: "raw", category: null, foodType: "simple", coreFoodGerman: null, coreFoodEnglish: null })
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([item(0), item(0)]))))
+
+    const result = await normalizeIngredients(INPUTS)
+
+    expect(warn.mock.calls[0][0]).toMatchObject({ phase: "index-integrity", indexIssues: { duplicate: 1 } })
+    // Acceptance unchanged: index 0 is classified, index 1 was never returned -> deterministic.
+    expect(result[0].llmClassified).toBe(true)
+    expect(result[1].llmClassified).toBe(false)
+  })
+
+  it("reports out-of-range indices on an otherwise-accepted batch", async () => {
+    const warn = captureWarnings()
+    const item = (index: unknown) => ({ index, canonicalGerman: "X", canonicalEnglish: "x", brand: null,
+      state: "raw", category: null, foodType: "simple", coreFoodGerman: null, coreFoodEnglish: null })
+    // 1-based indices instead of 0-based: every ingredient silently degrades today.
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([item(1), item(2)]))))
+
+    const result = await normalizeIngredients(INPUTS)
+
+    expect(warn.mock.calls[0][0]).toMatchObject({ phase: "index-integrity", indexIssues: { outOfRange: 1 } })
+    expect(result[1].llmClassified).toBe(true)
+    expect(result[0].llmClassified).toBe(false)
+  })
+
+  it("never logs the raw response content or the API key", async () => {
+    const warn = captureWarnings()
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse("SECRET-RESPONSE-BODY not json")))
+    await normalizeIngredients(INPUTS)
+    const serialized = JSON.stringify(warn.mock.calls)
+    expect(serialized).not.toContain("SECRET-RESPONSE-BODY")
+    expect(serialized).not.toContain("test-key")
   })
 })
