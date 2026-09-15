@@ -2,8 +2,9 @@
 import type { FoodState, FoodType, FoodAttributes } from "../../types.js"
 import { evidenceKey, type IdentityEvidence } from "../identity-evidence.js"
 import {
-  GERMAN_DESCRIPTOR_WORDS, compoundIdentityModifier, compoundMatchesTokens,
+  GERMAN_DESCRIPTOR_WORDS, compoundSpecifier, compoundMatchesTokens, absenceMarkerStem,
   formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, inferAttributesFromName, compoundSegments,
+  derivedProductConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, type PlantPart,
 } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
@@ -121,6 +122,23 @@ export const GENERIC_DESCRIPTOR_WORDS = new Set([
   "whole", "ground", "pure", "plain", "style", "tender", "petite", "small", "large", "mild",
   "sweet", "ripe", "nfs", "unspecified", "generic", "bottled", "prepared", "unprepared", "extra",
   "premium", "select", "product", "products", "type", "flavor", "flavour", "flavored", "flavoured",
+  // "sweet" stays here for ENGLISH candidate names only, and the asymmetry is deliberate: USDA
+  // names whole varietal families with it ("Peppers, sweet, raw" IS the ordinary bell pepper, and
+  // demoting the word dropped that correct match below the acceptance threshold). Its German
+  // counterpart "süß" is NOT in GERMAN_DESCRIPTOR_WORDS, because BLS uses it the other way — as a
+  // product qualifier standing beside the neutral variants ("Senf süß" 177 kcal vs "Senf
+  // mittelscharf/scharf/extra scharf" 111 kcal). Two corpora, two conventions; this split is the
+  // whole reason the two vocabularies are separate.
+  //
+  // USDA's own classificatory vocabulary — words describing which VARIANT OF A RECORD this is,
+  // used across whole families ("Beans, kidney, red, mature seeds, canned, drained solids"). Found
+  // live: that record — the correct 124 kcal answer for drained canned kidney beans — lost to the
+  // vague "Kidney beans, NFS" (177 kcal, and carrying 6.97 g/100 g of added cooking fat) purely
+  // because USDA's precise naming convention cost it four foreign-content penalties while "NFS"
+  // cost nothing.
+  "mature", "immature", "drained", "solids", "liquids", "enriched", "unenriched", "reconstituted",
+  "undiluted", "diluted", "commercially", "commercial", "homemade", "assorted", "types", "variety",
+  "varieties", "includes", "excludes", "made", "from",
   // USDA's own classificatory/category-prefix words (e.g. "Spices, cumin seed", "Spices, oregano,
   // dried") — these describe what KIND of database entry it is, not a different food, so they must
   // never count as "extra unexplained content". Found live: their absence regressed several
@@ -241,28 +259,58 @@ export function coreIdentityConflict(
  * preferable to a confident wrong match." modifierTokens are derived from the query's own full
  * text (canonicalGerman/canonicalEnglish) minus its core tokens — never hand-authored per food.
  */
-export function coreIdentityScoreAdjustment(coreText: string | null | undefined, fullQueryText: string, candidateName: string): number {
+export function coreIdentityScoreAdjustment(
+  coreText: string | null | undefined,
+  fullQueryText: string,
+  candidateName: string,
+  /** Relaxed second pass: accept a sub-variety when nothing less specific exists — see bls-provider.ts. */
+  options: { allowSubVariety?: boolean } = {},
+): number {
   const coreTokens = coreTokensOf(coreText)
   if (coreTokens.length === 0) return 0
 
   const queryTokens = tokenize(fullQueryText)
-  const modifierTokens = queryTokens.filter((t) => !coreTokens.some((c) => t.includes(c) || c.includes(t)))
+  // Length-filtered for the same reason core tokens are: modifier credit is granted by substring,
+  // so a 1-2 letter token matches almost anything. Found while sweeping the live ingredient list —
+  // "Thunfisch a. d. Dose" contributed the modifiers "a" and "d", which then "explained" the
+  // "tomatensauce" in "Thunfisch in Tomatensauce, Konserve" (because it contains an "a") and
+  // pushed that record above the plain canned tuna it should have lost to.
+  const modifierTokens = queryTokens.filter((t) =>
+    t.length >= CORE_TOKEN_MIN_LENGTH && !coreTokens.some((c) => t.includes(c) || c.includes(t)))
 
+  const queryNamesDerivedProduct = namesDerivedProduct(fullQueryText)
   const candidateTokens = tokenize(candidateName)
   let modifierMatches = 0
   let extraCount = 0
   for (const t of candidateTokens) {
     if (t.length < CORE_TOKEN_MIN_LENGTH) continue
     // "Halbfettbutter" contains "butter", so containment alone declared it fully explained and it
-    // outscored the correct "Butter mild gesäuert". A compound whose PREFIX is an identity
-    // modifier is extra content, not a synonym — see compoundIdentityModifier().
-    const fusedModifier = coreTokens.map((c) => compoundIdentityModifier(t, c)).find(Boolean)
-    if (fusedModifier) { extraCount++; continue }
+    // outscored the correct "Butter mild gesäuert". A compound whose PREFIX narrows the core to a
+    // sub-variety ("Reis|nudeln", "Eier|teigwaren", "Halbfett|butter") is extra content, not a
+    // synonym — unless the query itself asked for that specifier. See compoundSpecifier().
+    const specifier = coreTokens.map((c) => compoundSpecifier(t, c, GENERIC_DESCRIPTOR_WORDS)).find(Boolean)
+    if (specifier) {
+      const asked = modifierTokens.some((m) => m.startsWith(specifier) || specifier.startsWith(m))
+      if (!asked && !options.allowSubVariety) { extraCount++; continue }
+      if (asked) modifierMatches++
+      continue
+    }
     if (coreTokens.some((c) => t.includes(c))) continue
     if (modifierTokens.some((m) => t.includes(m) || m.includes(t))) {
       modifierMatches++
       continue
     }
+    // A "free-from" word states the ABSENCE of something the query never asked for — descriptive,
+    // not foreign content. See absenceMarkerStem(); a query that DOES name the excluded
+    // ingredient still pays, which is what keeps "Eiernudeln" away from "Teigwaren eifrei".
+    const absent = absenceMarkerStem(t)
+    if (absent !== null && !queryTokens.some((q) => q.startsWith(absent) || absent.startsWith(q))) continue
+    // The query asked for a derived product and the candidate names one — a DIFFERENT word for the
+    // same class ("garlic seasoning" vs "Spices, garlic POWDER"). specificityConflict() already
+    // treats the class as satisfied, so charging the candidate 35 points of foreign content for
+    // the very word that satisfies it is self-contradictory: it left "Knoblauchgewürz" with the
+    // raw-garlic records rejected AND the garlic-powder record below the acceptance threshold.
+    if (isDerivedProductMarker(t) && queryNamesDerivedProduct) { modifierMatches++; continue }
     // The query may itself be a fused German compound, in which case the candidate spells its
     // parts as separate words: "Hähnchenbrust" vs "Hähnchen Brustfilet, roh". A candidate token
     // that continues one of the query's own compound segments is content the query ASKED for, so
@@ -422,6 +470,56 @@ function genericOilConflict(queryFoodName: string, candidateName: string): boole
   const candidateTokens = tokenize(candidateName)
   if (!candidateTokens.includes("oil") && !candidateTokens.includes("oils")) return false
   return !candidateTokens.every((t) => GENERIC_OIL_WORDS.has(t))
+}
+
+/**
+ * ASYMMETRIC-SPECIFICITY gate, shared by every provider: a candidate may be BROADER than the query
+ * (Basmati rice -> generic polished rice is a legitimate, honest fallback), but it must not be
+ * NARROWER in a way the query never asked for.
+ *
+ * Two independent directions, both found live and neither previously checked:
+ *
+ *   query narrower than candidate — "Knoblauchgewürz" (a seasoning) accepted "Garlic, raw";
+ *     "Gurkenwasser" (pickle brine) accepted "Cucumber, raw". The unmatched query words cost
+ *     nothing, because only unexplained CANDIDATE content was ever penalized.
+ *
+ *   candidate narrower than query — an ambiguous "Koriander" accepted "Spices, coriander seed"
+ *     (298 kcal) while the database equally offered "Coriander (cilantro) leaves, raw" (23 kcal).
+ *     Picking one is a guess between two different foods, so `availableParts` lets the caller pass
+ *     what the whole candidate SET offers: a part is only refused when the data itself shows the
+ *     query is ambiguous, so a food whose only form in the database is a seed (cumin, sesame,
+ *     mustard seed) still resolves normally.
+ */
+export function specificityConflict(
+  queryFoodName: string,
+  queryCoreFood: string | null | undefined,
+  queryAttributes: FoodAttributes | undefined,
+  candidateName: string,
+  availableParts: ReadonlySet<PlantPart>,
+): string | null {
+  if (derivedProductConflict(queryFoodName, queryCoreFood, candidateName)) {
+    return `derived-product conflict: "${queryFoodName}" names a seasoning/liquid/concentrate the candidate is not ("${candidateName}")`
+  }
+
+  const part = standalonePlantPart(candidateName)
+  if (part && availableParts.size > 1 && (queryAttributes?.form ?? "unknown") === "unknown") {
+    // The query named no part but is one of several — never invent which one.
+    const queryNamesPart = standalonePlantPart(queryFoodName) ?? standalonePlantPart(queryCoreFood ?? "")
+    if (!queryNamesPart) {
+      return `ambiguous plant part: "${queryFoodName}" does not say which part, and the database offers ${[...availableParts].join("/")} ("${candidateName}")`
+    }
+  }
+  return null
+}
+
+/** The distinct plant parts a candidate set offers — the ambiguity evidence specificityConflict() needs. */
+export function availablePlantParts(candidateNames: Iterable<string>): Set<PlantPart> {
+  const parts = new Set<PlantPart>()
+  for (const name of candidateNames) {
+    const part = standalonePlantPart(name)
+    if (part) parts.add(part)
+  }
+  return parts
 }
 
 /** Returns a description of the violated rule, or null if no obvious mismatch applies. */
@@ -598,6 +696,15 @@ export function rankCandidates<T extends RankableCandidate>(
   candidates: T[],
   options: RankOptions = {},
 ): RankedCandidate<T>[] {
+  // Ambiguity evidence is a property of the candidate SET, so it is computed once, over the
+  // candidates that actually name the queried food — a "Coriander chutney" that fails the core
+  // gate must not count as evidence that coriander comes in several parts.
+  const parts = availablePlantParts(
+    candidates
+      .filter((c) => !coreIdentityConflict(options.queryCoreFood, c.name, options.coreMatchMode))
+      .map((c) => c.name),
+  )
+
   return candidates
     .map((candidate) => {
       // Hard type-compatibility check FIRST, before any lexical/confidence scoring — a high
@@ -635,6 +742,13 @@ export function rankCandidates<T extends RankableCandidate>(
       mismatchReason = mismatchReason ?? (coreIdentityConflict(options.queryCoreFood, candidate.name, options.coreMatchMode)
         ? `core identity conflict: "${options.queryCoreFood}" is absent from candidate name ("${candidate.name}")`
         : null)
+
+      // Asymmetric specificity — see specificityConflict(). Ranked with the other PRIMARY gates:
+      // introducing or dropping a nutritionally meaningful attribute is a different food, not a
+      // weaker text match.
+      mismatchReason = mismatchReason ?? specificityConflict(
+        queryFoodName, options.queryCoreFood, options.queryAttributes, candidate.name, parts,
+      )
 
       mismatchReason = mismatchReason ?? findMismatch(queryFoodName, candidate.name)
 
@@ -702,6 +816,8 @@ export interface MatchingContext {
   coreMatchMode?: CoreMatchMode
   /** Identity capabilities in force for this lookup — see evidenceKey(). */
   evidence?: IdentityEvidence
+  /** Query attributes, so the specificity gates apply to a cached candidate too. */
+  attributes?: FoodAttributes
 }
 
 /**
@@ -765,6 +881,14 @@ export function cachedMatchConflict(
   }
   if (coreIdentityConflict(ctx.coreFood, candidateName, ctx.coreMatchMode)) {
     return `core identity conflict on cached match: "${ctx.coreFood}" is absent from candidate name ("${candidateName}")`
+  }
+  // The derived-product half of specificityConflict() is a property of the query and the single
+  // stored candidate, so it revalidates for free. The plant-part half deliberately does NOT: it is
+  // evidence about the whole candidate SET, which a cache entry does not preserve — instead the
+  // attribute triple is part of every provider's positive key, so a cached match can never be
+  // served to a query with different form/preservation/fat in the first place.
+  if (derivedProductConflict(ctx.foodName, ctx.coreFood, candidateName)) {
+    return `derived-product conflict on cached match: "${ctx.foodName}" names a seasoning/liquid/concentrate that "${candidateName}" is not`
   }
   const mismatch = findMismatch(ctx.foodName, candidateName)
   if (mismatch) return `obvious mismatch on cached match: ${mismatch} ("${candidateName}")`
