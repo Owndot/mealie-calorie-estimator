@@ -48,6 +48,29 @@ This is what makes the following impossible after upgrade, rather than merely un
 
 Versions bumped in this change: **BLS v20 → v21**, **OFF v15 → v16**, **USDA v15 → v16**.
 
+## What changed with asymmetric-specificity matching
+
+Matching now rejects a candidate that introduces a subtype, plant part or derived-product identity
+the query never named, and prefers a record that *states* an attribute the query asked for over one
+that is merely silent about it. That changes which record wins for a given query text, so stored
+matches from the previous algorithm must stop being addressable:
+
+| a cached match for | can never be served again |
+|---|---|
+| plain pasta | rice noodles / egg pasta |
+| plain mustard | sweet mustard |
+| a garlic seasoning | raw garlic |
+| pickle brine | raw cucumber |
+| canned beans | a dry or raw record, when a canned one exists |
+| an ambiguous herb name | one plant part, when the database offers several |
+
+The `cachedMatchConflict()` revalidation covers the query-side half of this for free, since it can
+re-run against the stored candidate's own name. The plant-part half cannot be revalidated that way
+— it is evidence about the whole candidate *set*, which a single cache row does not preserve — so
+it relies on the attribute triple already being part of every positive key.
+
+Versions bumped in this change: **BLS v21 → v22**, **OFF v16 → v17**, **USDA v16 → v17**.
+
 ## Operational effect
 
 The first run after upgrading is a cold re-resolve for provider matches: slower, and it issues

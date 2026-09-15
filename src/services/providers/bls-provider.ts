@@ -5,10 +5,10 @@ import initSqlJs from "sql.js"
 import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
-import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../types.js"
+import type { NutrientSet, ProviderMatch, FoodState, FoodType, FoodAttributes } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS } from "./ranking.js"
-import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches } from "./food-semantics.js"
+import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS, specificityConflict } from "./ranking.js"
+import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches, standalonePlantPart, type PlantPart } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
 import {
@@ -18,7 +18,7 @@ import {
 import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v21"
+const BLS_MATCH_ALGORITHM_VERSION = "v22"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -79,6 +79,10 @@ interface BlsFoodRecord {
   /** Tokenized synonym spellings — see blsNameAlternates(). */
   alternateTokensDe: string[][]
   tokensEn: string[]
+  /** Derived once from name_de at load time — inferAttributesFromName() is pure, and recomputing it
+   *  for all 7,140 records on every query made the fuzzy stage measurably slower. */
+  attributes: FoodAttributes
+  plantPart: PlantPart | null
 }
 
 interface BlsData {
@@ -146,6 +150,8 @@ async function loadBlsData(): Promise<BlsData | null> {
         tokensDe: tokenizeBls(nameDe),
         alternateTokensDe: blsNameAlternates(nameDe).map(tokenizeBls),
         tokensEn: tokenizeBls(nameEn ?? ""),
+        attributes: inferAttributesFromName(nameDe),
+        plantPart: standalonePlantPart(nameDe),
       })
     }
   } finally {
@@ -243,6 +249,8 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
     tokensDe: tokenizeBls(input.nameDe),
     alternateTokensDe: blsNameAlternates(input.nameDe).map(tokenizeBls),
     tokensEn: tokenizeBls(input.nameEn ?? ""),
+    attributes: inferAttributesFromName(input.nameDe),
+    plantPart: standalonePlantPart(input.nameDe),
   }))
 
   const byNormalizedNameDe = new Map<string, BlsFoodRecord[]>()
@@ -254,6 +262,43 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
 
   const preferredRecords = records.filter((r) => r.ingredientPreferred)
   return { records, preferredRecords, byNormalizedNameDe, preferredCodes: new Set(preferredRecords.map((r) => r.blsCode)) }
+}
+
+/**
+ * LEMMA synonyms: cases where BLS files an everyday food under a different standard German word,
+ * so no amount of fuzzy matching can reach it — the two words share no morphology at all.
+ *
+ * Deliberately NOT a general "make matching looser" list, and deliberately NOT per-ingredient
+ * tuning: the bar for an entry is that BLS demonstrably contains the food under a different
+ * LEMMA for the SAME thing, verified against the shipped database. Everything else — varieties,
+ * qualifiers, plurals, compounds — is handled structurally and must stay that way.
+ *
+ *   Nudeln/Pasta -> Teigwaren   BLS files all pasta as "Teigwaren" (E401000 "Teigwaren eifrei,
+ *                               roh", 346 kcal). A "Nudeln" query could only ever reach
+ *                               "Reisnudeln" (rice noodles), the one entry that happens to
+ *                               contain the word.
+ *   Ghee         -> Butterschmalz   Q683000, 897 kcal. "Ghee" appears nowhere in BLS, so the
+ *                               ingredient fell through to an LLM estimate.
+ * Verified against the shipped table, the bar keeps the list short: "Essig", "Hefe", "Ketchup",
+ * "Zucker" and "Mehl" are all absent from BLS as bare lemmas too, but each is reachable through an
+ * ordinary compound of itself ("Apfelessig", "Backhefe", "Tomatenketchup", "Puderzucker",
+ * "Lupinenmehl"), so they need the sub-variety policy in lookup(), not a synonym.
+ *
+ * Applied as ADDITIONAL query variants, never as replacements — the original text is still tried
+ * first, so a synonym can only ever add reach, never redirect a query that already worked.
+ */
+const BLS_LEMMA_SYNONYMS: Record<string, string> = {
+  nudeln: "Teigwaren",
+  nudel: "Teigwaren",
+  pasta: "Teigwaren",
+  ghee: "Butterschmalz",
+  butterfett: "Butterschmalz",
+}
+
+function blsLemmaSynonym(text: string | null | undefined): string | null {
+  if (!text) return null
+  const key = normalizeGermanText(text).replace(/[^\p{L}\p{N}]/gu, "")
+  return BLS_LEMMA_SYNONYMS[key] ?? null
 }
 
 function jaccard(a: string[], b: string[]): number {
@@ -399,8 +444,25 @@ interface ScoredRecord {
 /** Conservative threshold for a *fuzzy* (non-exact-normalized-string) BLS match. Exact matches bypass this entirely. */
 const FUZZY_MIN_SCORE = 50
 
-function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null, attrs = UNKNOWN_ATTRIBUTES): ScoredRecord[] {
+/**
+ * `identityText` is the FULL ingredient text (every spelling the classifier produced), used only
+ * by the specificity gate. It cannot be `queryText`: the variant list deliberately strips
+ * modifiers so a core-only retry can broaden ("Basmati-Reis" -> "Reis"), and that retry was
+ * laundering the very identity the gate exists to protect — "Knoblauchgewürz" failed under its own
+ * name and then matched "Knoblauch roh" on the core-only pass, which is exactly the live result.
+ * What an ingredient IS does not change between variants, so the gate reads the whole text while
+ * scoring continues to read one variant at a time.
+ */
+function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null, attrs = UNKNOWN_ATTRIBUTES, identityText = queryText, identityCore = queryCoreFood, allowSubVariety = false): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
+  // Ambiguity evidence over the candidate SET — see specificityConflict(). Restricted to records
+  // that actually name the queried food, so unrelated entries never manufacture ambiguity; the
+  // precomputed plantPart is checked first so only the handful of records that name a part at all
+  // pay for the core gate's tokenization.
+  const parts = new Set<PlantPart>()
+  for (const r of records) {
+    if (r.plantPart && !parts.has(r.plantPart) && !coreIdentityConflict(queryCoreFood, r.nameDe)) parts.add(r.plantPart)
+  }
   return records.map((record) => {
     // PRIMARY check first, before any lexical scoring: the official BLS Code letter (X/Y =
     // composite dish) beats a high textual score every time — see foodTypeConflict() in
@@ -436,7 +498,7 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
     // ranking.ts. Shared with OFF/USDA rather than a separate BLS-specific implementation.
     // Attribute gates rank with foodTypeConflict as PRIMARY signals — a fresh/ground or
     // canned/dried or fat-class difference is a different food, not a weaker text match.
-    const ca = inferAttributesFromName(record.nameDe)
+    const ca = record.attributes
     const attrReason =
       formConflict(attrs.form, ca.form) || freshVsProcessedFormConflict(attrs.preservation, ca.form)
         ? `form conflict: a "${attrs.form}" query cannot accept a "${ca.form}" BLS entry ("${record.nameDe}")`
@@ -448,10 +510,15 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
 
     const mismatchReason = attrReason ?? (coreIdentityConflict(queryCoreFood, candidateName)
       ? `core identity conflict: "${queryCoreFood}" is absent from candidate name ("${candidateName}")`
-      : null) ?? findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
+      : null)
+      // Same asymmetric-specificity gate the network providers use — a query naming a seasoning or
+      // a brine must not take the raw food, and an ambiguous query must not be handed one part of
+      // a plant the database offers several of.
+      ?? specificityConflict(identityText, identityCore, attrs, candidateName, parts)
+      ?? findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
 
     let score = best * 70
-    score += coreIdentityScoreAdjustment(queryCoreFood, queryText, candidateName)
+    score += coreIdentityScoreAdjustment(queryCoreFood, queryText, candidateName, { allowSubVariety })
     score += record.nutrients.kcalPer100g !== null ? 15 : -50
     if (mismatchReason) score -= 1000
 
@@ -460,18 +527,57 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
 }
 
 /**
- * Picks the best acceptable candidate from a scored, sorted list, preferring one whose inferred
- * preparation state agrees with the query's structured state. A top candidate whose state is
- * *known* and *conflicts* with the query's known state is never accepted outright — the skill's
- * "reject candidate, don't guess" rule — but a same-score-band candidate with the right state is
- * tried first, and a candidate with *unknown* inferred state (BLS's name didn't say) is never
- * treated as a conflict either way.
+ * Ranks how well a record's OWN attributes answer the attributes the query asked for. Higher is
+ * better. This is the positive counterpart of the attribute CONFLICT gates, which can only reject:
+ * once "Dose" stopped being scored as a second food, "Kidneybohnen a. d. Dose" reached
+ * "Kidneybohne reif, Konserve, abgetropft" (128 kcal) AND the dry "Kidneybohne reif" (316 kcal)
+ * with identical scores, because a silent candidate never conflicts with anything. Preferring the
+ * record that actually states the requested attribute is what keeps a 2.5x error from being a
+ * coin flip.
+ *
+ * The reverse direction matters just as much: when the query is silent, a record that introduces
+ * an attribute is a guess, so an attribute-neutral record is preferred over a specific one.
  */
-function pickBestByState(sorted: ScoredRecord[], queryState: FoodState, minScore: number): ScoredRecord | null {
+function attributeFit(queryAttrs: FoodAttributes, record: BlsFoodRecord): number {
+  const ca = record.attributes
+  let fit = 0
+  for (const axis of ["form", "preservation"] as const) {
+    const wanted = queryAttrs[axis]
+    const got = ca[axis]
+    if (wanted !== "unknown") fit += got === wanted ? 2 : 0
+    // "fresh"/"roh" is BLS's default annotation on almost every base ingredient, not introduced
+    // specificity, so it must not be counted against a record for a query that said nothing.
+    else if (got !== "unknown" && !(axis === "preservation" && got === "fresh")) fit -= 1
+  }
+  return fit
+}
+
+/**
+ * Picks the best acceptable candidate from a scored, sorted list, preferring one whose inferred
+ * ATTRIBUTES answer what the query asked for (see attributeFit) and whose inferred preparation
+ * state agrees with the query's structured state. A top candidate whose state is *known* and
+ * *conflicts* with the query's known state is never accepted outright — the skill's "reject
+ * candidate, don't guess" rule — but a same-score-band candidate with the right state is tried
+ * first, and a candidate with *unknown* inferred state (BLS's name didn't say) is never treated as
+ * a conflict either way.
+ */
+function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minScore: number, queryAttrs = UNKNOWN_ATTRIBUTES): ScoredRecord | null {
   const acceptable = sorted.filter((c) => c.score >= minScore && !c.mismatchReason)
   if (acceptable.length === 0) return null
 
-  const top = acceptable[0]
+  // Within one score band, attribute fit decides before raw score does — a two-point lexical edge
+  // must not outrank actually answering the question that was asked. Sort is stable, so equal fit
+  // preserves the existing score order.
+  const ATTRIBUTE_BAND = 20
+  const bandTop = acceptable[0].score - ATTRIBUTE_BAND
+  const banded = acceptable.filter((c) => c.score >= bandTop)
+  const rest = acceptable.filter((c) => c.score < bandTop)
+  const ordered = [
+    ...[...banded].sort((a, b) => attributeFit(queryAttrs, b.record) - attributeFit(queryAttrs, a.record)),
+    ...rest,
+  ]
+
+  const top = ordered[0]
   const topConflicts = queryState !== "unknown" && top.record.inferredState !== "unknown" && top.record.inferredState !== queryState
 
   if (!topConflicts) return top
@@ -482,14 +588,22 @@ function pickBestByState(sorted: ScoredRecord[], queryState: FoodState, minScore
   // separate passes, not one combined predicate, so "unknown" never outranks a real match found
   // later in score order.
   const band = top.score - 20
-  const inBand = acceptable.filter((c) => c.score >= band)
+  const inBand = ordered.filter((c) => c.score >= band)
   const exactStateMatch = inBand.find((c) => c.record.inferredState === queryState)
   if (exactStateMatch) return exactStateMatch
   return inBand.find((c) => c.record.inferredState === "unknown") ?? null
 }
 
-function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean): ProviderMatch {
-  const confidence = isExact ? 0.92 : Math.min(0.85, scored.score / 100)
+/**
+ * `broadened` marks a match made only on the relaxed second pass, i.e. the accepted record is a
+ * sub-variety of what was asked for because BLS offered nothing less specific. That is a real
+ * reduction in certainty and is reported as one — see the two-pass comment in lookup().
+ */
+const SUB_VARIETY_CONFIDENCE_FACTOR = 0.8
+
+function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean, broadened = false): ProviderMatch {
+  const base = isExact ? 0.92 : Math.min(0.85, scored.score / 100)
+  const confidence = broadened ? Math.round(base * SUB_VARIETY_CONFIDENCE_FACTOR * 1000) / 1000 : base
   return {
     nutrients: scored.record.nutrients,
     canonicalName: query.foodName,
@@ -528,6 +642,13 @@ export class BlsProvider implements NutrientProvider {
     // against the candidate name in whichever language actually got selected.
     const structuredName = query.structuredName?.trim()
     const canonicalGerman = query.canonicalGerman?.trim()
+    // A lemma synonym is queried under its OWN word as the core too — "Teigwaren" is what BLS
+    // calls the food, so gating that variant on the core "Nudeln" would reject every candidate.
+    const synonyms = [structuredName, canonicalGerman, query.coreFoodGerman, query.foodName]
+      .map(blsLemmaSynonym)
+      .filter((s): s is string => s !== null)
+      .map((text) => ({ text, core: text }))
+
     const queryVariants = [
       { text: structuredName, core: query.coreFoodGerman ?? null },
       { text: canonicalGerman, core: query.coreFoodGerman ?? null },
@@ -536,8 +657,12 @@ export class BlsProvider implements NutrientProvider {
       // variety BLS does not model, but its core "Reis" reaches the generic rice record — using
       // the base noun we already have rather than inventing a synonym list.
       { text: query.coreFoodGerman ?? null, core: query.coreFoodGerman ?? null },
+      // Tried last: only a query that found nothing under its own words falls back to BLS's lemma.
+      ...synonyms,
     ].filter((v, i, arr): v is { text: string; core: string | null } => !!v.text && arr.findIndex((o) => o.text === v.text) === i)
     const queryTexts = queryVariants.map((v) => v.text)
+    // Every spelling of the ingredient, for the variant-independent specificity gate.
+    const identityText = [structuredName, canonicalGerman, query.foodName].filter(Boolean).join(" ")
 
     // Unlike OFF/USDA, BLS matching is state-sensitive (pickBestByState) — the shared
     // buildQueryKey(foodName, brand) alone would let a "cooked" resolution get wrongly reused for
@@ -573,6 +698,7 @@ export class BlsProvider implements NutrientProvider {
       foodType: query.foodType,
       coreFood: query.coreFoodGerman,
       evidence,
+      attributes: attrs,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 
@@ -587,6 +713,20 @@ export class BlsProvider implements NutrientProvider {
     }
     if (isProviderMiss(this.name, missKey)) return null
 
+    // TWO PASSES over the variant list. The first refuses a candidate that narrows the query to a
+    // SUB-VARIETY it never named ("Nudeln" -> "Reisnudeln"); the second allows it.
+    //
+    // Measured over all 141 ingredient names in the live Mealie library, rejecting sub-varieties
+    // outright cost nine ordinary foods their only record, because German files most everyday
+    // foods ONLY as compounds: BLS has no bare "Essig", "Hefe", "Ketchup", "Wasser", "Mehl" or
+    // "Zucker" at all. "Trinkwasser" IS water; "Reisnudeln" is not pasta — and no lexical rule
+    // separates those two, because the difference is about the food, not the word.
+    //
+    // What DOES separate them is whether a less specific record exists. So this is a preference,
+    // not a prohibition: take the unspecified record when there is one, otherwise broaden honestly
+    // and say so through a reduced confidence, rather than silently guessing or silently losing
+    // the ingredient.
+    for (const allowSubVariety of [false, true]) {
     for (const { text, core } of queryVariants) {
       const normalized = normalizeKey(text)
       const exactCandidates = data.byNormalizedNameDe.get(normalized)
@@ -599,7 +739,7 @@ export class BlsProvider implements NutrientProvider {
         // exactly equal a composite dish's name is a contradiction worth rejecting, not trusting).
         const typeOk = !foodTypeConflict(query.foodType, withKcal.foodType)
         // An exact NAME match still must not cross a nutritionally meaningful attribute boundary.
-        const exactAttrs = inferAttributesFromName(withKcal.nameDe)
+        const exactAttrs = withKcal.attributes
         const attrOk = !formConflict(attrs.form, exactAttrs.form)
           && !preservationConflict(attrs.preservation, exactAttrs.preservation)
           && !fatConflict(attrs.fatPercent, withKcal.nutrients.fatPer100g)
@@ -620,13 +760,15 @@ export class BlsProvider implements NutrientProvider {
       // the FULL pool, so exact German rows outside the curated set (Gemüsebrühe, Hühnerei
       // gekocht, Tomate getrocknet, Sojabohne reif gekocht) remain reachable.
       const pool = degraded ? data.preferredRecords : data.records
-      const scored = scoreCandidates(text, pool, query.category, query.foodType, core, attrs).sort((a, b) => b.score - a.score)
-      const picked = pickBestByState(scored, query.state, FUZZY_MIN_SCORE)
+      const scored = scoreCandidates(text, pool, query.category, query.foodType, core, attrs, identityText, query.coreFoodGerman ?? null, allowSubVariety)
+        .sort((a, b) => b.score - a.score)
+      const picked = pickBestCandidate(scored, query.state, FUZZY_MIN_SCORE, attrs)
       if (picked) {
-        const match = buildMatch(query, picked, false)
+        const match = buildMatch(query, picked, false, allowSubVariety)
         setCachedProviderMatch(this.name, queryKey, match)
         return match
       }
+    }
     }
 
     // Stage 1 and stage 2 both ran and found nothing: a genuine miss FOR THIS EVIDENCE PROFILE.

@@ -181,6 +181,27 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 
 Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
 
+### Coverage and match quality are separate
+
+`calorie_estimator_status` reports **coverage**: how much of the recipe's known weight resolved to
+nutrition data at all. It says nothing about whether the records that were found are the right
+ones, and the two really do come apart — a recipe can resolve every single ingredient and still be
+built on a wrong record.
+
+Three additional keys report **match quality**, on their own axis. `calorie_estimator_status` keeps
+its existing values and meaning, so these are purely additive:
+
+| extra | meaning |
+|---|---|
+| `calorie_estimator_match_quality` | `high`, `mixed`, or `low` — confidence in the chosen records, weighted by each ingredient's share of the recipe's calories rather than by ingredient count |
+| `calorie_estimator_match_quality_reason` | present when the grade is not `high`; names the ingredient or the weighted figure responsible |
+| `calorie_estimator_low_confidence` | JSON array of matched ingredients whose individual record needs a caveat (confidence < 0.6), whatever the overall grade |
+
+Weighting by calories is what makes the grade useful: a shaky match on a pinch of pepper should not
+move it, while a shaky match on 400 g of beans should dominate it. An ingredient contributing more
+than 20% of the recipe's energy from a low-confidence record cannot be averaged away by confident
+trimmings.
+
 ## Motivation
 
 <!-- Add bit of context why the project has been created -->
