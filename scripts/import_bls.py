@@ -131,6 +131,25 @@ def food_type_from_code(bls_code: str) -> str:
     return "composite_dish" if letter in COMPOSITE_DISH_LETTERS else "simple"
 
 
+PREFERRED_CODES_PATH = Path(__file__).resolve().parent.parent / "resources" / "bls" / "ingredient-codes-2992.txt"
+
+
+def load_preferred_codes():
+    """The curated raw/base-ingredient subset (see the file header for selection + provenance).
+
+    Committed as a plain code list rather than a second database: there is exactly one runtime BLS
+    database, and this only sets a flag on rows that already exist in it.
+    """
+    if not PREFERRED_CODES_PATH.exists():
+        raise SystemExit(f"missing ingredient-preferred code list: {PREFERRED_CODES_PATH}")
+    codes = set()
+    for line in PREFERRED_CODES_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            codes.add(line)
+    return codes
+
+
 def find_column_indices(header_row):
     indices = {}
     for i, cell in enumerate(header_row):
@@ -161,6 +180,8 @@ def main():
     output_path = Path(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_OUTPUT
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    preferred_codes = load_preferred_codes()
+
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
     sheet_name = wb.sheetnames[0]
     ws = wb[sheet_name]
@@ -189,7 +210,12 @@ def main():
             fiber_per_100g REAL,
             sugar_per_100g REAL,
             sodium_per_100g REAL,
-            cholesterol_per_100g REAL
+            cholesterol_per_100g REAL,
+            -- 1 for the curated raw/base-INGREDIENT subset (resources/bls/ingredient-codes-2992.txt).
+            -- Used only as the candidate pool for degraded-mode fuzzy matching; healthy-mode
+            -- ranking deliberately ignores it, because the curation is icon-driven and keeps
+            -- arbitrary variants within a food.
+            ingredient_preferred INTEGER NOT NULL DEFAULT 0
         )
     """)
     conn.execute("CREATE INDEX idx_bls_name_de_normalized ON bls_foods(name_de_normalized)")
@@ -212,8 +238,8 @@ def main():
                 group_letter, food_type,
                 kcal_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g,
                 saturated_fat_per_100g, unsaturated_fat_per_100g, fiber_per_100g,
-                sugar_per_100g, sodium_per_100g, cholesterol_per_100g
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                sugar_per_100g, sodium_per_100g, cholesterol_per_100g, ingredient_preferred
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 bls_code, name_de, normalize_name(name_de), name_en, infer_state(name_de),
                 bls_code[0].upper(), food_type_from_code(bls_code),
@@ -227,6 +253,7 @@ def main():
                 parse_value(r[idx["SUGAR"]]),
                 mg_to_g(parse_value(r[idx["NA"]])),
                 mg_to_g(parse_value(r[idx["CHORL"]])),
+                1 if bls_code in preferred_codes else 0,
             ),
         )
         count += 1
@@ -242,6 +269,14 @@ def main():
     )
     conn.execute("INSERT INTO bls_meta (key, value) VALUES ('version', '4.0')")
     conn.execute("INSERT INTO bls_meta (key, value) VALUES ('food_count', ?)", (str(count),))
+    conn.execute(
+        "INSERT INTO bls_meta (key, value) VALUES ('ingredient_preferred_count', ?)",
+        (str(conn.execute("SELECT COUNT(*) FROM bls_foods WHERE ingredient_preferred = 1").fetchone()[0]),),
+    )
+    conn.execute(
+        "INSERT INTO bls_meta (key, value) VALUES ('ingredient_preferred_source', ?)",
+        (PREFERRED_CODES_PATH.name,),
+    )
 
     conn.commit()
     conn.close()

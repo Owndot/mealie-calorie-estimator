@@ -5,6 +5,7 @@ import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markPro
 import type { NutrientSet, ProviderMatch, FoodRoute, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
+import { FULL_EVIDENCE } from "../identity-evidence.js"
 
 interface FdcNutrient {
   nutrientId: number
@@ -56,7 +57,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v14"
+const USDA_MATCH_ALGORITHM_VERSION = "v15"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -187,8 +188,19 @@ export class UsdaProvider implements NutrientProvider {
     // category/foodType/coreFood are not part of the positive key by design — re-checked against
     // the stored candidate instead (cachedMatchConflict). The NEGATIVE key does carry them, since
     // a miss has no stored candidate to re-check. See matchingContextKey().
+    const evidence = query.evidence ?? FULL_EVIDENCE
+    // USDA indexes ENGLISH descriptions. With a validated English identity this is the normal
+    // generic path. Without one, the query text is the raw structured name and the ONLY identity
+    // available to gate with is that same name — so it is used as the core-identity gate.
+    //
+    // That gate is self-limiting, which is the point: a German word is absent from every correct
+    // English candidate name ("Minze" vs "Peppermint, fresh" -> conflict), so a German-only
+    // ingredient fails closed without needing a language detector, while a structured-English name
+    // like "olive oil" matches "Oil, olive, ..." and is allowed through.
+    const strictCore = evidence.english ? query.coreFoodEnglish : (query.structuredName ?? query.foodName)
     const ctx = {
-      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
+      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: strictCore,
+      evidence,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 
@@ -262,7 +274,7 @@ export class UsdaProvider implements NutrientProvider {
       queryState: query.state,
       queryCategory: query.category,
       queryFoodType: query.foodType,
-      queryCoreFood: query.coreFoodEnglish,
+      queryCoreFood: strictCore,
       dataTypeScore: (dt) => dataTypeScore(route, dt),
     })
     const top = ranked[0]

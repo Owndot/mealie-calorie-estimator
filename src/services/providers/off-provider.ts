@@ -5,6 +5,7 @@ import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markPro
 import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderMatch, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
+import { FULL_EVIDENCE, mayQueryOff } from "../identity-evidence.js"
 
 const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
@@ -153,7 +154,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v14"
+const OFF_MATCH_ALGORITHM_VERSION = "v15"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -170,8 +171,22 @@ export class OffProvider implements NutrientProvider {
     // The negative cache is additionally scoped by the acceptance context — see
     // matchingContextKey(). A miss means "nothing here was acceptable under THESE rules", so it
     // must not suppress a different context that would have accepted one of the same candidates.
+    const evidence = query.evidence ?? FULL_EVIDENCE
+    // OFF indexes multilingual PRODUCT names, so a bare German word can collide with a branded
+    // product in another language — observed live as "Minze" matching "Aproz Thé Grüntee-minze"
+    // once degraded classification had disabled every semantic gate. Without verified brand
+    // evidence, or a validated English identity to gate against, OFF is NOT QUERIED AT ALL.
+    //
+    // Skipping by policy is deliberately NOT a provider miss: nothing was asked, so nothing was
+    // answered, and a miss here would suppress a later lookup that does have the evidence.
+    if (!mayQueryOff(evidence)) {
+      logger.debug({ foodName: query.foodName }, "OFF: skipped by routing policy (insufficient identity evidence)")
+      return null
+    }
+
     const ctx = {
       foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
+      evidence,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 

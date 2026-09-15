@@ -1,5 +1,6 @@
 /** Shared candidate-ranking helpers for network providers (OFF, USDA) that return multiple hits. */
 import type { FoodState, FoodType } from "../../types.js"
+import { evidenceKey, type IdentityEvidence } from "../identity-evidence.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /**
@@ -310,7 +311,10 @@ const MISMATCH_RULES: MismatchRule[] = [
  * "oil" itself) is a genuine generic answer; any other content word means it names a specific
  * type the query never asked for.
  */
-const GENERIC_OIL_WORDS = new Set(["oil", "oils", "vegetable", "cooking", "salad", "blend", "blended", "plant", "edible", "nfs", "unspecified", "and"])
+// "oel"/"oele" are the NORMALIZED German forms tokenize() produces for "Öl"/"Öle" — without
+// them a bare German oil query looks "qualified" to the specificity guard below and the rule would
+// silently stop firing for exactly the case it was written for.
+const GENERIC_OIL_WORDS = new Set(["oil", "oils", "oel", "oele", "vegetable", "cooking", "salad", "blend", "blended", "plant", "edible", "nfs", "unspecified", "and"])
 
 /**
  * A bare, unqualified "Öl"/"oil" query means generic oil — it must not accept a candidate naming a
@@ -330,6 +334,15 @@ function genericOilConflict(queryFoodName: string, candidateName: string): boole
   // itself names a specific oil (e.g. "Olivenöl", "Kokosöl") — "öl" there is preceded by a letter
   // ("v"/"s"), so the lookbehind fails and the guard below never matches.
   if (!/(?<!\p{L})(öl|oil)(?!\p{L})/iu.test(queryFoodName)) return false
+
+  // The German half of the guard above works by compounding ("Olivenöl" fuses the type onto the
+  // word), but an ENGLISH query names the type as a separate word — "olive oil" — where the
+  // lookbehind sees a space and lets the rule fire. That made a perfectly specific English query
+  // look "unqualified" and rejected USDA's "Oil, olive, salad or cooking". The rule's own stated
+  // scope is a BARE, unqualified oil query, so a query carrying any type word of its own is
+  // specific and exempt — which is the same test already applied to the candidate below.
+  const queryTokens = tokenize(queryFoodName)
+  if (queryTokens.some((t) => !GENERIC_OIL_WORDS.has(t) && !GENERIC_DESCRIPTOR_WORDS.has(t))) return false
 
   const candidateTokens = tokenize(candidateName)
   if (!candidateTokens.includes("oil") && !candidateTokens.includes("oils")) return false
@@ -570,6 +583,8 @@ export interface MatchingContext {
   foodType: FoodType
   /** coreFoodGerman or coreFoodEnglish, whichever language this provider matched in. */
   coreFood: string | null | undefined
+  /** Identity capabilities in force for this lookup — see evidenceKey(). */
+  evidence?: IdentityEvidence
 }
 
 /**
@@ -589,9 +604,13 @@ export interface MatchingContext {
  * and cachedMatchConflict already covers it for free.
  */
 export function matchingContextKey(ctx: MatchingContext): string {
+  // The evidence profile changes what a provider will ACCEPT, so two lookups with different
+  // evidence are different questions: a strict degraded miss must never suppress a later healthy
+  // lookup, and vice versa. Omitted evidence keeps the pre-evidence key shape.
   const core = ctx.coreFood ? tokenize(ctx.coreFood).join(" ") : ""
   const category = ctx.category ? tokenize(ctx.category).join(" ") : ""
-  return `${category}|${ctx.foodType}|${core}`
+  const evidence = ctx.evidence ? `|ev=${evidenceKey(ctx.evidence)}` : ""
+  return `${category}|${ctx.foodType}|${core}${evidence}`
 }
 
 /**

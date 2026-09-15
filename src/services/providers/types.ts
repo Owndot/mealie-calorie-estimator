@@ -1,6 +1,13 @@
 import type { FoodState, FoodRoute, FoodType, ProviderMatch } from "../../types.js"
+import type { IdentityEvidence } from "../identity-evidence.js"
 
 export interface ProviderQuery {
+  /**
+   * What is actually KNOWN about this ingredient's identity. Absent evidence must make a provider
+   * stricter, never more permissive — see identity-evidence.ts. Optional so existing callers and
+   * tests keep working; treated as FULL_EVIDENCE when omitted.
+   */
+  evidence?: IdentityEvidence
   /** Normalized English identity (LLM canonicalEnglish, or the raw structured name if the LLM is
    * unavailable) — primary query text for USDA/OFF, which work fine in English. Never originalText. */
   foodName: string

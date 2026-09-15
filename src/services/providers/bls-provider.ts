@@ -9,9 +9,10 @@ import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../type
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey } from "./ranking.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
+import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v19"
+const BLS_MATCH_ALGORITHM_VERSION = "v20"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -52,6 +53,13 @@ interface BlsFoodRecord {
   nameEn: string | null
   inferredState: FoodState
   /**
+   * 1 for the curated raw/base-INGREDIENT subset (resources/bls/ingredient-codes-2992.txt: BLS
+   * groups B-W, X/Y menu components excluded, cooking-state variants dropped). Used ONLY as the
+   * candidate pool for degraded-mode fuzzy matching — never as a healthy-mode ranking bonus, since
+   * the curation is icon-driven and keeps arbitrary variants within a food.
+   */
+  ingredientPreferred: boolean
+  /**
    * Derived from the OFFICIAL BLS Code's leading letter (scripts/import_bls.py) — X/Y are BLS's
    * own documented "Menükomponenten" (menu component/composite dish) groups. This is the
    * PRIMARY, authoritative signal for rejecting a composite dish against a simple query — see
@@ -67,7 +75,10 @@ interface BlsFoodRecord {
 
 interface BlsData {
   records: BlsFoodRecord[]
+  /** The ingredient_preferred subset — the degraded-mode fuzzy candidate pool. */
+  preferredRecords: BlsFoodRecord[]
   byNormalizedNameDe: Map<string, BlsFoodRecord[]>
+  preferredCodes: Set<string>
 }
 
 function defaultDbPath(): string {
@@ -91,7 +102,7 @@ async function loadBlsData(): Promise<BlsData | null> {
 
   const records: BlsFoodRecord[] = []
   const stmt = db.prepare(`SELECT bls_code, name_de, name_de_normalized, name_en, inferred_state,
-    food_type,
+    food_type, ingredient_preferred,
     kcal_per_100g, protein_per_100g, carbs_per_100g, fat_per_100g, saturated_fat_per_100g,
     unsaturated_fat_per_100g, fiber_per_100g, sugar_per_100g, sodium_per_100g, cholesterol_per_100g
     FROM bls_foods`)
@@ -107,6 +118,7 @@ async function loadBlsData(): Promise<BlsData | null> {
         nameDeNormalized: row.name_de_normalized as string,
         nameEn,
         inferredState: row.inferred_state as FoodState,
+        ingredientPreferred: Number(row.ingredient_preferred ?? 0) === 1,
         foodType: row.food_type as FoodType,
         nutrients: {
           kcalPer100g: row.kcal_per_100g as number | null,
@@ -139,8 +151,45 @@ async function loadBlsData(): Promise<BlsData | null> {
     else byNormalizedNameDe.set(r.nameDeNormalized, [r])
   }
 
-  logger.info({ count: records.length, dbPath }, "Loaded BLS 4.0 reference database")
-  return { records, byNormalizedNameDe }
+  const preferredRecords = records.filter((r) => r.ingredientPreferred)
+  const preferredCodes = new Set(preferredRecords.map((r) => r.blsCode))
+
+  logger.info(
+    { count: records.length, ingredientPreferred: preferredRecords.length, dbPath },
+    "Loaded BLS 4.0 reference database",
+  )
+  return { records, preferredRecords, byNormalizedNameDe, preferredCodes }
+}
+
+/**
+ * A positive cache entry must not be allowed to bypass the degraded two-stage policy. The stored
+ * match may have been accepted in healthy mode, where the full pool and the semantic gates were
+ * both available; under the degraded policy it is only acceptable if it would still be reachable —
+ * i.e. it is in the curated ingredient pool (stage 2), or its BLS name still exactly equals one of
+ * this query's German texts with a compatible state (stage 1).
+ *
+ * Everything needed is re-derivable from the stored providerId/productName, so no extra column is
+ * persisted and no field is bolted onto the positive cache key — the same revalidate-don't-widen
+ * decision made for M2.
+ */
+function degradedCacheConflict(
+  cached: ProviderMatch,
+  data: BlsData,
+  queryTexts: string[],
+  queryState: FoodState,
+): string | null {
+  if (cached.providerId && data.preferredCodes.has(cached.providerId)) return null
+
+  const record = data.records.find((r) => r.blsCode === cached.providerId)
+  if (record) {
+    const exact = queryTexts.some((t) => normalizeKey(t) === record.nameDeNormalized)
+    // "unknown" must NOT reject on its own: degraded classification is precisely the case where
+    // state information is unavailable, and rejecting there would discard correct exact rows.
+    const stateOk = queryState === "unknown" || record.inferredState === "unknown" || record.inferredState === queryState
+    if (exact && stateOk) return null
+  }
+
+  return `degraded BLS policy: cached match "${cached.productName}" is neither an ingredient-preferred record nor an exact German name match for this query`
 }
 
 function getBlsData(): Promise<BlsData | null> {
@@ -157,6 +206,7 @@ export interface TestBlsFoodInput {
   blsCode: string
   nameDe: string
   nameEn?: string | null
+  ingredientPreferred?: boolean
   inferredState?: FoodState
   /** Defaults to "simple" — pass "composite_dish" to simulate an X/Y-coded BLS entry in tests. */
   foodType?: FoodType
@@ -176,6 +226,9 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
     nameDeNormalized: normalizeKey(input.nameDe),
     nameEn: input.nameEn ?? null,
     inferredState: input.inferredState ?? "unknown",
+    // Fixtures default to preferred so existing provider tests keep one pool; a test that needs a
+    // non-preferred row (e.g. a composite only reachable via the exact-match stage) sets it false.
+    ingredientPreferred: input.ingredientPreferred ?? true,
     foodType: input.foodType ?? "simple",
     nutrients: input.nutrients,
     tokensDe: tokenizeBls(input.nameDe),
@@ -189,7 +242,8 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
     else byNormalizedNameDe.set(r.nameDeNormalized, [r])
   }
 
-  return { records, byNormalizedNameDe }
+  const preferredRecords = records.filter((r) => r.ingredientPreferred)
+  return { records, preferredRecords, byNormalizedNameDe, preferredCodes: new Set(preferredRecords.map((r) => r.blsCode)) }
 }
 
 function jaccard(a: string[], b: string[]): number {
@@ -409,17 +463,21 @@ export class BlsProvider implements NutrientProvider {
     // stored productName always contains BLS's German name (plus its English name only when the
     // match was made via English), so a German core token still resolves against it. The NEGATIVE
     // key does carry the context, since a miss has no stored candidate to re-check.
+    const evidence = query.evidence ?? FULL_EVIDENCE
+    const degraded = usesDegradedBlsPolicy(evidence)
     const ctx = {
       foodName: query.canonicalGerman ?? query.structuredName ?? query.foodName,
       category: query.category,
       foodType: query.foodType,
       coreFood: query.coreFoodGerman,
+      evidence,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
       const conflict = cachedMatchConflict(cached, ctx)
+        ?? (degraded ? degradedCacheConflict(cached, data, queryTexts, query.state) : null)
       if (!conflict) return cached
       // True cache miss for this context — fall through and re-score against the BLS table, so a
       // different BLS record that IS valid for this context stays reachable.
@@ -448,7 +506,14 @@ export class BlsProvider implements NutrientProvider {
         // differently *named* but compatible BLS entry (e.g. "Kartoffel gekocht" vs "Kartoffel").
       }
 
-      const scored = scoreCandidates(text, data.records, query.category, query.foodType, core).sort((a, b) => b.score - a.score)
+      // STAGE 2 — fuzzy/ranked. Under the degraded policy this is restricted to the curated
+      // ingredient pool: the semantic gates that normally police a fuzzy match are unavailable,
+      // and the full pool is where "Paprika" silently became "Paprika gedünstet (mit Fett und
+      // Salz)" and "Sellerie" became "Sellerie gekocht, mit Sahne". Stage 1 above still searches
+      // the FULL pool, so exact German rows outside the curated set (Gemüsebrühe, Hühnerei
+      // gekocht, Tomate getrocknet, Sojabohne reif gekocht) remain reachable.
+      const pool = degraded ? data.preferredRecords : data.records
+      const scored = scoreCandidates(text, pool, query.category, query.foodType, core).sort((a, b) => b.score - a.score)
       const picked = pickBestByState(scored, query.state, FUZZY_MIN_SCORE)
       if (picked) {
         const match = buildMatch(query, picked, false)
@@ -457,6 +522,8 @@ export class BlsProvider implements NutrientProvider {
       }
     }
 
+    // Stage 1 and stage 2 both ran and found nothing: a genuine miss FOR THIS EVIDENCE PROFILE.
+    // The profile is part of missKey, so this never suppresses a later lookup with better identity.
     markProviderMiss(this.name, missKey)
     return null
   }
