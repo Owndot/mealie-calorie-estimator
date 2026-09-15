@@ -7,11 +7,11 @@ import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict } from "./ranking.js"
+import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey } from "./ranking.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v18"
+const BLS_MATCH_ALGORITHM_VERSION = "v19"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -404,25 +404,28 @@ export class BlsProvider implements NutrientProvider {
     // for any ingredient text already resolved once. Bump this string whenever nameScore's
     // matching behavior changes.
     const queryKey = buildQueryKey(`${BLS_MATCH_ALGORITHM_VERSION}:${queryTexts.join("|")}|${query.state}`, query.brand)
+    // category/foodType/coreFood are not part of the positive key by design — re-checked against
+    // the stored candidate instead (cachedMatchConflict). The German core is used here because the
+    // stored productName always contains BLS's German name (plus its English name only when the
+    // match was made via English), so a German core token still resolves against it. The NEGATIVE
+    // key does carry the context, since a miss has no stored candidate to re-check.
+    const ctx = {
+      foodName: query.canonicalGerman ?? query.structuredName ?? query.foodName,
+      category: query.category,
+      foodType: query.foodType,
+      coreFood: query.coreFoodGerman,
+    }
+    const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
+
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
-      // category/foodType/coreFood are not part of the key by design — re-check them against the
-      // stored candidate instead. See cachedMatchConflict(). The German core is used here because
-      // the stored productName always contains BLS's German name (plus its English name only when
-      // the match was made via English), so a German core token still resolves against it.
-      const conflict = cachedMatchConflict(cached, {
-        foodName: query.canonicalGerman ?? query.structuredName ?? query.foodName,
-        category: query.category,
-        foodType: query.foodType,
-        coreFood: query.coreFoodGerman,
-      })
-      if (conflict) {
-        logger.info({ foodName: query.foodName, reason: conflict }, "BLS: rejected cached match for this query's context")
-        return null
-      }
-      return cached
+      const conflict = cachedMatchConflict(cached, ctx)
+      if (!conflict) return cached
+      // True cache miss for this context — fall through and re-score against the BLS table, so a
+      // different BLS record that IS valid for this context stays reachable.
+      logger.info({ foodName: query.foodName, reason: conflict }, "BLS: cached match incompatible with this query's context, re-querying")
     }
-    if (isProviderMiss(this.name, queryKey)) return null
+    if (isProviderMiss(this.name, missKey)) return null
 
     for (const { text, core } of queryVariants) {
       const normalized = normalizeKey(text)
@@ -454,7 +457,7 @@ export class BlsProvider implements NutrientProvider {
       }
     }
 
-    markProviderMiss(this.name, queryKey)
+    markProviderMiss(this.name, missKey)
     return null
   }
 }

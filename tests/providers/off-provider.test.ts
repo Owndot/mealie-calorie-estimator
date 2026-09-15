@@ -251,3 +251,72 @@ describe("OffProvider — preparation state is part of cache identity (H1 regres
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe("OffProvider — an incompatible cached entry is a true cache miss, not a provider miss (M2)", () => {
+  // Found in review, reproduced against the real provider: re-validating a cache hit against the
+  // current query context is necessary (a cache hit otherwise bypasses every semantic gate), but
+  // reporting "no match" on conflict made a perfectly valid alternative candidate from the SAME
+  // provider unreachable for the whole CACHE_MATCH_TTL — whichever context populated the shared
+  // slot first silently won.
+  const COMPOSITE = {
+    product_name: "Vegetable broth soup m2off",
+    categories_tags: ["en:soups"],
+    nutriments: { "energy-kcal_100g": 30, "proteins_100g": 1, "carbohydrates_100g": 4, "fat_100g": 0.5 },
+  }
+  const SIMPLE = {
+    product_name: "Vegetable broth m2off",
+    categories_tags: [] as string[],
+    nutriments: { "energy-kcal_100g": 10, "proteins_100g": 0.5, "carbohydrates_100g": 1, "fat_100g": 0.1 },
+  }
+  const q = (foodType: "composite_dish" | "simple", foodName = "vegetable broth soup m2off") => ({
+    foodName, brand: null, category: null, state: "unknown" as const, foodType, coreFoodEnglish: null,
+  })
+
+  it("falls through to a fresh lookup and finds the valid alternative for this context", async () => {
+    const provider = new OffProvider()
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => hitsResponse([COMPOSITE, SIMPLE]))
+
+    const composite = await provider.lookup(q("composite_dish"))
+    expect(composite?.productName).toBe(COMPOSITE.product_name)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // Same cache key, incompatible context. Before the fix this returned null with no second fetch.
+    const simple = await provider.lookup(q("simple"))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(simple?.productName).toBe(SIMPLE.product_name)
+    expect(simple?.nutrients.kcalPer100g).toBe(10)
+  })
+
+  it("a compatible cache hit still performs no new lookup", async () => {
+    const provider = new OffProvider()
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => hitsResponse([SIMPLE]))
+    const name = "vegetable broth m2off-compat"
+
+    const first = await provider.lookup(q("simple", name))
+    const second = await provider.lookup(q("simple", name))
+
+    expect(first?.productName).toBe(SIMPLE.product_name)
+    expect(second?.productName).toBe(SIMPLE.product_name)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("a negative cache entry is scoped to the context that produced it, and still prevents re-querying that same context", async () => {
+    const provider = new OffProvider()
+    // Only a composite product exists: unacceptable for a "simple" query, acceptable for a
+    // "composite_dish" one.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => hitsResponse([COMPOSITE]))
+    const name = "vegetable broth m2off-negctx"
+
+    expect(await provider.lookup(q("simple", name))).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    // Different context, same query text: must NOT be suppressed by the miss above.
+    const composite = await provider.lookup(q("composite_dish", name))
+    expect(composite?.productName).toBe(COMPOSITE.product_name)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    // Repeating the ORIGINAL context must still short-circuit on its own miss — no thrash.
+    expect(await provider.lookup(q("simple", name))).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})

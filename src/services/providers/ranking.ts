@@ -573,6 +573,28 @@ export interface MatchingContext {
 }
 
 /**
+ * Compact, stable serialization of the acceptance-relevant context fields that are deliberately
+ * absent from the positive cache key (category/foodType/coreFood).
+ *
+ * Used ONLY to scope the NEGATIVE cache. A negative entry means "nothing this provider returned
+ * was acceptable" — which is a statement about the rules that were applied, not about the food, so
+ * it is only meaningful for the context that produced it. Unlike a positive entry, there is no
+ * stored candidate to re-validate against (see cachedMatchConflict), so the context has to be part
+ * of the key instead. Verified against the live providers: without this, a "simple" query that
+ * rejected every candidate recorded a miss that then suppressed a "composite_dish" query for the
+ * same food text — which would have accepted one of those very candidates — without even issuing
+ * the request.
+ *
+ * The positive key is deliberately left unscoped: fragmenting it would multiply OFF/USDA calls,
+ * and cachedMatchConflict already covers it for free.
+ */
+export function matchingContextKey(ctx: MatchingContext): string {
+  const core = ctx.coreFood ? tokenize(ctx.coreFood).join(" ") : ""
+  const category = ctx.category ? tokenize(ctx.category).join(" ") : ""
+  return `${category}|${ctx.foodType}|${core}`
+}
+
+/**
  * Re-runs the name-based acceptance gates against an ALREADY-CACHED match, and returns a reason
  * when that cached match is not acceptable for THIS query's context (or null when it still is).
  *
@@ -586,11 +608,14 @@ export interface MatchingContext {
  * served verbatim for a semantically different ingredient that happened to normalize to the same
  * query text.
  *
- * Deliberately conservative: an unacceptable cached entry makes the provider report "no match"
- * for this query rather than re-fetching and overwriting the cache slot, which would let two
- * query contexts sharing one key thrash against each other on every run. Falling through to the
- * next provider is the safe direction, consistent with "a database miss is preferable to a
- * confident wrong match".
+ * An unacceptable cached entry must behave as a TRUE CACHE MISS for this context: the provider
+ * falls through to a fresh lookup and re-ranks under the current context. It must NOT report "no
+ * match" — verified against the live providers that doing so hid a perfectly valid alternative
+ * candidate from the SAME provider (a composite entry occupying the slot made the simple entry
+ * unreachable) for the full CACHE_MATCH_TTL, with whichever context populated the slot first
+ * silently winning. The fresh lookup is still guarded by the context-scoped negative cache (see
+ * matchingContextKey), so a repeated query that genuinely has no acceptable candidate does not
+ * re-issue the request.
  */
 export function cachedMatchConflict(
   cached: { productName: string | null; foodType?: FoodType },

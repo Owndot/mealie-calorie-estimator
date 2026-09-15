@@ -448,3 +448,66 @@ describe("UsdaProvider — search query is the whole-recipe normalizer's own out
     expect(match).toBeNull()
   })
 })
+
+describe("UsdaProvider — an incompatible cached entry is a true cache miss, not a provider miss (M2)", () => {
+  // USDA takes the identical cache path as OFF/BLS, so it carries the identical defect.
+  const COMPOSITE = {
+    description: "Soup, vegetable broth m2usda",
+    fdcId: 900001,
+    dataType: "SR Legacy",
+    foodCategory: "Soups, Sauces, and Gravies",
+    foodNutrients: CHICKEN_NUTRIENTS,
+  }
+  const SIMPLE = {
+    description: "Broth, vegetable m2usda",
+    fdcId: 900002,
+    dataType: "SR Legacy",
+    foodCategory: "Vegetables and Vegetable Products",
+    foodNutrients: CHICKEN_NUTRIENTS,
+  }
+  // The query text matches the composite description exactly (same token set), so the composite
+  // candidate genuinely wins the slot for a composite query — a "composite_dish" query accepts a
+  // simple candidate too (foodTypeConflict is one-directional), so the fixture has to make the
+  // composite outrank it rather than merely be present.
+  const q = (foodType: "composite_dish" | "simple", foodName = "vegetable broth soup m2usda") =>
+    query(foodName, { foodType, coreFoodEnglish: null })
+
+  it("falls through to a fresh lookup and finds the valid alternative for this context", async () => {
+    const provider = new UsdaProvider()
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => fdcResponse([COMPOSITE, SIMPLE]))
+
+    const composite = await provider.lookup(q("composite_dish"))
+    expect(composite?.providerId).toBe("900001")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const simple = await provider.lookup(q("simple"))
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(simple?.providerId).toBe("900002")
+  })
+
+  it("a compatible cache hit still performs no new lookup", async () => {
+    const provider = new UsdaProvider()
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => fdcResponse([SIMPLE]))
+    const name = "vegetable broth soup m2usda-compat"
+
+    await provider.lookup(q("simple", name))
+    await provider.lookup(q("simple", name))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("a negative cache entry is scoped to its context and still short-circuits that same context", async () => {
+    const provider = new UsdaProvider()
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => fdcResponse([COMPOSITE]))
+    const name = "vegetable broth soup m2usda-negctx"
+
+    expect(await provider.lookup(q("simple", name))).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    expect((await provider.lookup(q("composite_dish", name)))?.providerId).toBe("900001")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    expect(await provider.lookup(q("simple", name))).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+})

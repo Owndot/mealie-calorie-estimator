@@ -4,7 +4,7 @@ import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
 import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderMatch, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, type RankableCandidate } from "./ranking.js"
+import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
 
 const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
@@ -153,7 +153,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v13"
+const OFF_MATCH_ALGORITHM_VERSION = "v14"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -167,20 +167,27 @@ export class OffProvider implements NutrientProvider {
     // for a dried-parsley query (~292 kcal/100g) whenever both normalized to the same query text.
     const queryKey = buildQueryKey(`${OFF_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}`, query.brand)
 
+    // The negative cache is additionally scoped by the acceptance context — see
+    // matchingContextKey(). A miss means "nothing here was acceptable under THESE rules", so it
+    // must not suppress a different context that would have accepted one of the same candidates.
+    const ctx = {
+      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
+    }
+    const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
+
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
-      const conflict = cachedMatchConflict(cached, {
-        foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
-      })
-      if (conflict) {
-        logger.info({ foodName: query.foodName, reason: conflict }, "OFF: rejected cached match for this query's context")
-        return null
+      const conflict = cachedMatchConflict(cached, ctx)
+      if (!conflict) {
+        logger.debug({ foodName: query.foodName }, "OFF provider cache hit")
+        return cached
       }
-      logger.debug({ foodName: query.foodName }, "OFF provider cache hit")
-      return cached
+      // Treated as a true cache miss for this context: fall through and re-rank live, so a valid
+      // alternative candidate from this same provider stays reachable.
+      logger.info({ foodName: query.foodName, reason: conflict }, "OFF: cached match incompatible with this query's context, re-querying")
     }
 
-    if (isProviderMiss(this.name, queryKey)) {
+    if (isProviderMiss(this.name, missKey)) {
       logger.debug({ foodName: query.foodName }, "OFF provider known-miss, skipping network call")
       return null
     }
@@ -193,7 +200,7 @@ export class OffProvider implements NutrientProvider {
     if (hits === null) return null
 
     if (hits.length === 0) {
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
@@ -223,7 +230,7 @@ export class OffProvider implements NutrientProvider {
 
     if (!top) {
       logger.debug({ foodName: query.foodName }, "OFF: no acceptable candidate")
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
@@ -232,19 +239,19 @@ export class OffProvider implements NutrientProvider {
     // hide the specific "obvious mismatch" reason behind a generic "no acceptable candidate" log.
     if (top.mismatchReason) {
       logger.info({ foodName: query.foodName, reason: top.mismatchReason }, "OFF: rejected obvious mismatch")
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
     if (top.score < MIN_ACCEPTABLE_SCORE) {
       logger.debug({ foodName: query.foodName, topScore: top.score }, "OFF: no acceptable candidate")
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
     const product = top.candidate.product
     if (!product.nutriments || product.nutriments["energy-kcal_100g"] == null) {
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 

@@ -347,3 +347,63 @@ describe("BLS in the routing-aware provider chain", () => {
     vi.doUnmock("../../src/services/providers/off-provider.js")
   })
 })
+
+describe("BlsProvider — an incompatible cached entry is a true cache miss, not a provider miss (M2)", () => {
+  // Same defect class as OFF/USDA, but with no network cost at all: a stale positive entry made a
+  // different, perfectly valid BLS record unreachable for the whole CACHE_MATCH_TTL.
+  const N = {
+    kcalPer100g: 20, proteinPer100g: 1, carbsPer100g: 3, fatPer100g: 0.2, saturatedFatPer100g: 0,
+    transFatPer100g: null, unsaturatedFatPer100g: 0.2, fiberPer100g: 0, sugarPer100g: 1,
+    sodiumPer100g: 0.3, cholesterolPer100g: 0,
+  }
+
+  function blsQuery(foodType: "composite_dish" | "simple", name = "Testbruehe m2bls") {
+    return query({
+      foodName: name, structuredName: name, canonicalGerman: name,
+      foodType, coreFoodGerman: null, coreFoodEnglish: null,
+    })
+  }
+
+  it("falls through and re-scores, reaching a different BLS record that IS valid for this context", async () => {
+    const name = "Testbruehe m2bls"
+    // Both records share the same German name; the X-coded composite one is inserted first, so the
+    // exact-match path picks it for a composite query.
+    __resetBlsDataForTests(
+      Promise.resolve(
+        __buildTestBlsData([
+          { blsCode: "X900001", nameDe: name, nameEn: "Test broth dish", foodType: "composite_dish", nutrients: { ...N, kcalPer100g: 30 } },
+          { blsCode: "R900002", nameDe: name, nameEn: "Test broth", foodType: "simple", nutrients: { ...N, kcalPer100g: 10 } },
+        ]),
+      ),
+    )
+    const provider = new BlsProvider()
+
+    const composite = await provider.lookup(blsQuery("composite_dish"))
+    expect(composite?.providerId).toBe("X900001")
+
+    // Same cache key, incompatible context. Before the fix this returned null.
+    const simple = await provider.lookup(blsQuery("simple"))
+    expect(simple?.providerId).toBe("R900002")
+    expect(simple?.nutrients.kcalPer100g).toBe(10)
+  })
+
+  it("is stable across repeated identical queries — no thrashing", async () => {
+    const name = "Testbruehe m2bls-stable"
+    __resetBlsDataForTests(
+      Promise.resolve(
+        __buildTestBlsData([
+          { blsCode: "X900003", nameDe: name, nameEn: "Test broth dish", foodType: "composite_dish", nutrients: { ...N, kcalPer100g: 30 } },
+          { blsCode: "R900004", nameDe: name, nameEn: "Test broth", foodType: "simple", nutrients: { ...N, kcalPer100g: 10 } },
+        ]),
+      ),
+    )
+    const provider = new BlsProvider()
+
+    await provider.lookup(blsQuery("composite_dish", name))
+    const a = await provider.lookup(blsQuery("simple", name))
+    const b = await provider.lookup(blsQuery("simple", name))
+    const c = await provider.lookup(blsQuery("simple", name))
+
+    expect([a?.providerId, b?.providerId, c?.providerId]).toEqual(["R900004", "R900004", "R900004"])
+  })
+})

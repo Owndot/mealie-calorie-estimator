@@ -4,7 +4,7 @@ import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodRoute, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, type RankableCandidate } from "./ranking.js"
+import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
 
 interface FdcNutrient {
   nutrientId: number
@@ -56,7 +56,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v13"
+const USDA_MATCH_ALGORITHM_VERSION = "v14"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -184,20 +184,22 @@ export class UsdaProvider implements NutrientProvider {
     // outright on generic).
     const queryKey = buildQueryKey(`${USDA_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${route}`, query.brand)
 
+    // category/foodType/coreFood are not part of the positive key by design — re-checked against
+    // the stored candidate instead (cachedMatchConflict). The NEGATIVE key does carry them, since
+    // a miss has no stored candidate to re-check. See matchingContextKey().
+    const ctx = {
+      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
+    }
+    const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
+
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
-      // category/foodType/coreFood are not part of the key by design — re-check them against the
-      // stored candidate instead. See cachedMatchConflict().
-      const conflict = cachedMatchConflict(cached, {
-        foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
-      })
-      if (conflict) {
-        logger.info({ foodName: query.foodName, reason: conflict }, "USDA: rejected cached match for this query's context")
-        return null
-      }
-      return cached
+      const conflict = cachedMatchConflict(cached, ctx)
+      if (!conflict) return cached
+      // True cache miss for this context — fall through and re-rank live.
+      logger.info({ foodName: query.foodName, reason: conflict }, "USDA: cached match incompatible with this query's context, re-querying")
     }
-    if (isProviderMiss(this.name, queryKey)) return null
+    if (isProviderMiss(this.name, missKey)) return null
 
     const searchTerm = query.brand ? `${query.brand} ${query.foodName}` : query.foodName
     const params = new URLSearchParams({
@@ -233,7 +235,7 @@ export class UsdaProvider implements NutrientProvider {
     }
 
     if (!data.foods || data.foods.length === 0) {
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
@@ -242,7 +244,7 @@ export class UsdaProvider implements NutrientProvider {
     const eligible = route === "generic" ? data.foods.filter((f) => f.dataType !== "Branded") : data.foods
 
     if (eligible.length === 0) {
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
@@ -266,7 +268,7 @@ export class UsdaProvider implements NutrientProvider {
     const top = ranked[0]
 
     if (!top) {
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
@@ -275,20 +277,20 @@ export class UsdaProvider implements NutrientProvider {
     // specific rejection reason behind a generic "no acceptable candidate" log.
     if (top.mismatchReason) {
       logger.info({ foodName: query.foodName, reason: top.mismatchReason }, "USDA: rejected obvious mismatch")
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
     if (top.score < MIN_ACCEPTABLE_SCORE) {
       logger.debug({ foodName: query.foodName, topScore: top.score }, "USDA: no acceptable candidate")
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
     const food = top.candidate.food
     const nutrients = extractNutrients(food)
     if (nutrients.kcalPer100g === null) {
-      markProviderMiss(this.name, queryKey)
+      markProviderMiss(this.name, missKey)
       return null
     }
 
