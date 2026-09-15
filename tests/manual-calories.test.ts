@@ -35,12 +35,14 @@ describe("Manual calories flow", () => {
     expect(hasManualCalories(recipe)).toBe(true)
   })
 
-  it("does NOT detect manual when hash already exists (auto-calculated before)", () => {
+  it("does NOT detect manual when hash AND provenance exist (genuinely auto-calculated before)", () => {
+    // Provenance (not just a hash) is what actually proves a real estimate ran -- see
+    // hasManualCalories' docstring for the legacy-ack edge case this distinction exists for.
     const recipe = makeRecipe({
       nutrition: {
         calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null, fiberContent: null, cholesterolContent: null,
       },
-      extras: { calorie_estimator_hash: "abc123" },
+      extras: { calorie_estimator_hash: "abc123", calorie_estimator_provenance: "[]" },
     })
     expect(hasManualCalories(recipe)).toBe(false)
   })
@@ -52,9 +54,11 @@ describe("Manual calories flow", () => {
       },
     })
     const hash = computeIngredientHash(recipe)
-    const patch = buildManualAckPatch(recipe, hash)
+    const patch = buildManualAckPatch(recipe, hash, "never-estimated")
 
-    expect(patch.nutrition).toEqual({}) // calories unchanged
+    // No `nutrition` key at all -- Mealie replaces the whole sub-object on any PATCH that
+    // includes the key (confirmed live), so omitting it is the only way to leave "500" alone.
+    expect(patch.nutrition).toBeUndefined()
     expect(patch.extras.calorie_estimator_hash).toBe(hash)
     expect(patch.extras.calorie_estimator_note).toContain("Manual")
   })

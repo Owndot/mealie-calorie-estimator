@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
-import { computeIngredientHash, parseYield, buildNutritionPatch, hasManualCalories, buildManualAckPatch } from "../src/services/estimator.js"
-import type { MealieRecipe, EstimateResult, NutrientSet } from "../src/types.js"
+import { computeIngredientHash, parseYield, buildNutritionPatch, hasManualCalories, isManuallyOwned, hasManuallyModifiedNutrition, buildManualAckPatch } from "../src/services/estimator.js"
+import { computeNutritionFingerprint } from "../src/services/nutrition-format.js"
+import type { MealieRecipe, EstimateResult, NutrientSet, MealieNutrition } from "../src/types.js"
 
 function makeRecipe(overrides: Partial<MealieRecipe> = {}): MealieRecipe {
   return {
@@ -150,6 +151,8 @@ describe("buildNutritionPatch", () => {
       unmatchedCount: 0,
       unmatchedIngredients: [],
       matchedIngredients: [],
+      completeness: "complete",
+      completenessReason: null,
     }
 
     const patch = buildNutritionPatch(result, "abc123", "4 servings")
@@ -161,6 +164,10 @@ describe("buildNutritionPatch", () => {
     expect(patch.extras.calorie_estimator_total_kcal).toBe("1400")
     expect(patch.extras.calorie_estimator_yield).toBe("4")
     expect(patch.extras.calorie_estimator_unmatched).toBe("[]")
+    expect(patch.extras.calorie_estimator_status).toBe("complete")
+    // A real estimate always clears manual ownership — see isManuallyOwned.
+    expect(patch.extras.calorie_estimator_manual).toBe("false")
+    expect(patch.extras.calorie_estimator_nutrition_fingerprint).toBeTruthy()
   })
 
   it("builds patch with empty nutrition when no servings", () => {
@@ -173,6 +180,8 @@ describe("buildNutritionPatch", () => {
       unmatchedCount: 0,
       unmatchedIngredients: [],
       matchedIngredients: [],
+      completeness: "complete",
+      completenessReason: null,
     }
 
     const patch = buildNutritionPatch(result, "def456", null)
@@ -192,6 +201,8 @@ describe("buildNutritionPatch", () => {
       unmatchedCount: 3,
       unmatchedIngredients: ["salt", "pepper", "herbs"],
       matchedIngredients: [],
+      completeness: "partial",
+      completenessReason: "3 ingredient(s) unresolved but weight share is minor",
     }
 
     const patch = buildNutritionPatch(result, "ghi789", "4 servings")
@@ -199,6 +210,78 @@ describe("buildNutritionPatch", () => {
     expect(patch.nutrition.calories).toBe("0")
     expect(patch.extras.calorie_estimator_total_kcal).toBeUndefined()
     expect(patch.extras.calorie_estimator_unmatched).toBe(JSON.stringify(["salt", "pepper", "herbs"]))
+    expect(patch.extras.calorie_estimator_status).toBe("partial")
+    expect(patch.extras.calorie_estimator_status_reason).toContain("minor")
+  })
+
+  it("converts sodium/cholesterol from internal grams to milligrams for Mealie (schema.org convention)", () => {
+    const result: EstimateResult = {
+      slug: "test",
+      servings: 4,
+      totalNutrients: n(400, { sodiumPer100g: 3.2, cholesterolPer100g: 0.4 }),
+      perServingNutrients: n(100, { sodiumPer100g: 0.8, cholesterolPer100g: 0.1 }),
+      matchedCount: 3,
+      unmatchedCount: 0,
+      unmatchedIngredients: [],
+      matchedIngredients: [],
+      completeness: "complete",
+      completenessReason: null,
+    }
+
+    const patch = buildNutritionPatch(result, "mg-test", "4 servings")
+
+    expect(patch.nutrition.sodiumContent).toBe("800")
+    expect(patch.nutrition.cholesterolContent).toBe("100")
+  })
+
+  it("withholds nutrition values entirely when completeness is 'withheld', but still writes hash/status/unmatched", () => {
+    const result: EstimateResult = {
+      slug: "test",
+      servings: 4,
+      totalNutrients: n(null),
+      perServingNutrients: n(null),
+      matchedCount: 1,
+      unmatchedCount: 1,
+      unmatchedIngredients: ["Rinderhack"],
+      matchedIngredients: [],
+      completeness: "withheld",
+      completenessReason: "60% of known ingredient weight is unresolved — nutrition withheld to avoid a misleading result",
+    }
+
+    const patch = buildNutritionPatch(result, "withheld-hash", "4 servings")
+
+    expect(patch.nutrition).toEqual({})
+    expect(patch.extras.calorie_estimator_hash).toBe("withheld-hash")
+    expect(patch.extras.calorie_estimator_status).toBe("withheld")
+    expect(patch.extras.calorie_estimator_status_reason).toContain("withheld")
+    expect(patch.extras.calorie_estimator_unmatched).toBe(JSON.stringify(["Rinderhack"]))
+  })
+
+  it("includes per-ingredient provenance in extras", () => {
+    const result: EstimateResult = {
+      slug: "test",
+      servings: 2,
+      totalNutrients: n(200),
+      perServingNutrients: n(100),
+      matchedCount: 1,
+      unmatchedCount: 0,
+      unmatchedIngredients: [],
+      matchedIngredients: [
+        {
+          name: "Mehl", canonicalName: "Mehl", brand: null, route: "generic",
+          grams: 100, gramsEstimated: false, matched: true,
+          nutrients: n(364), provider: "usda", providerId: "Mehl",
+          confidence: 0.7, fallbackStatus: "usda", llmParticipated: false,
+        },
+      ],
+      completeness: "complete",
+      completenessReason: null,
+    }
+
+    const patch = buildNutritionPatch(result, "prov-hash", "2 servings")
+    const provenance = JSON.parse(patch.extras.calorie_estimator_provenance)
+    expect(provenance).toHaveLength(1)
+    expect(provenance[0]).toMatchObject({ name: "Mehl", provider: "usda", confidence: 0.7, matched: true })
   })
 })
 
@@ -211,12 +294,27 @@ describe("hasManualCalories", () => {
     expect(hasManualCalories(recipe)).toBe(true)
   })
 
-  it("returns false when hash already exists", () => {
+  it("returns false when a hash AND provenance both exist -- a genuine prior real estimate", () => {
     const recipe = makeRecipe({
       nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
-      extras: { calorie_estimator_hash: "abc123" },
+      extras: { calorie_estimator_hash: "abc123", calorie_estimator_provenance: "[]" },
     })
     expect(hasManualCalories(recipe)).toBe(false)
+  })
+
+  it("returns TRUE when a hash exists but provenance does NOT -- a legacy manual acknowledgment, found via a live regression check against real production recipes", () => {
+    // A real household's Mealie had recipes acknowledged as manual by an older version of this
+    // service, which wrote calorie_estimator_hash (to avoid re-flagging the same entry every
+    // run) but predates calorie_estimator_provenance entirely. Under the old "hash alone means
+    // not manual" logic, force-recalculating such a recipe would have silently overwritten a
+    // real hand-entered value with a fresh computed one. Absence of provenance -- which every
+    // real estimate, in any version, has always written unconditionally -- is what actually
+    // distinguishes "never computed" from "computed for real".
+    const recipe = makeRecipe({
+      nutrition: { calories: "586", carbohydrateContent: "61.77", cholesterolContent: "80", fatContent: "27.73", fiberContent: "4.81", proteinContent: "24.6", saturatedFatContent: "13.24", sodiumContent: "1142", sugarContent: "5", transFatContent: "0", unsaturatedFatContent: "14.52" },
+      extras: { calorie_estimator_hash: "edcf6789d74e007979f6ea285a9745cf4926c62ee42dcba9a3239720c46d682e", calorie_estimator_note: "Manual — preserved existing calorie entry" },
+    })
+    expect(hasManualCalories(recipe)).toBe(true)
   })
 
   it("returns false when nutrition.calories is empty", () => {
@@ -233,16 +331,133 @@ describe("hasManualCalories", () => {
   })
 })
 
+describe("isManuallyOwned — stays true across later runs, not just the very first detection", () => {
+  it("is true on first detection (no hash, has nutrition), same as hasManualCalories", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: {},
+    })
+    expect(isManuallyOwned(recipe)).toBe(true)
+  })
+
+  it("stays true once the persistent calorie_estimator_manual flag is set, even for nutrition that WAS genuinely computed by a real estimate (hasManualCalories alone would return false here)", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      // provenance present -- this really was computed by a real estimate, then later
+      // overridden by a human, whom overrideManual explicitly authorized to do so.
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "true", calorie_estimator_provenance: "[]" },
+    })
+    expect(hasManualCalories(recipe)).toBe(false) // it genuinely was computed once
+    expect(isManuallyOwned(recipe)).toBe(true) // but the persistent flag still protects it
+  })
+
+  it("is false once the flag has been explicitly cleared by a real estimate", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "350", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_manual: "false", calorie_estimator_provenance: "[]" },
+    })
+    expect(isManuallyOwned(recipe)).toBe(false)
+  })
+})
+
+describe("hasManuallyModifiedNutrition — detects a hand-edit of previously estimator-written nutrition", () => {
+  function estimatorWrittenNutrition(): MealieNutrition {
+    return {
+      calories: "350", proteinContent: "10", carbohydrateContent: "40", fatContent: "15",
+      saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null,
+      fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null,
+    }
+  }
+
+  function fingerprintFor(nutrition: MealieNutrition): string {
+    return computeNutritionFingerprint(nutrition)
+  }
+
+  it("returns false when nutrition still matches the fingerprint the estimator wrote", () => {
+    const nutrition = estimatorWrittenNutrition()
+    const recipe = makeRecipe({
+      nutrition,
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: fingerprintFor(nutrition) },
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(false)
+  })
+
+  it("returns true when current nutrition differs from the estimator-written fingerprint", () => {
+    const written = estimatorWrittenNutrition()
+    const recipe = makeRecipe({
+      nutrition: { ...written, calories: "999" }, // a person changed the calorie value by hand
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: fingerprintFor(written) },
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(true)
+  })
+
+  it("returns false (conservative default) when there is no stored fingerprint, even with a hash present", () => {
+    const recipe = makeRecipe({
+      nutrition: estimatorWrittenNutrition(),
+      extras: { calorie_estimator_hash: "h1" }, // pre-upgrade write, no fingerprint recorded yet
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(false)
+  })
+
+  it("returns false when there is no hash at all (that's hasManualCalories' concern, not this one)", () => {
+    const recipe = makeRecipe({
+      nutrition: estimatorWrittenNutrition(),
+      extras: {},
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(false)
+  })
+
+  it("detects a person manually adding nutrition to a recipe the estimator had left withheld (all-null fingerprint)", () => {
+    const emptyFingerprint = computeNutritionFingerprint({})
+    const recipe = makeRecipe({
+      nutrition: { calories: "500", proteinContent: null, carbohydrateContent: null, fatContent: null, saturatedFatContent: null, transFatContent: null, unsaturatedFatContent: null, fiberContent: null, sugarContent: null, sodiumContent: null, cholesterolContent: null },
+      extras: { calorie_estimator_hash: "h1", calorie_estimator_nutrition_fingerprint: emptyFingerprint },
+    })
+    expect(hasManuallyModifiedNutrition(recipe)).toBe(true)
+  })
+})
+
 describe("buildManualAckPatch", () => {
   it("sets hash and note, leaves nutrition untouched", () => {
     const recipe = makeRecipe({
       nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
       extras: {},
     })
-    const patch = buildManualAckPatch(recipe, "manual-hash")
+    const patch = buildManualAckPatch(recipe, "manual-hash", "never-estimated")
 
-    expect(patch.nutrition).toEqual({})
+    // No `nutrition` key at all (not even {}) — confirmed live against Mealie: PATCHing
+    // nutrition:{} wipes every field to null instead of leaving them alone, since Mealie
+    // replaces the whole sub-object rather than merging it. Omitting the key is the only way
+    // to truly leave existing nutrition untouched.
+    expect(patch.nutrition).toBeUndefined()
+    expect("nutrition" in patch).toBe(false)
     expect(patch.extras.calorie_estimator_hash).toBe("manual-hash")
     expect(patch.extras.calorie_estimator_note).toBe("Manual — preserved existing calorie entry")
+    // Persists manual ownership across future runs — see isManuallyOwned.
+    expect(patch.extras.calorie_estimator_manual).toBe("true")
+  })
+
+  it("uses a different note for nutrition modified after an earlier estimate", () => {
+    const recipe = makeRecipe({
+      nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: { calorie_estimator_hash: "old-hash" },
+    })
+    const patch = buildManualAckPatch(recipe, "manual-hash", "modified-after-estimate")
+    expect(patch.extras.calorie_estimator_note).toContain("edited after estimation")
+  })
+
+  it("the JSON actually sent to Mealie has no 'nutrition' key at all -- live-found regression", () => {
+    // Found via the live acceptance suite: PATCHing Mealie with nutrition:{} does not leave
+    // existing values alone -- it wipes every field to null, because Mealie replaces the whole
+    // nutrition sub-object rather than merging it field-by-field. This was silently destroying
+    // the very manual entry the ack path exists to protect. Proving it at the JSON.stringify
+    // level (not just patch.nutrition === undefined) locks in the actual wire behavior.
+    const recipe = makeRecipe({
+      nutrition: { calories: "400", carbohydrateContent: null, cholesterolContent: null, fatContent: null, fiberContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null },
+      extras: {},
+    })
+    const patch = buildManualAckPatch(recipe, "manual-hash", "never-estimated")
+    const wireJson = JSON.parse(JSON.stringify(patch))
+    expect("nutrition" in wireJson).toBe(false)
   })
 })

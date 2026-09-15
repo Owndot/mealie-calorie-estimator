@@ -1,16 +1,43 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest"
 import {
-  initCache, getCachedNutrients, setCachedNutrients,
-  isUnmatchedFood, markUnmatchedFood, getCacheStats,
+  initCache, flushCache, buildQueryKey, normalizeKey,
+  getCachedProviderMatch, setCachedProviderMatch,
+  isProviderMiss, markProviderMiss,
+  getCachedLlmEstimate, setCachedLlmEstimate,
+  getCachedLlmNutrients, setCachedLlmNutrients, llmNutrientCacheKey,
+  getCacheStats,
 } from "../src/utils/cache.js"
-import type { NutrientSet } from "../src/types.js"
+import type { ProviderMatch } from "../src/types.js"
+import { config } from "../src/config.js"
 import fs from "node:fs"
 
-const TEST_DB = "data/test-cache.db"
+// This file's OWN isolated database (tests/setup/isolated-cache.ts gives every test file a unique
+// path). It must never be a hardcoded shared path: this file deletes the database it names, and
+// Vitest runs test files in parallel, so a hardcoded shared path unlinked the cache out from under
+// whichever other file happened to be running at the same time.
+const TEST_DB = config.cache.dbPath
 
 function clearDb(): void {
   if (fs.existsSync(TEST_DB)) {
     fs.unlinkSync(TEST_DB)
+  }
+}
+
+function match(overrides: Partial<ProviderMatch> = {}): ProviderMatch {
+  return {
+    nutrients: {
+      kcalPer100g: 364, proteinPer100g: 10, carbsPer100g: 76, fatPer100g: 1,
+      saturatedFatPer100g: 0.2, transFatPer100g: 0, unsaturatedFatPer100g: 0.8,
+      fiberPer100g: 2.7, sugarPer100g: 0.4, sodiumPer100g: 0.002, cholesterolPer100g: 0,
+    },
+    canonicalName: "Mehl",
+    brand: null,
+    state: "unknown",
+    provider: "usda",
+    providerId: "Mehl",
+    productName: "Mehl",
+    confidence: 0.7,
+    ...overrides,
   }
 }
 
@@ -24,44 +51,150 @@ describe("cache", () => {
     clearDb()
   })
 
-  beforeEach(() => {
-    setCachedNutrients("flour", {
-      kcalPer100g: 364, proteinPer100g: 10, carbsPer100g: 76, fatPer100g: 1,
-      saturatedFatPer100g: 0.2, transFatPer100g: 0, unsaturatedFatPer100g: 0.8,
-      fiberPer100g: 2.7, sugarPer100g: 0.4, sodiumPer100g: 0.002, cholesterolPer100g: 0,
+  describe("provider match cache", () => {
+    it("stores and retrieves a provider match", () => {
+      const key = buildQueryKey("flour", null)
+      setCachedProviderMatch("usda", key, match())
+      const cached = getCachedProviderMatch("usda", key)
+      expect(cached?.nutrients.kcalPer100g).toBe(364)
+      expect(cached?.canonicalName).toBe("Mehl")
     })
-    setCachedNutrients("sugar", {
-      kcalPer100g: 387, proteinPer100g: 0, carbsPer100g: 100, fatPer100g: 0,
-      saturatedFatPer100g: 0, transFatPer100g: 0, unsaturatedFatPer100g: 0,
-      fiberPer100g: 0, sugarPer100g: 100, sodiumPer100g: 0, cholesterolPer100g: 0,
+
+    it("is case-insensitive via buildQueryKey", () => {
+      const key = buildQueryKey("FLOUR", null)
+      setCachedProviderMatch("usda", key, match())
+      expect(getCachedProviderMatch("usda", buildQueryKey("flour", null))?.nutrients.kcalPer100g).toBe(364)
     })
-    markUnmatchedFood("unknown-spice")
+
+    it("returns undefined for uncached queries", () => {
+      expect(getCachedProviderMatch("usda", buildQueryKey("nonexistent-food", null))).toBeUndefined()
+    })
+
+    it("round-trips foodType and matchReason through a cache write + read", () => {
+      // Found live in the mandatory manual-provenance audit: foodType/matchReason were added to
+      // ProviderMatch without a matching cache-column migration, so every cache HIT silently lost
+      // them — a fresh provider fetch had them populated in memory, but a subsequent cache hit for
+      // the identical query returned undefined for both, inconsistently, across recipes.
+      const key = buildQueryKey("Kreuzkümmel", null)
+      setCachedProviderMatch("usda", key, match({ foodType: "simple", matchReason: "fuzzy" }))
+      const cached = getCachedProviderMatch("usda", key)
+      expect(cached?.foodType).toBe("simple")
+      expect(cached?.matchReason).toBe("fuzzy")
+    })
+
+    it("round-trips a null/absent foodType and matchReason as undefined, not the literal string \"null\"", () => {
+      const key = buildQueryKey("Unbekannt", null)
+      setCachedProviderMatch("usda", key, match({ foodType: undefined, matchReason: undefined }))
+      const cached = getCachedProviderMatch("usda", key)
+      expect(cached?.foodType).toBeUndefined()
+      expect(cached?.matchReason).toBeUndefined()
+    })
+
+    it("does not poison cache between a generic and branded lookup of the same food name", () => {
+      const genericKey = buildQueryKey("Joghurt", null)
+      const brandedKey = buildQueryKey("Joghurt", "Danone")
+      expect(genericKey).not.toBe(brandedKey)
+
+      setCachedProviderMatch("usda", genericKey, match({ brand: null, confidence: 0.7 }))
+      setCachedProviderMatch("off", brandedKey, match({ brand: "Danone", confidence: 0.9, provider: "off" }))
+
+      expect(getCachedProviderMatch("usda", genericKey)?.brand).toBeNull()
+      expect(getCachedProviderMatch("off", brandedKey)?.brand).toBe("Danone")
+    })
+
+    it("keeps different providers' cache entries for the same query key independent", () => {
+      const key = buildQueryKey("Tomate", null)
+      setCachedProviderMatch("usda", key, match({ provider: "usda", confidence: 0.7 }))
+      setCachedProviderMatch("off", key, match({ provider: "off", confidence: 0.85 }))
+
+      expect(getCachedProviderMatch("usda", key)?.confidence).toBe(0.7)
+      expect(getCachedProviderMatch("off", key)?.confidence).toBe(0.85)
+    })
   })
 
-  it("stores and retrieves nutrient objects", () => {
-    expect(getCachedNutrients("flour")?.kcalPer100g).toBe(364)
-    expect(getCachedNutrients("sugar")?.kcalPer100g).toBe(387)
+  describe("provider miss cache", () => {
+    it("tracks a known miss", () => {
+      const key = buildQueryKey("unknown-spice", null)
+      expect(isProviderMiss("off", key)).toBe(false)
+      markProviderMiss("off", key)
+      expect(isProviderMiss("off", key)).toBe(true)
+    })
+
+    it("keeps misses independent per provider", () => {
+      const key = buildQueryKey("some-obscure-food", null)
+      markProviderMiss("off", key)
+      expect(isProviderMiss("off", key)).toBe(true)
+      expect(isProviderMiss("usda", key)).toBe(false)
+    })
   })
 
-  it("is case-insensitive", () => {
-    expect(getCachedNutrients("FLOUR")?.kcalPer100g).toBe(364)
-  })
+  describe("LLM caches", () => {
+    beforeEach(() => {
+      config.llm.enabled = true
+      config.llm.apiKey = "test"
+    })
 
-  it("returns undefined for uncached foods", () => {
-    expect(getCachedNutrients("butter")).toBeUndefined()
-  })
+    it("stores and retrieves an LLM gram estimate", () => {
+      setCachedLlmEstimate("Dose", "Tomaten", 400)
+      expect(getCachedLlmEstimate("Dose", "Tomaten")).toBe(400)
+    })
 
-  it("tracks unmatched foods", () => {
-    expect(isUnmatchedFood("unknown-spice")).toBe(true)
-    expect(isUnmatchedFood("flour")).toBe(false)
-  })
+    it("stores and retrieves LLM nutrient estimates", () => {
+      setCachedLlmNutrients("obscure-food", match().nutrients)
+      expect(getCachedLlmNutrients("obscure-food")?.kcalPer100g).toBe(364)
+    })
 
-  it("is case-insensitive for unmatched foods", () => {
-    expect(isUnmatchedFood("Unknown-Spice")).toBe(true)
+    it("keys LLM nutrient cache rows with a version prefix, distinct from the plain normalized name", () => {
+      // Guards against reusing values cached under an older, ambiguous-units LLM prompt after
+      // an upgrade: bumping the version here (see cache.ts) is what makes pre-upgrade rows,
+      // keyed on the plain normalized name, permanently unreadable rather than silently reused.
+      const key = llmNutrientCacheKey("Some Food")
+      expect(key).not.toBe(normalizeKey("Some Food"))
+      expect(key).toMatch(/^v\d+:/)
+    })
   })
 
   it("reports cache stats", () => {
+    setCachedProviderMatch("usda", buildQueryKey("stats-food", null), match())
+    markProviderMiss("off", buildQueryKey("stats-miss", null))
     const stats = getCacheStats()
-    expect(stats.size).toBeGreaterThan(0)
+    expect(stats.providerMatches).toBeGreaterThan(0)
+    expect(stats.providerMisses).toBeGreaterThan(0)
+  })
+
+  it("survives a flush + reload cycle (container restart)", async () => {
+    const key = buildQueryKey("restart-test-food", null)
+    setCachedProviderMatch("usda", key, match({ canonicalName: "RestartFood" }))
+    flushCache()
+
+    expect(fs.existsSync(TEST_DB)).toBe(true)
+    const buffer = fs.readFileSync(TEST_DB)
+    expect(buffer.length).toBeGreaterThan(0)
+
+    // Prove real persistence, not just "a file got written": load the exported bytes into a
+    // brand new sql.js Database (simulating a fresh process reading the file after a restart)
+    // and query the row back directly, independent of the module's own in-memory db handle.
+    const initSqlJs = (await import("sql.js")).default
+    const SQL = await initSqlJs()
+    const reloaded = new SQL.Database(buffer)
+    const stmt = reloaded.prepare("SELECT canonical_name FROM provider_match_cache WHERE provider = ? AND query_key = ?")
+    stmt.bind(["usda", key])
+    expect(stmt.step()).toBe(true)
+    expect((stmt.getAsObject() as { canonical_name: string }).canonical_name).toBe("RestartFood")
+    stmt.free()
+    reloaded.close()
+  })
+
+  it("a fresh module instance calling initCache() against the same file (a real process restart) reads back prior writes", async () => {
+    const key = buildQueryKey("true-restart-food", null)
+    setCachedProviderMatch("usda", key, match({ canonicalName: "TrueRestartFood" }))
+    flushCache()
+
+    vi.resetModules()
+    const freshCacheModule = await import("../src/utils/cache.js")
+    await freshCacheModule.initCache()
+
+    const reloadedMatch = freshCacheModule.getCachedProviderMatch("usda", key)
+    expect(reloadedMatch?.canonicalName).toBe("TrueRestartFood")
   })
 })

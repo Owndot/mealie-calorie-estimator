@@ -148,7 +148,7 @@ describe("computeTags", () => {
 })
 
 describe("perServingFromRecipeNutrition", () => {
-  it("parses nutrition data into NutrientSet", () => {
+  it("parses nutrition data into NutrientSet, converting sodium/cholesterol from Mealie's milligrams back to internal grams", () => {
     const nutrition: MealieNutrition = {
       calories: "450",
       fatContent: "20",
@@ -156,8 +156,8 @@ describe("perServingFromRecipeNutrition", () => {
       carbohydrateContent: "40",
       fiberContent: "5",
       sugarContent: "10",
-      sodiumContent: "800",
-      cholesterolContent: "100",
+      sodiumContent: "800", // 800 mg, as stored in Mealie
+      cholesterolContent: "100", // 100 mg, as stored in Mealie
       saturatedFatContent: "8",
       transFatContent: "1",
       unsaturatedFatContent: "11",
@@ -170,8 +170,8 @@ describe("perServingFromRecipeNutrition", () => {
     expect(result.carbsPer100g).toBe(40)
     expect(result.fiberPer100g).toBe(5)
     expect(result.sugarPer100g).toBe(10)
-    expect(result.sodiumPer100g).toBe(800)
-    expect(result.cholesterolPer100g).toBe(100)
+    expect(result.sodiumPer100g).toBe(0.8)
+    expect(result.cholesterolPer100g).toBe(0.1)
     expect(result.saturatedFatPer100g).toBe(8)
     expect(result.transFatPer100g).toBe(1)
     expect(result.unsaturatedFatPer100g).toBe(11)

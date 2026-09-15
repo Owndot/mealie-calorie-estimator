@@ -20,6 +20,7 @@ COPY --from=license / /
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm install @rolldown/binding-linux-x64-gnu --no-save
 COPY --from=builder /app/dist ./dist
+COPY resources ./resources
 RUN mkdir -p /app/data && \
     adduser -D -u 1000 appuser && \
     chown -R appuser:appuser /app
