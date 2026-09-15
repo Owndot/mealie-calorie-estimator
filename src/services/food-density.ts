@@ -54,6 +54,19 @@ const CATEGORY_DENSITIES: CategoryEntry[] = [
     density: { tablespoon: 21, teaspoon: 7, cup: 340, pinch: 0.6 },
   },
   {
+    // MUST precede the flour category. "Paniermehl" is linguistically a -mehl compound but is
+    // semantically breadcrumbs, so the "mehl" head would otherwise hand it flour's density. The
+    // fix is an explicit category rather than an exclusion: excluding it would drop it to the
+    // generic-solid DEFAULT (0.8 g/ml), which is further from breadcrumbs than flour was.
+    //
+    // Real breadcrumb density spans ~0.2 g/ml (panko, fresh) to ~0.45 (fine dried Paniermehl), so
+    // no single number is right; 0.4 g/ml is a deliberate middle that is clearly distinct from
+    // flour and never more than ~2x off for any breadcrumb type.
+    keywords: ["paniermehl", "semmelbroesel", "broesel", "breadcrumbs", "panko", "bread crumbs"],
+    compoundHeads: ["broesel"],
+    density: { tablespoon: 6, teaspoon: 2, cup: 96, pinch: 0.25 },
+  },
+  {
     keywords: ["mehl", "flour", "staerke", "starch", "puderzucker"],
     compoundHeads: ["mehl"],
     density: { tablespoon: 7.8, teaspoon: 2.6, cup: 120, pinch: 0.3 },

@@ -141,3 +141,34 @@ describe("identity-aware density resolution", () => {
     expect(estimateSpoonCupGrams(1, "el", "Parmesan")).toBe(12) // plain cheese -> generic default
   })
 })
+
+// Paniermehl is linguistically a -mehl compound but semantically breadcrumbs. The "mehl" compound
+// head would silently hand it flour's density (0.52 g/ml) — the kind of semantic accident the head
+// rule can produce, so breadcrumbs get their own category ahead of flour. An exclusion would be
+// worse than the bug: it would drop to the generic-solid DEFAULT (0.8 g/ml).
+describe("compound-head semantic exceptions", () => {
+  const ml = (n: string) => estimateVolumeGrams(100, "ml", n)
+
+  it("does not give Paniermehl flour density", () => {
+    expect(ml("Paniermehl")).not.toBe(52)   // flour
+    expect(ml("Paniermehl")).not.toBe(80)   // generic-solid default
+    expect(ml("Paniermehl")).toBe(40)       // breadcrumb category
+  })
+
+  it("covers the German and English breadcrumb names", () => {
+    for (const n of ["Paniermehl", "Semmelbrösel", "Semmelbrösel", "breadcrumbs", "panko", "bread crumbs"]) {
+      expect(ml(n)).toBe(40)
+    }
+  })
+
+  it("keeps every real -mehl flour matching flour", () => {
+    for (const n of ["Dinkelmehl", "Vollkornmehl", "Weizenmehl", "Mandelmehl", "Kokosmehl", "Kichererbsenmehl", "Mehl"]) {
+      expect(ml(n)).toBe(52)
+    }
+  })
+
+  it("Puderzucker still resolves as a fine powder, not as granulated sugar", () => {
+    expect(ml("Puderzucker")).toBe(52)
+    expect(ml("Rohrzucker")).toBeCloseTo(83.3, 1)
+  })
+})
