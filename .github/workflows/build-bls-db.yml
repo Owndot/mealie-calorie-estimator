@@ -22,6 +22,18 @@ jobs:
           python-version: '3.12'
       - name: Install builder dependencies
         run: pip install --disable-pip-version-check openpyxl requests
+      - name: Adapt parser to current BLS workbook layout
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/build_bls_ingredients_db.py')
+          s = p.read_text()
+          old = '''    if (len(header) - 3) % 3 != 0:\n        raise RuntimeError(f"Unexpected BLS column count: {len(header)}")\n\n    nutrient_columns: list[tuple[int, str, str, str | None, str]] = []\n    for col in range(3, len(header), 3):\n'''
+          new = '''    # BLS 4.0 currently has one trailing non-nutrient column after the\n    # 138 value/origin/reference triplets. Parse exactly those 138 triplets\n    # and ignore any later non-nutrient metadata columns.\n    required_columns = 3 + EXPECTED_NUTRIENTS * 3\n    if len(header) < required_columns:\n        raise RuntimeError(f"BLS workbook too short: {len(header)} columns")\n\n    nutrient_columns: list[tuple[int, str, str, str | None, str]] = []\n    for col in range(3, required_columns, 3):\n'''
+          if old not in s:
+              raise SystemExit('expected parser block not found')
+          p.write_text(s.replace(old, new))
+          PY
       - name: Build lossless SQLite subset
         run: python scripts/build_bls_ingredients_db.py
       - name: Show validation report
