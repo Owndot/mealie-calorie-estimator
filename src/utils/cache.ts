@@ -251,8 +251,22 @@ export function markProviderMiss(provider: string, queryKey: string): void {
   scheduleSave()
 }
 
+/**
+ * v2: volume units (ml/l) now cache a food-specific DENSITY in g/ml under one shared unit key
+ * instead of grams-per-one-unit per unit name. Pre-v2 rows hold values on the old scale — and at
+ * least one live row held a physically impossible 100 "grams per 1 ml", which is what turned
+ * 750 ml of Gemuesebruehe into 75000 g on every run until it expired. Prefixing the key means
+ * those rows are simply never matched again (no silent scale mismatch on upgrade) and they
+ * self-expire via the normal TTL sweep. Bump this again if the value shape/units ever change.
+ */
+const LLM_ESTIMATE_CACHE_KEY_VERSION = "v2"
+
+export function llmEstimateCacheKey(unitName: string, foodName: string): string {
+  return `${LLM_ESTIMATE_CACHE_KEY_VERSION}:${normalizeKey(unitName)}|${normalizeKey(foodName)}`
+}
+
 export function getCachedLlmEstimate(unitName: string, foodName: string): number | undefined {
-  const key = `${normalizeKey(unitName)}|${normalizeKey(foodName)}`
+  const key = llmEstimateCacheKey(unitName, foodName)
   const stmt = db.prepare("SELECT grams, updated_at FROM llm_estimate_cache WHERE lookup_key = ?")
   stmt.bind([key])
   try {
@@ -270,7 +284,7 @@ export function getCachedLlmEstimate(unitName: string, foodName: string): number
 }
 
 export function setCachedLlmEstimate(unitName: string, foodName: string, grams: number): void {
-  const key = `${normalizeKey(unitName)}|${normalizeKey(foodName)}`
+  const key = llmEstimateCacheKey(unitName, foodName)
   const now = Date.now()
   db.run(
     `INSERT INTO llm_estimate_cache (lookup_key, grams, updated_at) VALUES (?, ?, ?)

@@ -17,6 +17,48 @@ function numOrNull(v: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * Volume units, and how many millilitres one of them is. These are the only units whose LLM answer
+ * can be validated physically: grams-per-millilitre is a DENSITY, and every edible substance sits
+ * in a narrow, food-independent band. Piece/package units deliberately get no such treatment —
+ * see CATASTROPHIC_DENSITY_* below.
+ */
+const VOLUME_UNIT_ML: Record<string, number> = {
+  ml: 1, milliliter: 1, milliliters: 1, millilitre: 1, millilitres: 1,
+  l: 1000, liter: 1000, liters: 1000, litre: 1000, litres: 1000,
+}
+
+/**
+ * A deliberately BROAD catastrophic-error guard, not a density classifier. Its only job is to
+ * reject order-of-magnitude nonsense such as the 100 g/ml that turned 750 ml of Gemuesebruehe into
+ * 75 kg. Real edible densities run from roughly 0.1 g/ml (aerated/puffed) to 1.5 g/ml (honey,
+ * syrup); these bounds leave ~20x headroom on both sides so no legitimate food is ever rejected.
+ *
+ * There is deliberately NO equivalent bound for Stueck/Bund/Dose/Glas/Packung: one "Stueck" spans
+ * a caper (~0.1 g) to a whole turkey (~10 kg) and one "Dose" spans 70 g of tomato paste to a 5 kg
+ * catering tin, so any universal ceiling would reject legitimate foods. Those units keep only the
+ * existing finite/positive check, and remain a documented gap.
+ */
+const CATASTROPHIC_DENSITY_MIN_G_PER_ML = 0.05
+const CATASTROPHIC_DENSITY_MAX_G_PER_ML = 5.0
+
+/** The reference volume we ask about. The live failure was a per-100-ml answer to a per-1-ml
+ * question, so we now ask at the scale the model naturally answers and divide back down. */
+const DENSITY_REFERENCE_ML = 100
+
+function volumeUnitMl(unitName: string): number | null {
+  return VOLUME_UNIT_ML[unitName.toLowerCase().trim()] ?? null
+}
+
+/**
+ * Volume estimates are cached as a food-specific DENSITY under one shared key, so millilitres and
+ * litres of the same food can never disagree (previously "Liter"/"Milliliter" were separate
+ * entries holding values on different scales).
+ */
+function densityCacheUnitKey(): string {
+  return "__density_g_per_ml"
+}
+
 export async function estimateGrams(quantity: number, unitName: string, foodName: string): Promise<number | null> {
   if (!config.llm.enabled) return null
   if (!config.llm.apiKey) {
@@ -24,14 +66,24 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
     return null
   }
 
-  const cached = getCachedLlmEstimate(unitName, foodName)
+  const mlPerUnit = volumeUnitMl(unitName)
+  const cacheUnitKey = mlPerUnit !== null ? densityCacheUnitKey() : unitName
+
+  const cached = getCachedLlmEstimate(cacheUnitKey, foodName)
   if (cached !== undefined) {
-    const totalGrams = cached * quantity
-    logger.debug({ unitName, foodName, gramsPerUnit: cached, totalGrams }, "LLM estimate cache hit")
+    const totalGrams = mlPerUnit !== null ? cached * mlPerUnit * quantity : cached * quantity
+    logger.debug(
+      mlPerUnit !== null
+        ? { unitName, foodName, gramsPerMl: cached, totalGrams }
+        : { unitName, foodName, gramsPerUnit: cached, totalGrams },
+      "LLM estimate cache hit",
+    )
     return totalGrams
   }
 
-  const prompt = `Estimate the weight in grams for 1 ${unitName} of ${foodName}. Consider typical packaging sizes and food densities. Return ONLY a single number (the weight in grams). No explanation, no unit, no punctuation. If you cannot estimate, return 0.`
+  const prompt = mlPerUnit !== null
+    ? `Estimate the weight in grams of ${DENSITY_REFERENCE_ML} ml of ${foodName}. Consider the food's density (${DENSITY_REFERENCE_ML} ml of water is 100 g; of oil about 91 g). Return ONLY a single number (the weight in grams for ${DENSITY_REFERENCE_ML} ml). No explanation, no unit, no punctuation. If you cannot estimate, return 0.`
+    : `Estimate the weight in grams for 1 ${unitName} of ${foodName}. Consider typical packaging sizes and food densities. Return ONLY a single number (the weight in grams). No explanation, no unit, no punctuation. If you cannot estimate, return 0.`
 
   try {
     await waitForRateLimit(RateLimitType.Llm)
@@ -71,10 +123,29 @@ export async function estimateGrams(quantity: number, unitName: string, foodName
       return null
     }
 
+    if (mlPerUnit !== null) {
+      // Normalize to a density BEFORE any multiplication, and validate it there. The live failure
+      // multiplied an unvalidated 100 g/ml by 750 ml and wrote it to the cache, so the 75 kg then
+      // came back on every later run without another LLM call.
+      const gramsPerMl = num / DENSITY_REFERENCE_ML
+      if (gramsPerMl < CATASTROPHIC_DENSITY_MIN_G_PER_ML || gramsPerMl > CATASTROPHIC_DENSITY_MAX_G_PER_ML) {
+        logger.warn(
+          { unitName, foodName, gramsPerMl, referenceMl: DENSITY_REFERENCE_ML, llmGrams: num,
+            allowed: `${CATASTROPHIC_DENSITY_MIN_G_PER_ML}-${CATASTROPHIC_DENSITY_MAX_G_PER_ML} g/ml` },
+          "LLM density estimate is physically impossible — rejected, not cached",
+        )
+        return null
+      }
+      const totalGrams = gramsPerMl * mlPerUnit * quantity
+      setCachedLlmEstimate(cacheUnitKey, foodName, gramsPerMl)
+      logger.debug({ unitName, foodName, gramsPerMl, totalGrams }, "LLM estimate obtained")
+      return totalGrams
+    }
+
     const gramsPerUnit = num
     const totalGrams = gramsPerUnit * quantity
 
-    setCachedLlmEstimate(unitName, foodName, gramsPerUnit)
+    setCachedLlmEstimate(cacheUnitKey, foodName, gramsPerUnit)
     logger.debug({ unitName, foodName, gramsPerUnit, totalGrams }, "LLM estimate obtained")
 
     return totalGrams

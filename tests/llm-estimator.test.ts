@@ -229,3 +229,73 @@ describe("estimateNutrients — final per-ingredient fallback only", () => {
     expect(result).toBeNull()
   })
 })
+
+// Found live: "750 Milliliter Gemuesebruehe" reached this estimator because the density table
+// missed the German compound, the model answered "100" to "grams for 1 Milliliter" (a per-100ml
+// answer to a per-1ml question), and 100 x 750 = 75000 g was multiplied AND cached with nothing
+// in between inspecting it. The recipe then read 1831 kcal/serving instead of 396.
+describe("volume units: g/ml contract and catastrophic-error guard", () => {
+  const reply = (n: string) => ({ ok: true, json: async () => ({ choices: [{ message: { content: n } }] }) })
+
+  beforeEach(() => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+  })
+
+  it("asks for a reference volume (100 ml), not for 1 ml", async () => {
+    const fetchMock = vi.fn(async () => reply("100"))
+    vi.stubGlobal("fetch", fetchMock)
+    await estimateGrams(750, "Milliliter", "Gemüsebrühe")
+    const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content
+    expect(prompt).toContain("100 ml")
+    expect(prompt).not.toMatch(/for 1 Milliliter/)
+  })
+
+  it("interprets the answer as grams per 100 ml — 750 ml of broth is 750 g, not 75000 g", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply("100")))
+    expect(await estimateGrams(750, "Milliliter", "Gemüsebrühe")).toBe(750)
+  })
+
+  it("rejects a physically impossible density before multiplying AND before caching", async () => {
+    // 5000 g per 100 ml = 50 g/ml — the same class of answer as the live 100 g/ml.
+    const fetchMock = vi.fn(async () => reply("5000"))
+    vi.stubGlobal("fetch", fetchMock)
+
+    expect(await estimateGrams(750, "Milliliter", "Gemüsebrühe")).toBeNull()
+
+    // Nothing was written: a second call must go back to the LLM rather than replay the poison.
+    await estimateGrams(750, "Milliliter", "Gemüsebrühe")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it("rejects an impossibly light density too", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => reply("1"))) // 0.01 g/ml
+    expect(await estimateGrams(500, "ml", "Suppe")).toBeNull()
+  })
+
+  it("accepts the full range of real foods (oil, water, honey)", async () => {
+    for (const [answer, expected] of [["91", 91], ["100", 100], ["142", 142]] as const) {
+      clearLlmCache()
+      vi.stubGlobal("fetch", vi.fn(async () => reply(answer)))
+      expect(await estimateGrams(100, "ml", `food-${answer}`)).toBeCloseTo(expected, 6)
+    }
+  })
+
+  it("shares one density entry between Milliliter and Liter — they can never disagree", async () => {
+    const fetchMock = vi.fn(async () => reply("100"))
+    vi.stubGlobal("fetch", fetchMock)
+
+    expect(await estimateGrams(500, "Milliliter", "Brühe")).toBe(500)
+    expect(await estimateGrams(1.5, "Liter", "Brühe")).toBe(1500) // cache hit, scaled by 1000
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("leaves piece/package units on the per-unit contract with no density bound", async () => {
+    const fetchMock = vi.fn(async () => reply("5000"))
+    vi.stubGlobal("fetch", fetchMock)
+    // 5 kg for one Dose is unusual but legitimate (catering tin) — deliberately NOT rejected.
+    expect(await estimateGrams(1, "Dose", "Tomaten")).toBe(5000)
+    const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content
+    expect(prompt).toContain("1 Dose")
+  })
+})
