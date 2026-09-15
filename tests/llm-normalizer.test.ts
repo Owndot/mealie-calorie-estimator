@@ -291,37 +291,6 @@ describe("batch normalization failure diagnostics", () => {
     expect(warn.mock.calls[0][0]).toMatchObject({ contentType: "undefined", finishReason: "length" })
   })
 
-  // A duplicate/out-of-range index is silently absorbed by byIndex: the affected ingredient just
-  // gets the deterministic fallback while the batch still counts as a success. Without this
-  // warning that is indistinguishable from a clean run, so it is reported even on acceptance.
-  it("reports duplicate indices on an otherwise-accepted batch, without changing acceptance", async () => {
-    const warn = captureWarnings()
-    const item = (index: unknown) => ({ index, canonicalGerman: "X", canonicalEnglish: "x", brand: null,
-      state: "raw", category: null, foodType: "simple", coreFoodGerman: null, coreFoodEnglish: null })
-    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([item(0), item(0)]))))
-
-    const result = await normalizeIngredients(INPUTS)
-
-    expect(warn.mock.calls[0][0]).toMatchObject({ phase: "index-integrity", indexIssues: { duplicate: 1 } })
-    // Acceptance unchanged: index 0 is classified, index 1 was never returned -> deterministic.
-    expect(result[0].llmClassified).toBe(true)
-    expect(result[1].llmClassified).toBe(false)
-  })
-
-  it("reports out-of-range indices on an otherwise-accepted batch", async () => {
-    const warn = captureWarnings()
-    const item = (index: unknown) => ({ index, canonicalGerman: "X", canonicalEnglish: "x", brand: null,
-      state: "raw", category: null, foodType: "simple", coreFoodGerman: null, coreFoodEnglish: null })
-    // 1-based indices instead of 0-based: every ingredient silently degrades today.
-    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([item(1), item(2)]))))
-
-    const result = await normalizeIngredients(INPUTS)
-
-    expect(warn.mock.calls[0][0]).toMatchObject({ phase: "index-integrity", indexIssues: { outOfRange: 1 } })
-    expect(result[1].llmClassified).toBe(true)
-    expect(result[0].llmClassified).toBe(false)
-  })
-
   it("never logs the raw response content or the API key", async () => {
     const warn = captureWarnings()
     vi.stubGlobal("fetch", vi.fn(async () => chatResponse("SECRET-RESPONSE-BODY not json")))
@@ -329,5 +298,173 @@ describe("batch normalization failure diagnostics", () => {
     const serialized = JSON.stringify(warn.mock.calls)
     expect(serialized).not.toContain("SECRET-RESPONSE-BODY")
     expect(serialized).not.toContain("test-key")
+  })
+})
+
+// Found live: `Tomatenmark` came back as state:"processed" (not in the enum) and the old
+// all-or-nothing validation threw away all 15 classifications for the recipe — which is what let
+// 750 ml Gemuesebruehe resolve from its raw German name to 75000 g. One bad item must now cost
+// exactly one ingredient.
+describe("per-item recovery and coverage-based retry", () => {
+  const good = (index: number, de: string, en: string) => ({
+    index, canonicalGerman: de, canonicalEnglish: en, brand: null, state: "unknown",
+    category: null, foodType: "simple", coreFoodGerman: de, coreFoodEnglish: en,
+  })
+  const inputs = (n: number) => Array.from({ length: n }, (_, i) => ({ index: i, foodName: `Food${i}`, unitName: "g" }))
+
+  beforeEach(() => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+  })
+
+  it("keeps the 14 valid items when 1 of 15 fails validation, and does NOT retry at 93% coverage", async () => {
+    const items = inputs(15).map((i) => good(i.index, `DE${i.index}`, `en${i.index}`))
+    ;(items[8] as any).state = "processed" // the exact live failure
+    const fetchMock = vi.fn(async () => chatResponse(JSON.stringify(items)))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await normalizeIngredients(inputs(15))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1) // coverage 14/15 = 93% >= 80%, no retry
+    expect(result.filter((r) => r.llmClassified)).toHaveLength(14)
+    expect(result[8].llmClassified).toBe(false)
+    expect(result[8].canonicalEnglish).toBe("Food8") // deterministic fallback, alone
+    expect(result[0].canonicalEnglish).toBe("en0")   // neighbours untouched
+    expect(result[14].canonicalEnglish).toBe("en14")
+  })
+
+  it("retries once when coverage is below the threshold (2 of 15 valid)", async () => {
+    const first = [good(0, "DE0", "en0"), good(1, "DE1", "en1")]
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(first)))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify(inputs(15).map((i) => good(i.index, `R${i.index}`, `r${i.index}`)))))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await normalizeIngredients(inputs(15))
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result.every((r) => r.llmClassified)).toBe(true)
+    // attempt 1 wins for the indices it supplied; the retry only fills the rest
+    expect(result[0].canonicalEnglish).toBe("en0")
+    expect(result[1].canonicalEnglish).toBe("en1")
+    expect(result[2].canonicalEnglish).toBe("r2")
+  })
+
+  it("never lets a retry overwrite an item that already validated in attempt 1", async () => {
+    // Attempt 1 supplies index 0 (below threshold, so a retry happens); the retry returns a
+    // DIFFERENT but perfectly valid classification for index 0. Attempt 1 must still win.
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(chatResponse(JSON.stringify([good(0, "Zwiebel", "onion")])))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify([good(0, "Knoblauch", "garlic"), good(1, "Salz", "salt")])))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await normalizeIngredients(inputs(2))
+
+    expect(result[0].canonicalEnglish).toBe("onion")  // NOT "garlic"
+    expect(result[0].canonicalGerman).toBe("Zwiebel")
+    expect(result[1].canonicalEnglish).toBe("salt")   // filled by the retry
+  })
+
+  it("associates items by their returned index, not by array position (reordered response)", async () => {
+    const shuffled = [good(2, "DE2", "en2"), good(0, "DE0", "en0"), good(1, "DE1", "en1")]
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify(shuffled))))
+
+    const result = await normalizeIngredients(inputs(3))
+
+    expect(result.map((r) => r.canonicalEnglish)).toEqual(["en0", "en1", "en2"])
+  })
+
+  it("rejects a duplicate index instead of letting it overwrite its twin", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger as never)
+    // Both claim index 0; the second is unattributable and must be dropped, not applied.
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([good(0, "Zwiebel", "onion"), good(0, "Knoblauch", "garlic")]))))
+
+    const result = await normalizeIngredients(inputs(2))
+
+    expect(result[0].canonicalEnglish).toBe("onion") // first wins, duplicate discarded
+    expect(result[1].llmClassified).toBe(false)      // never supplied -> deterministic
+    expect(warn.mock.calls.some((c) => (c[0] as any)?.indexIssues?.duplicate === 1)).toBe(true)
+  })
+
+  it("rejects out-of-range indices (e.g. a 1-based response) rather than misattributing them", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger as never)
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([good(1, "DE1", "en1"), good(2, "DE2", "en2")]))))
+
+    const result = await normalizeIngredients(inputs(2))
+
+    expect(result[1].canonicalEnglish).toBe("en1") // index 1 is in range and legitimately applies
+    expect(result[0].llmClassified).toBe(false)    // index 2 is out of range -> dropped
+    expect(warn.mock.calls.some((c) => (c[0] as any)?.indexIssues?.outOfRange === 1)).toBe(true)
+  })
+
+  it("rejects a non-integer index", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => chatResponse(JSON.stringify([{ ...good(0, "DE", "en"), index: 0.5 }]))))
+    const result = await normalizeIngredients(inputs(1))
+    expect(result[0].llmClassified).toBe(false)
+  })
+
+  it("still falls back deterministically for every ingredient when nothing validates", async () => {
+    const fetchMock = vi.fn(async () => chatResponse(JSON.stringify([{ index: 0, bogus: true }])))
+    vi.stubGlobal("fetch", fetchMock)
+    const result = await normalizeIngredients(inputs(3))
+    expect(fetchMock).toHaveBeenCalledTimes(2) // 0% coverage -> one retry
+    expect(result.every((r) => r.llmClassified === false)).toBe(true)
+  })
+})
+
+// The live failure was state:"processed" on Tomatenmark, six times in a row. The old retry hint
+// asserted the response "was not valid JSON matching the required shape" — but the JSON was
+// perfect, so the model had no reason to change the one offending field.
+describe("enum guidance and retry correction", () => {
+  const promptOf = (m: any, call = 0) => JSON.parse(m.mock.calls[call][1].body).messages[0].content
+
+  beforeEach(() => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+  })
+
+  it("tells the model that state is preparation-only and that 'processed' is invalid there", async () => {
+    const fetchMock = vi.fn(async () => chatResponse("[]"))
+    vi.stubGlobal("fetch", fetchMock)
+    await normalizeIngredients([{ index: 0, foodName: "Tomatenmark", unitName: "g" }])
+
+    const p = promptOf(fetchMock)
+    expect(p).toMatch(/"processed"/)
+    expect(p).toMatch(/INVALID values for state|not allowed/i)
+    expect(p).toMatch(/preparation state/i)
+    // and it must still name the four legal values
+    for (const v of ["raw", "cooked", "dried", "unknown"]) expect(p).toContain(`"${v}"`)
+  })
+
+  it("the retry names the offending index, field, value and the allowed set — not 'invalid JSON'", async () => {
+    const bad = { index: 0, canonicalGerman: "Tomatenmark", canonicalEnglish: "tomato paste", brand: null,
+      state: "processed", category: "vegetable", foodType: "processed_single_food", coreFoodGerman: "Tomatenmark", coreFoodEnglish: "tomato paste" }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(chatResponse(JSON.stringify([bad])))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify([{ ...bad, state: "unknown" }])))
+    vi.stubGlobal("fetch", fetchMock)
+
+    const result = await normalizeIngredients([{ index: 0, foodName: "Tomatenmark", unitName: "g" }])
+
+    const retry = promptOf(fetchMock, 1)
+    expect(retry).toContain('index 0: "state" was "processed"')
+    expect(retry).toContain('"raw", "cooked", "dried", "unknown"')
+    expect(retry).not.toMatch(/was not valid JSON/i)
+    // and the corrected retry value is actually adopted
+    expect(result[0].llmClassified).toBe(true)
+    expect(result[0].state).toBe("unknown")
+  })
+
+  it("the retry explains an unusable index instead of blaming JSON validity", async () => {
+    const item = (index: unknown) => ({ index, canonicalGerman: "X", canonicalEnglish: "x", brand: null,
+      state: "raw", category: null, foodType: "simple", coreFoodGerman: null, coreFoodEnglish: null })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(chatResponse(JSON.stringify([item(0), item(0)])))
+      .mockResolvedValueOnce(chatResponse(JSON.stringify([item(0), item(1)])))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await normalizeIngredients([{ index: 0, foodName: "A", unitName: "g" }, { index: 1, foodName: "B", unitName: "g" }])
+
+    expect(promptOf(fetchMock, 1)).toMatch(/unusable "index"/)
   })
 })

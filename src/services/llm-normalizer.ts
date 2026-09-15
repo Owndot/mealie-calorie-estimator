@@ -80,25 +80,28 @@ interface ItemFailure {
   value?: string
 }
 
-/** Index integrity, recorded for diagnosis only — acceptance is deliberately unchanged here. */
+/** Index integrity counters. An item with an unusable index is rejected, not merely counted. */
 interface IndexIssues {
   nonInteger: number
   outOfRange: number
   duplicate: number
 }
 
+/**
+ * `ok: true` no longer means "every item was valid" — it means the response was a usable array.
+ * Individual items may still have failed; `items` carries the survivors and `failures` the rest.
+ */
 type ParseOutcome =
-  | { ok: true; items: RawItem[]; indexIssues: IndexIssues }
+  | { ok: true; items: RawItem[]; indexIssues: IndexIssues; failures: ItemFailure[]; expected: number }
   | { ok: false; phase: "json"; contentLength: number }
   | { ok: false; phase: "shape"; isArray: boolean; length: number | null; expected: number }
-  | {
-      ok: false
-      phase: "items"
-      expected: number
-      validCount: number
-      failures: ItemFailure[]
-      indexIssues: IndexIssues
-    }
+
+/**
+ * Coverage below which a second attempt is worth one extra request. 14/15 valid (93%) is not worth
+ * a retry — the 14 are kept and the odd one out degrades alone; 2/15 (13%) is. Always retried when
+ * nothing at all validated.
+ */
+const RETRY_COVERAGE_THRESHOLD = 0.8
 
 const ENUM_VALUE_MAX = 40
 
@@ -145,11 +148,18 @@ function validateItem(raw: unknown, position: number): { ok: true; item: RawItem
 }
 
 /**
- * Strict structural validation — malformed output must fail safely, not throw or half-apply.
+ * Strict per-item validation: a malformed item is dropped, never allowed to half-apply, and never
+ * allowed to take the rest of the batch down with it.
  *
- * Acceptance is intentionally IDENTICAL to before: any invalid item still fails the whole batch.
- * The only change is that every item is now inspected (instead of returning at the first bad one)
- * so the caller can report how many items were actually affected and which field broke.
+ * Found live: one ingredient out of fifteen came back with state:"processed" (not in the enum) and
+ * the old all-or-nothing validation discarded all fifteen classifications. The recipe then resolved
+ * every ingredient from its raw German name, which is how 750 ml Gemuesebruehe became 75000 g.
+ *
+ * Items are associated with ingredients STRICTLY by their returned `index`, never by array
+ * position — the model is free to reorder. An index that is not an integer, not in range, or a
+ * duplicate of one already seen is therefore not a cosmetic problem: it cannot be attributed to an
+ * ingredient at all, so it is rejected as invalid rather than silently absorbed (previously a
+ * duplicate silently overwrote its twin and an out-of-range index silently vanished).
  */
 function parseAndValidate(content: string, expectedCount: number): ParseOutcome {
   let parsed: unknown
@@ -177,17 +187,59 @@ function parseAndValidate(content: string, expectedCount: number): ParseOutcome 
       continue
     }
     const idx = result.item.index as number
-    if (!Number.isInteger(idx)) indexIssues.nonInteger++
-    else if (idx < 0 || idx >= expectedCount) indexIssues.outOfRange++
-    else if (seen.has(idx)) indexIssues.duplicate++
+    if (!Number.isInteger(idx)) {
+      indexIssues.nonInteger++
+      failures.push({ position, index: null, field: "index", reason: "not an integer" })
+      continue
+    }
+    if (idx < 0 || idx >= expectedCount) {
+      indexIssues.outOfRange++
+      failures.push({ position, index: idx, field: "index", reason: `out of range 0..${expectedCount - 1}` })
+      continue
+    }
+    if (seen.has(idx)) {
+      indexIssues.duplicate++
+      failures.push({ position, index: idx, field: "index", reason: "duplicate of an earlier item" })
+      continue
+    }
     seen.add(idx)
     items.push(result.item)
   }
 
-  if (failures.length > 0) {
-    return { ok: false, phase: "items", expected: expectedCount, validCount: items.length, failures, indexIssues }
+  return { ok: true, items, indexIssues, failures, expected: expectedCount }
+}
+
+/**
+ * The old retry always asserted "your previous response was not valid JSON matching the required
+ * shape". When the real problem was a single out-of-enum value the JSON had been perfectly valid,
+ * so the hint described the wrong defect and the model had no reason to change the offending
+ * field — observed live as six identical failures in a row on state:"processed". The hint now
+ * names the field, the value and the allowed set for the failures we actually saw.
+ */
+function buildRetryHint(failures: ItemFailure[], missing: number[]): string {
+  const lines: string[] = []
+  const enumFailures = failures.filter((f) => f.reason === "not in allowed enum")
+  for (const f of enumFailures.slice(0, 5)) {
+    const allowed = f.field === "state" ? VALID_STATES : VALID_FOOD_TYPES
+    lines.push(`- index ${f.index}: "${f.field}" was ${JSON.stringify(f.value)}, which is not allowed. Use exactly one of: ${allowed.map((v) => `"${v}"`).join(", ")}.`)
   }
-  return { ok: true, items, indexIssues }
+  const indexFailures = failures.filter((f) => f.field === "index")
+  if (indexFailures.length > 0) {
+    lines.push(`- ${indexFailures.length} item(s) had an unusable "index". Every object needs the integer index of the ingredient it describes, each used exactly once.`)
+  }
+  const other = failures.filter((f) => f.reason !== "not in allowed enum" && f.field !== "index")
+  for (const f of other.slice(0, 3)) {
+    lines.push(`- index ${f.index}: "${f.field}" ${f.reason}.`)
+  }
+
+  if (lines.length === 0) {
+    return `Your previous response could not be used for ingredient indices ${missing.join(", ")}. Return ONLY the JSON array, one object per ingredient, using the exact field shape and the exact allowed enum values listed above.`
+  }
+  return [
+    `Your previous response was rejected for these specific reasons:`,
+    ...lines,
+    `Return ONLY the JSON array again, covering ingredient indices ${missing.join(", ")}, fixing exactly those problems and keeping the required field shape.`,
+  ].join("\n")
 }
 
 function buildPrompt(inputs: NormalizerInput[]): string {
@@ -198,7 +250,7 @@ For each ingredient, return:
 - canonicalGerman: a normalized German food identity (fix spelling/dialect, keep it food-identity-only)
 - canonicalEnglish: the English translation of that same identity
 - brand: a specific product brand ONLY if it is explicitly present as text within the given "name" field — otherwise null; never infer a brand from general knowledge about the food
-- state: one of "raw", "cooked", "dried", "unknown" — only when clearly supported by the given name; do not guess if unsupported
+- state: EXACTLY one of these four values and nothing else: "raw", "cooked", "dried", "unknown". Only when clearly supported by the given name; use "unknown" rather than guessing. This field describes PREPARATION STATE only. It is NOT about how processed or manufactured the food is — that belongs in foodType below. Never answer with any other word here: "processed", "canned", "preserved", "frozen", "fresh", "ground", "powdered", "marinated" and similar are all INVALID values for state. A canned/preserved/processed item whose preparation is not stated is state "unknown" (for example tomato paste, canned tuna and paprika powder are all state "unknown", with their processed nature expressed as foodType "processed_single_food").
 - category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil", "water", "beverage", "condiment", "seasoning"), or null if unclear. Plain water ("Wasser") is category "water", not "beverage" or null — this field is used to reject a candidate whose name merely happens to share a word with the query (e.g. plain water must never accept a product literally named "water" that isn't water, like a cracker or a soft drink), so pick the most specific matching category rather than defaulting to null when one of the examples clearly fits.
 - foodType: one of "simple", "processed_single_food", "composite_dish", or "unknown" — see definitions and examples below. This field will be used to hard-reject a database match of the wrong type, so accuracy here matters more than most other fields.
 - coreFoodGerman: the CORE food-identity noun within canonicalGerman — the base food itself, with every descriptive MODIFIER (color, origin/style, state/preparation, brand) stripped away. This is the single most important field: a database candidate whose name contains none of this word's tokens will be HARD-REJECTED, no matter how well it otherwise matches on a shared adjective. Never include a modifier here — only the base noun(s). Examples: "Zwiebel" for "rote Zwiebel" (modifier "rote" excluded), "Gewürzmischung" for "italienische Gewürzmischung" (modifier "italienische" excluded — NOT "italienische Gewürzmischung", NOT "Italian"), "Basilikum" for "getrockneter Basilikum" (modifier "getrocknet" excluded), "Paprika" for "grüne Paprika" (modifier "grüne" excluded), "Brühe" for "Gemüsebrühe" (the compound's head noun — "Gemüse" is the modifier), "Knoblauch" for "Knoblauchzehe"/"Knoblauchpulver" (the food is garlic; "-zehe"/"-pulver" describe the FORM, not a different food). If canonicalGerman IS just the base food with no modifiers (e.g. "Tomate", "Ei", "Salz"), coreFoodGerman equals canonicalGerman. null only if genuinely unclear.
@@ -315,67 +367,78 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
 
   const prompt = buildPrompt(inputs)
 
-  const attemptOnce = async (p: string, attempt: number): Promise<RawItem[] | null> => {
+  const attemptOnce = async (p: string, attempt: number): Promise<{ items: RawItem[]; failures: ItemFailure[] }> => {
     const call = await callLlm(p, attempt)
-    if (!call.ok) return null // already logged with its specific phase
+    if (!call.ok) return { items: [], failures: [] } // already logged with its specific phase
 
     const outcome = parseAndValidate(call.content, inputs.length)
     if (outcome.ok) {
-      // Index integrity is reported even on an otherwise-accepted batch: a duplicate or
-      // out-of-range index makes byIndex silently drop an ingredient to the deterministic
-      // fallback, which previously looked identical to a clean success in the logs.
-      const { nonInteger, outOfRange, duplicate } = outcome.indexIssues
-      if (nonInteger + outOfRange + duplicate > 0) {
+      if (outcome.failures.length > 0) {
         logger.warn(
-          { attempt, phase: "index-integrity", expected: inputs.length, returned: outcome.items.length, indexIssues: outcome.indexIssues },
-          "LLM batch normalization: accepted batch has index integrity problems — some ingredients will fall back deterministically",
+          {
+            attempt,
+            phase: "items",
+            expected: outcome.expected,
+            validCount: outcome.items.length,
+            invalidCount: outcome.failures.length,
+            indexIssues: outcome.indexIssues,
+            // Bounded: the first few failures are enough to identify the offending field.
+            failures: outcome.failures.slice(0, 5),
+          },
+          "LLM batch normalization: some items failed validation and will fall back deterministically",
         )
       }
-      return outcome.items
+      return { items: outcome.items, failures: outcome.failures }
     }
 
     // One line per failure CLASS, structured metadata only — no response text, no recipe content.
     if (outcome.phase === "json") {
       logger.warn({ attempt, phase: "json", contentLength: outcome.contentLength }, "LLM batch normalization: content was not parseable JSON")
-    } else if (outcome.phase === "shape") {
+    } else {
       logger.warn(
         { attempt, phase: "shape", isArray: outcome.isArray, length: outcome.length, expected: outcome.expected },
         "LLM batch normalization: JSON parsed but was not an array of the expected size",
       )
-    } else {
-      logger.warn(
-        {
-          attempt,
-          phase: "items",
-          expected: outcome.expected,
-          validCount: outcome.validCount,
-          invalidCount: outcome.failures.length,
-          indexIssues: outcome.indexIssues,
-          // Bounded: the first few failures are enough to identify the offending field.
-          failures: outcome.failures.slice(0, 5),
-        },
-        "LLM batch normalization: per-item validation failed",
-      )
     }
-    return null
+    return { items: [], failures: [] }
   }
 
-  let parsed = await attemptOnce(prompt, 1)
+  // Attempt 1's valid items are IMMUTABLE. A retry exists only to fill indices attempt 1 could not
+  // supply — it is never allowed to overwrite an item that already validated, so a model that
+  // returns a different-but-also-valid classification on the second call cannot change an
+  // ingredient that was already settled.
+  const first = await attemptOnce(prompt, 1)
+  const byIndex = new Map<number, RawItem>()
+  for (const item of first.items) byIndex.set(item.index as number, item)
 
-  if (!parsed) {
-    logger.warn({ count: inputs.length }, "LLM batch normalization malformed, retrying once")
-    parsed = await attemptOnce(
-      `${prompt}\n\nYour previous response was not valid JSON matching the required shape. Return ONLY the JSON array, nothing else.`,
-      2,
+  const coverage = byIndex.size / inputs.length
+  if (coverage < RETRY_COVERAGE_THRESHOLD) {
+    const missing = inputs.filter((i) => !byIndex.has(i.index)).map((i) => i.index)
+    logger.warn(
+      { count: inputs.length, validCount: byIndex.size, coverage: Number(coverage.toFixed(2)), threshold: RETRY_COVERAGE_THRESHOLD },
+      "LLM batch normalization coverage below threshold, retrying once for the missing indices",
     )
+    const retried = await attemptOnce(`${prompt}\n\n${buildRetryHint(first.failures, missing)}`, 2)
+    let filled = 0
+    for (const item of retried.items) {
+      const idx = item.index as number
+      if (byIndex.has(idx)) continue // attempt 1 wins
+      byIndex.set(idx, item)
+      filled++
+    }
+    logger.info({ count: inputs.length, filledByRetry: filled, validCount: byIndex.size }, "LLM batch normalization retry merged")
   }
 
-  if (!parsed) {
+  if (byIndex.size === 0) {
     logger.warn({ count: inputs.length }, "LLM batch normalization failed after retry, using deterministic fallback for all ingredients (no per-ingredient fan-out)")
     return inputs.map(deterministicClassification)
   }
-
-  const byIndex = new Map(parsed.map((item) => [item.index, item]))
+  if (byIndex.size < inputs.length) {
+    logger.info(
+      { count: inputs.length, classified: byIndex.size, deterministic: inputs.length - byIndex.size },
+      "LLM batch normalization partially recovered — unclassified ingredients use deterministic fallback",
+    )
+  }
 
   return inputs.map((input) => {
     const item = byIndex.get(input.index)

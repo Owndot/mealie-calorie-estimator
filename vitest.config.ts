@@ -16,6 +16,11 @@ export default defineConfig({
       // needs the real number, and it doesn't come close to exhausting even a generous limit.
       OFF_SEARCH_RATE_LIMIT: "1000",
       USDA_RATE_LIMIT: "1000",
+      // Same reasoning as the two above — it was simply never hit before. The limiter is built
+      // once at module import from this value, so it cannot be raised per-test at runtime: once
+      // llm-normalizer.test.ts grew past the real 30/60s default, later tests in the file sat in
+      // waitForRateLimit's 1s sleep loop and timed out on ordering alone.
+      LLM_RATE_LIMIT: "1000",
     },
     reporters: ["default", ["junit", { outputFile: "test-results.xml" }]],
     coverage: {
