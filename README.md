@@ -181,6 +181,19 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 
 Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
 
+### Broadening is not a fallback
+
+A lookup may accept a record that is *broader* than the query — Basmati rice resolves to the
+generic polished-rice record, because BLS does not model cultivars and nothing nutritional is lost
+by dropping the name. It will not accept one that is *narrower*: rice noodles are not pasta, sweet
+mustard is not mustard, and lupin flour is not flour.
+
+That holds even when the narrower record is the only one available. If BLS cannot answer a query
+without inventing the base ingredient, the lookup misses and the ingredient continues down the
+provider chain to Open Food Facts, USDA and finally an LLM estimate — which is reported honestly as
+a low-confidence match. A miss the fallback chain can answer is worth more than a confident wrong
+record.
+
 ### Coverage and match quality are separate
 
 `calorie_estimator_status` reports **coverage**: how much of the recipe's known weight resolved to

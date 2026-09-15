@@ -453,7 +453,7 @@ const FUZZY_MIN_SCORE = 50
  * What an ingredient IS does not change between variants, so the gate reads the whole text while
  * scoring continues to read one variant at a time.
  */
-function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null, attrs = UNKNOWN_ATTRIBUTES, identityText = queryText, identityCore = queryCoreFood, allowSubVariety = false): ScoredRecord[] {
+function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null, attrs = UNKNOWN_ATTRIBUTES, identityText = queryText, identityCore = queryCoreFood): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
   // Ambiguity evidence over the candidate SET — see specificityConflict(). Restricted to records
   // that actually name the queried food, so unrelated entries never manufacture ambiguity; the
@@ -483,11 +483,24 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
       [record.nameDe, record.tokensDe],
       ...blsNameAlternates(record.nameDe).map((n, i) => [n, record.alternateTokensDe[i]] as [string, string[]]),
     ]
+    // On a TIE, the spelling with the fewest identity words wins. BLS writes synonym sets as
+    // "A/B/C", and blsNameAlternates() splits them so scoring can judge one name at a time — but
+    // the winning SPELLING is also what every downstream gate and the score adjustment judge, and
+    // the undivided string ties with its own parts. "Speisesalz/Siedesalz/Tafelsalz" therefore got
+    // charged 35 points of foreign content for "Siedesalz" while matching on "Speisesalz", which
+    // dropped the correct salt record from 57 to 22 against a threshold of 50. Preferring the
+    // narrower spelling makes the alternates do the job they exist for.
     let scoreDe = -Infinity
     let bestDeName = record.nameDe
+    let bestDeWords = Infinity
     for (const [name, toks] of deVariants) {
       const sc = nameScore(queryTokens, toks, true)
-      if (sc > scoreDe) { scoreDe = sc; bestDeName = name }
+      const words = identityTokens(toks).length
+      if (sc > scoreDe || (sc === scoreDe && words < bestDeWords)) {
+        scoreDe = sc
+        bestDeName = name
+        bestDeWords = words
+      }
     }
     const scoreEn = nameScore(queryTokens, record.tokensEn, false)
     const matchedViaEnglish = scoreEn > scoreDe
@@ -518,7 +531,7 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
       ?? findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
 
     let score = best * 70
-    score += coreIdentityScoreAdjustment(queryCoreFood, queryText, candidateName, { allowSubVariety })
+    score += coreIdentityScoreAdjustment(queryCoreFood, queryText, candidateName)
     score += record.nutrients.kcalPer100g !== null ? 15 : -50
     if (mismatchReason) score -= 1000
 
@@ -594,16 +607,8 @@ function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minSco
   return inBand.find((c) => c.record.inferredState === "unknown") ?? null
 }
 
-/**
- * `broadened` marks a match made only on the relaxed second pass, i.e. the accepted record is a
- * sub-variety of what was asked for because BLS offered nothing less specific. That is a real
- * reduction in certainty and is reported as one — see the two-pass comment in lookup().
- */
-const SUB_VARIETY_CONFIDENCE_FACTOR = 0.8
-
-function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean, broadened = false): ProviderMatch {
-  const base = isExact ? 0.92 : Math.min(0.85, scored.score / 100)
-  const confidence = broadened ? Math.round(base * SUB_VARIETY_CONFIDENCE_FACTOR * 1000) / 1000 : base
+function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean): ProviderMatch {
+  const confidence = isExact ? 0.92 : Math.min(0.85, scored.score / 100)
   return {
     nutrients: scored.record.nutrients,
     canonicalName: query.foodName,
@@ -713,20 +718,26 @@ export class BlsProvider implements NutrientProvider {
     }
     if (isProviderMiss(this.name, missKey)) return null
 
-    // TWO PASSES over the variant list. The first refuses a candidate that narrows the query to a
-    // SUB-VARIETY it never named ("Nudeln" -> "Reisnudeln"); the second allows it.
+    // A candidate that narrows the query to a SUB-VARIETY it never named is refused outright, with
+    // no relaxed second pass to fall back on.
     //
-    // Measured over all 141 ingredient names in the live Mealie library, rejecting sub-varieties
-    // outright cost nine ordinary foods their only record, because German files most everyday
-    // foods ONLY as compounds: BLS has no bare "Essig", "Hefe", "Ketchup", "Wasser", "Mehl" or
-    // "Zucker" at all. "Trinkwasser" IS water; "Reisnudeln" is not pasta — and no lexical rule
-    // separates those two, because the difference is about the food, not the word.
+    // An earlier revision did have one: when no unspecified record existed it accepted the
+    // sub-variety at reduced confidence, on the theory that German files most everyday foods only
+    // as compounds. Auditing every broadening it actually produced over the 141 live ingredient
+    // names killed that theory — the pass accepted "Mehl" -> "Lupinenmehl" (a legume flour: 40 g
+    // protein per 100 g against wheat's 10), "Petersilie" -> "Wurzelpetersilie" (a root vegetable,
+    // 76 kcal, for a 33 kcal herb) and "Sellerie" -> "Knollensellerie" (celeriac for celery).
     //
-    // What DOES separate them is whether a less specific record exists. So this is a preference,
-    // not a prohibition: take the unspecified record when there is one, otherwise broaden honestly
-    // and say so through a reduced confidence, rather than silently guessing or silently losing
-    // the ingredient.
-    for (const allowSubVariety of [false, true]) {
+    // No lexical rule separates those from the harmless cases, because the difference is about the
+    // food rather than the word: measured against BLS, the German prefixes that look like pure
+    // manner words are not ("Back|erbsen" is a 469 kcal deep-fried snack against 81 for peas,
+    // "Koch|banane" is a plantain, not a banana). Nutritional agreement among sibling records does
+    // not separate them either — Lupinenmehl sits within 4% of the median flour by ENERGY, and
+    // only its macros give it away.
+    //
+    // So the specificity rule applies uniformly, and an ingredient BLS cannot answer without
+    // guessing falls through to the next provider and then to an LLM estimate. A miss that the
+    // fallback chain can answer honestly is worth more than a confident wrong record.
     for (const { text, core } of queryVariants) {
       const normalized = normalizeKey(text)
       const exactCandidates = data.byNormalizedNameDe.get(normalized)
@@ -760,15 +771,14 @@ export class BlsProvider implements NutrientProvider {
       // the FULL pool, so exact German rows outside the curated set (Gemüsebrühe, Hühnerei
       // gekocht, Tomate getrocknet, Sojabohne reif gekocht) remain reachable.
       const pool = degraded ? data.preferredRecords : data.records
-      const scored = scoreCandidates(text, pool, query.category, query.foodType, core, attrs, identityText, query.coreFoodGerman ?? null, allowSubVariety)
+      const scored = scoreCandidates(text, pool, query.category, query.foodType, core, attrs, identityText, query.coreFoodGerman ?? null)
         .sort((a, b) => b.score - a.score)
       const picked = pickBestCandidate(scored, query.state, FUZZY_MIN_SCORE, attrs)
       if (picked) {
-        const match = buildMatch(query, picked, false, allowSubVariety)
+        const match = buildMatch(query, picked, false)
         setCachedProviderMatch(this.name, queryKey, match)
         return match
       }
-    }
     }
 
     // Stage 1 and stage 2 both ran and found nothing: a genuine miss FOR THIS EVIDENCE PROFILE.

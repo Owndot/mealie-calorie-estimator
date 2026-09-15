@@ -63,6 +63,7 @@ matches from the previous algorithm must stop being addressable:
 | pickle brine | raw cucumber |
 | canned beans | a dry or raw record, when a canned one exists |
 | an ambiguous herb name | one plant part, when the database offers several |
+| a generic ingredient | a sub-variety with a different base (lupin flour for flour, root parsley for parsley) |
 
 The `cachedMatchConflict()` revalidation covers the query-side half of this for free, since it can
 re-run against the stored candidate's own name. The plant-part half cannot be revalidated that way
