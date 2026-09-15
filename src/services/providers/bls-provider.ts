@@ -7,11 +7,11 @@ import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment } from "./ranking.js"
+import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict } from "./ranking.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v17"
+const BLS_MATCH_ALGORITHM_VERSION = "v18"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -405,7 +405,23 @@ export class BlsProvider implements NutrientProvider {
     // matching behavior changes.
     const queryKey = buildQueryKey(`${BLS_MATCH_ALGORITHM_VERSION}:${queryTexts.join("|")}|${query.state}`, query.brand)
     const cached = getCachedProviderMatch(this.name, queryKey)
-    if (cached) return cached
+    if (cached) {
+      // category/foodType/coreFood are not part of the key by design — re-check them against the
+      // stored candidate instead. See cachedMatchConflict(). The German core is used here because
+      // the stored productName always contains BLS's German name (plus its English name only when
+      // the match was made via English), so a German core token still resolves against it.
+      const conflict = cachedMatchConflict(cached, {
+        foodName: query.canonicalGerman ?? query.structuredName ?? query.foodName,
+        category: query.category,
+        foodType: query.foodType,
+        coreFood: query.coreFoodGerman,
+      })
+      if (conflict) {
+        logger.info({ foodName: query.foodName, reason: conflict }, "BLS: rejected cached match for this query's context")
+        return null
+      }
+      return cached
+    }
     if (isProviderMiss(this.name, queryKey)) return null
 
     for (const { text, core } of queryVariants) {

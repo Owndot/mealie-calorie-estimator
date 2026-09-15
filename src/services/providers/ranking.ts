@@ -511,7 +511,26 @@ export function rankCandidates<T extends RankableCandidate>(
 
       mismatchReason = mismatchReason ?? findMismatch(queryFoodName, candidate.name)
 
-      let score = nameSimilarity(queryFoodName, candidate.name) * 60
+      const similarity = nameSimilarity(queryFoodName, candidate.name)
+
+      // A candidate must carry SOME positive identity evidence before the completeness/dataType
+      // bonuses below are allowed to carry it over MIN_ACCEPTABLE_SCORE. Those bonuses are
+      // name-independent (+15 for complete nutrients, up to +20 for a good USDA dataType tier),
+      // so together they reach 35 — above the threshold — for a candidate whose name has NOTHING
+      // in common with the query. Gating on similarity ALONE would be wrong: a matched core token
+      // is real identity evidence even at zero whole-token similarity — "bell pepper" vs USDA's
+      // "Peppers, sweet, raw" shares no exact token ("pepper" != "peppers") and neither flattened
+      // string contains the other, yet it is the correct match. So the gate requires the absence
+      // of BOTH signals, which in practice means the whole-recipe LLM classification was
+      // unavailable and every ingredient degraded to coreFood=null — exactly the failure mode in
+      // which the primary semantic gates are already gone, so an arbitrary top-ranked food would
+      // otherwise be accepted and written to Mealie as a confident result.
+      const hasCoreEvidence = coreTokensOf(options.queryCoreFood).length > 0
+      if (!mismatchReason && similarity === 0 && !hasCoreEvidence) {
+        mismatchReason = `no identity evidence: candidate name shares nothing with the query and no core-identity signal is available ("${candidate.name}")`
+      }
+
+      let score = similarity * 60
       score += coreIdentityScoreAdjustment(options.queryCoreFood, queryFoodName, candidate.name)
 
       if (queryBrand && candidate.brand) {
@@ -542,3 +561,54 @@ export function rankCandidates<T extends RankableCandidate>(
 
 /** Minimum score (out of the ~100 max above) to accept the top-ranked candidate at all. */
 export const MIN_ACCEPTABLE_SCORE = 30
+
+/** The acceptance-relevant query context, as it exists at cache-hit time. */
+export interface MatchingContext {
+  /** The query text the provider searched with (canonicalEnglish, or the German variant for BLS). */
+  foodName: string
+  category: string | null
+  foodType: FoodType
+  /** coreFoodGerman or coreFoodEnglish, whichever language this provider matched in. */
+  coreFood: string | null | undefined
+}
+
+/**
+ * Re-runs the name-based acceptance gates against an ALREADY-CACHED match, and returns a reason
+ * when that cached match is not acceptable for THIS query's context (or null when it still is).
+ *
+ * provider_match_cache is keyed by query text (+ state/route/brand) — deliberately NOT by
+ * category/foodType/coreFood, because those are free-text/low-stability LLM outputs and folding
+ * them into the key would fragment the cache badly (more OFF/USDA calls, more rate-limit
+ * pressure) without being necessary: everything they gate can instead be re-checked for free
+ * against the stored candidate, since the candidate's own product name and foodType are already
+ * persisted. Without this, a cache hit bypassed EVERY semantic gate — resolveNutrients only
+ * re-checks nutrient plausibility — so a match cached under one ingredient's context could be
+ * served verbatim for a semantically different ingredient that happened to normalize to the same
+ * query text.
+ *
+ * Deliberately conservative: an unacceptable cached entry makes the provider report "no match"
+ * for this query rather than re-fetching and overwriting the cache slot, which would let two
+ * query contexts sharing one key thrash against each other on every run. Falling through to the
+ * next provider is the safe direction, consistent with "a database miss is preferable to a
+ * confident wrong match".
+ */
+export function cachedMatchConflict(
+  cached: { productName: string | null; foodType?: FoodType },
+  ctx: MatchingContext,
+): string | null {
+  const candidateName = cached.productName
+  if (!candidateName) return null
+
+  if (foodTypeConflict(ctx.foodType, cached.foodType ?? "unknown")) {
+    return `food type conflict on cached match: a "${ctx.foodType}" query cannot accept a "composite_dish" candidate ("${candidateName}")`
+  }
+  if (coreIdentityConflict(ctx.coreFood, candidateName)) {
+    return `core identity conflict on cached match: "${ctx.coreFood}" is absent from candidate name ("${candidateName}")`
+  }
+  const mismatch = findMismatch(ctx.foodName, candidateName)
+  if (mismatch) return `obvious mismatch on cached match: ${mismatch} ("${candidateName}")`
+  if (categoryConflict(ctx.category, candidateName)) {
+    return `category conflict on cached match: "${ctx.category}" query looks unrelated to "${candidateName}"`
+  }
+  return null
+}

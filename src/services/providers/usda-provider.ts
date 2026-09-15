@@ -4,7 +4,7 @@ import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodRoute, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, type RankableCandidate } from "./ranking.js"
+import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, type RankableCandidate } from "./ranking.js"
 
 interface FdcNutrient {
   nutrientId: number
@@ -56,7 +56,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v12"
+const USDA_MATCH_ALGORITHM_VERSION = "v13"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -185,7 +185,18 @@ export class UsdaProvider implements NutrientProvider {
     const queryKey = buildQueryKey(`${USDA_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${route}`, query.brand)
 
     const cached = getCachedProviderMatch(this.name, queryKey)
-    if (cached) return cached
+    if (cached) {
+      // category/foodType/coreFood are not part of the key by design — re-check them against the
+      // stored candidate instead. See cachedMatchConflict().
+      const conflict = cachedMatchConflict(cached, {
+        foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
+      })
+      if (conflict) {
+        logger.info({ foodName: query.foodName, reason: conflict }, "USDA: rejected cached match for this query's context")
+        return null
+      }
+      return cached
+    }
     if (isProviderMiss(this.name, queryKey)) return null
 
     const searchTerm = query.brand ? `${query.brand} ${query.foodName}` : query.foodName

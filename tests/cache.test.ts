@@ -11,7 +11,11 @@ import type { ProviderMatch } from "../src/types.js"
 import { config } from "../src/config.js"
 import fs from "node:fs"
 
-const TEST_DB = "data/test-cache.db"
+// This file's OWN isolated database (tests/setup/isolated-cache.ts gives every test file a unique
+// path). It must never be a hardcoded shared path: this file deletes the database it names, and
+// Vitest runs test files in parallel, so a hardcoded shared path unlinked the cache out from under
+// whichever other file happened to be running at the same time.
+const TEST_DB = config.cache.dbPath
 
 function clearDb(): void {
   if (fs.existsSync(TEST_DB)) {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   nameSimilarity, findMismatch, rankCandidates, MIN_ACCEPTABLE_SCORE, tokenize, categoryConflict,
-  inferStateFromName, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment,
+  inferStateFromName, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict,
 } from "../../src/services/providers/ranking.js"
 
 describe("foodTypeConflict — PRIMARY hard-rejection signal, checked before any lexical score", () => {
@@ -687,5 +687,116 @@ describe("rankCandidates — end-to-end core-identity behavior (all residual liv
     const ranked = rankCandidates("red bell pepper", null, [candidate("Peppers, sweet, red, raw", { dataType: "SR Legacy" })], { queryCoreFood: "bell pepper" })
     expect(ranked[0].mismatchReason).toBeNull()
     expect(ranked[0].score).toBeGreaterThanOrEqual(MIN_ACCEPTABLE_SCORE)
+  })
+})
+
+describe("rankCandidates — identity evidence is required before name-independent bonuses can accept (H2 regression)", () => {
+  // Found in final review, confirmed by executing the real function: score is
+  //   nameSimilarity*60 + coreAdjustment + brandAdjustment + (complete ? 15 : -50) + dataTypeScore
+  // The last two are name-INDEPENDENT and sum to 35 for a candidate with complete nutrients in a
+  // Foundation dataset — above MIN_ACCEPTABLE_SCORE (30) — so a candidate whose name has nothing
+  // whatsoever in common with the query was accepted, with mismatchReason null, whenever no
+  // core-identity signal was available. That is precisely the degraded path taken when the
+  // whole-recipe LLM classification fails or is disabled (deterministic fallback sets
+  // coreFoodEnglish=null and foodType="unknown" for every ingredient), i.e. the mode in which the
+  // primary semantic gates are already gone.
+  const dataTypeScore = (dt: string | null | undefined) =>
+    dt === "Foundation" ? 20 : dt === "SR Legacy" ? 15 : dt === "Survey (FNDDS)" ? 10 : 0
+
+  const unrelated = {
+    name: "Beef, chuck, arm pot roast",
+    brand: null,
+    hasCompleteNutrients: true,
+    dataType: "Foundation",
+    foodType: "simple" as const,
+  }
+
+  it("rejects a zero-similarity candidate when no core-identity signal is available (LLM-classification-down path)", () => {
+    expect(nameSimilarity("Petersilie", unrelated.name)).toBe(0)
+
+    const ranked = rankCandidates("Petersilie", null, [unrelated], {
+      queryState: "unknown", queryCategory: null, queryFoodType: "unknown", queryCoreFood: null, dataTypeScore,
+    })
+
+    expect(ranked[0].mismatchReason).toMatch(/no identity evidence/)
+    expect(ranked[0].score).toBeLessThan(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("still accepts a legitimate match that has a core token but ZERO whole-token overlap", () => {
+    // The guard must key off identity EVIDENCE, not off nameSimilarity alone. "bell pepper" vs
+    // USDA's real "Peppers, sweet, raw" shares no exact token ("pepper" != "peppers") and neither
+    // flattened string contains the other, so nameSimilarity is exactly 0 — yet the core token
+    // "pepper" IS present inside "peppers", and this is the correct match. Rejecting on
+    // similarity alone would regress the whole bell-pepper family, which resolves this way live.
+    const bellPepper = {
+      name: "Peppers, sweet, raw",
+      brand: null,
+      hasCompleteNutrients: true,
+      dataType: "SR Legacy",
+      foodType: "simple" as const,
+    }
+    expect(nameSimilarity("bell pepper", bellPepper.name)).toBe(0)
+
+    const ranked = rankCandidates("bell pepper", null, [bellPepper], {
+      queryState: "unknown", queryCategory: "vegetable", queryFoodType: "simple", queryCoreFood: "bell pepper", dataTypeScore,
+    })
+
+    expect(ranked[0].mismatchReason).toBeNull()
+    expect(ranked[0].score).toBeGreaterThanOrEqual(MIN_ACCEPTABLE_SCORE)
+  })
+
+  it("does not fire when there is any real textual overlap", () => {
+    const related = { name: "Parsley, fresh", brand: null, hasCompleteNutrients: true, dataType: "SR Legacy", foodType: "simple" as const }
+    const ranked = rankCandidates("parsley", null, [related], {
+      queryState: "unknown", queryCategory: null, queryFoodType: "unknown", queryCoreFood: null, dataTypeScore,
+    })
+    expect(ranked[0].mismatchReason).toBeNull()
+  })
+})
+
+describe("cachedMatchConflict — re-validates a cache hit against the current query context (M2)", () => {
+  // provider_match_cache is keyed by query text (+state/route/brand), deliberately not by
+  // category/foodType/coreFood. Those gate acceptance but are free-text LLM output, so folding
+  // them into the key would fragment the cache instead of protecting it. They are re-checked here
+  // against the stored candidate for free, because a cache hit otherwise bypasses every semantic
+  // gate — resolveNutrients only re-checks nutrient plausibility.
+  it("rejects a cached match whose product name lacks this query's core identity", () => {
+    const reason = cachedMatchConflict(
+      { productName: "Onions, dehydrated flakes", foodType: "simple" },
+      { foodName: "chili flakes", category: "spice", foodType: "simple", coreFood: "chili" },
+    )
+    expect(reason).toMatch(/core identity conflict on cached match/)
+  })
+
+  it("rejects a cached composite-dish match for a simple query", () => {
+    const reason = cachedMatchConflict(
+      { productName: "Lentil soup", foodType: "composite_dish" },
+      { foodName: "red lentil", category: "legume", foodType: "simple", coreFood: "lentil" },
+    )
+    expect(reason).toMatch(/food type conflict on cached match/)
+  })
+
+  it("rejects a cached match that the curated mismatch rules would now reject", () => {
+    const reason = cachedMatchConflict(
+      { productName: "Dr pepper", foodType: "simple" },
+      { foodName: "pepper", category: "spice", foodType: "simple", coreFood: "pepper" },
+    )
+    expect(reason).toMatch(/obvious mismatch on cached match/)
+  })
+
+  it("accepts a cached match that is still valid for this context", () => {
+    expect(
+      cachedMatchConflict(
+        { productName: "Spices, parsley, dried", foodType: "simple" },
+        { foodName: "dried parsley", category: "herb", foodType: "simple", coreFood: "parsley" },
+      ),
+    ).toBeNull()
+  })
+
+  it("is permissive when the signal is unavailable (no stored product name, or no core)", () => {
+    expect(cachedMatchConflict({ productName: null }, { foodName: "x", category: null, foodType: "unknown", coreFood: null })).toBeNull()
+    expect(
+      cachedMatchConflict({ productName: "Anything At All", foodType: "unknown" }, { foodName: "x", category: null, foodType: "unknown", coreFood: null }),
+    ).toBeNull()
   })
 })

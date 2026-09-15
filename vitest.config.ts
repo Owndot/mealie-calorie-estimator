@@ -2,10 +2,13 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
+    // Per-FILE cache isolation. CACHE_DB_PATH is deliberately NOT set here: a single static path
+    // is shared by every file (which Vitest runs in parallel), which made the suite order- and
+    // history-dependent. See tests/setup/isolated-cache.ts.
+    setupFiles: ["./tests/setup/isolated-cache.ts"],
     env: {
       MEALIE_API_TOKEN: "test-token",
       OFF_LANGUAGE: "de",
-      CACHE_DB_PATH: "data/test-cache.db",
       // The real default (10/60s) is exercised deliberately in rate-limiter.test.ts; every other
       // test file shares one module-level limiter instance across all its tests, so a realistic
       // cap makes otherwise-unrelated tests flake/timeout purely on ordering once enough OFF/USDA

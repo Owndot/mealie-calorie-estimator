@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest"
+import fs from "node:fs"
+import path from "node:path"
 import { normalizeGermanText, normalizeIdentityText } from "../src/utils/text-normalize.js"
 
 // Found live: ranking.ts's tokenize() and (separately) cache.ts's normalizeKey() both used
@@ -53,5 +55,40 @@ describe("normalizeIdentityText — full exact-match/cache-key form", () => {
     expect(normalizeIdentityText("Frühlingszwiebel")).toBe("fruehlingszwiebel")
     expect(normalizeIdentityText("Hähnchen")).toBe("haehnchen")
     expect(normalizeIdentityText("Speisezwiebel")).toBe("speisezwiebel")
+  })
+})
+
+describe("cross-language normalization contract: scripts/import_bls.py vs normalizeIdentityText", () => {
+  // The BLS exact-match dictionary is keyed by `name_de_normalized`, computed in PYTHON at import
+  // time, and looked up with normalizeKey() -> normalizeIdentityText() in TYPESCRIPT at query
+  // time. The two implementations are hand-duplicated and can only be kept in sync by hand, and
+  // when they silently diverged before, BLS's exact-match path stopped finding ANY German food
+  // name containing an umlaut for the entire project — falling back to weaker fuzzy matching with
+  // no error anywhere. Sample-based assertions did not catch that, so this checks every row.
+  it("every stored name_de_normalized in the bundled BLS database matches the TS implementation", async () => {
+    const initSqlJs = (await import("sql.js")).default
+    const SQL = await initSqlJs()
+    const dbPath = path.join(process.cwd(), "resources/bls/bls-4.0.sqlite")
+    const db = new SQL.Database(fs.readFileSync(dbPath))
+
+    const stmt = db.prepare("SELECT name_de, name_de_normalized FROM bls_foods")
+    const mismatches: { nameDe: string; stored: string; computed: string }[] = []
+    let rows = 0
+    try {
+      while (stmt.step()) {
+        const row = stmt.getAsObject() as { name_de: string; name_de_normalized: string }
+        rows++
+        const computed = normalizeIdentityText(row.name_de)
+        if (computed !== row.name_de_normalized) {
+          if (mismatches.length < 5) mismatches.push({ nameDe: row.name_de, stored: row.name_de_normalized, computed })
+        }
+      }
+    } finally {
+      stmt.free()
+      db.close()
+    }
+
+    expect(rows).toBe(7140)
+    expect(mismatches).toEqual([])
   })
 })

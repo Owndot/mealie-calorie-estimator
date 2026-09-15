@@ -194,3 +194,60 @@ describe("OffProvider", () => {
     })
   })
 })
+
+describe("OffProvider — preparation state is part of cache identity (H1 regression)", () => {
+  // Found in final review. OFF's ranking is state-sensitive (a candidate whose inferred state
+  // conflicts with the query's is rejected), but its cache key was state-blind while BLS's and
+  // USDA's were not. A cache hit re-validates nothing except nutrient plausibility
+  // (nutrient-resolver.ts), so a match cached for one state was returned verbatim for another:
+  // fresh parsley (~36 kcal/100g) served for a dried-parsley query (~292 kcal/100g) whenever both
+  // normalized to the same canonicalEnglish text.
+  const FRESH_PARSLEY = {
+    product_name: "Parsley fresh h1statekey",
+    nutriments: { "energy-kcal_100g": 36, "proteins_100g": 3, "carbohydrates_100g": 6, "fat_100g": 0.8 },
+  }
+
+  function stateQuery(state: "raw" | "dried") {
+    return {
+      foodName: "parsley h1statekey",
+      brand: null,
+      category: "herb",
+      state,
+      foodType: "simple" as const,
+      coreFoodEnglish: "parsley",
+    }
+  }
+
+  it("does not serve a match cached under one state to a query with a different state", async () => {
+    const provider = new OffProvider()
+    // Fresh Response per call: a Response body can only be read once, and this test issues two lookups.
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => hitsResponse([FRESH_PARSLEY]))
+
+    const raw = await provider.lookup(stateQuery("raw"))
+    expect(raw?.productName).toBe("Parsley fresh h1statekey")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const dried = await provider.lookup(stateQuery("dried"))
+
+    // A second network call proves the two states no longer share a cache slot. Before the fix
+    // this was 1 call and `dried` was the cached FRESH match.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // And on that fresh lookup the state conflict rejects the fresh candidate outright.
+    expect(dried).toBeNull()
+  })
+
+  it("still reuses the cache for a repeated lookup with the SAME state", async () => {
+    const provider = new OffProvider()
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      hitsResponse([{ product_name: "Parsley fresh h1samestate", nutriments: FRESH_PARSLEY.nutriments }]),
+    )
+
+    const q = { ...stateQuery("raw"), foodName: "parsley h1samestate" }
+    const first = await provider.lookup(q)
+    const second = await provider.lookup(q)
+
+    expect(first?.productName).toBe("Parsley fresh h1samestate")
+    expect(second?.productName).toBe("Parsley fresh h1samestate")
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
