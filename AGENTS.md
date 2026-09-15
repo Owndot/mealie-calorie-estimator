@@ -1,6 +1,6 @@
 # Instructions for AI coding agents
 
-This is a [mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator) project — a TypeScript/Node.js service using Fastify that estimates nutrition for Mealie recipes.
+This is the [Mealie Nutrition Engine](https://github.com/Owndot/mealie-nutrition-engine) project (originally forked from [timo-reymann/mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator)) — a TypeScript/Node.js service using Fastify that estimates nutrition for Mealie recipes.
 
 ## Commands
 

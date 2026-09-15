@@ -1,15 +1,16 @@
-mealie-calorie-estimator
+Mealie Nutrition Engine
 ===
-[![GitHub Release](https://img.shields.io/github/v/tag/timo-reymann/mealie-calorie-estimator?label=version)](https://github.com/timo-reymann/mealie-calorie-estimator/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/timoreymann/mealie-calorie-estimator?style=flat)](https://hub.docker.com/r/timoreymann/mealie-calorie-estimator)
-[![GitHub all releases download count](https://img.shields.io/github/downloads/timo-reymann/mealie-calorie-estimator/total)](https://github.com/timo-reymann/mealie-calorie-estimator/releases)
-[![LICENSE](https://img.shields.io/github/license/timo-reymann/mealie-calorie-estimator)](https://github.com/timo-reymann/mealie-calorie-estimator/blob/main/LICENSE)
-[![CircleCI](https://circleci.com/gh/timo-reymann/mealie-calorie-estimator.svg?style=shield)](https://app.circleci.com/pipelines/github/timo-reymann/mealie-calorie-estimator)
-[![Renovate](https://img.shields.io/badge/renovate-enabled-green?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzNjkgMzY5Ij48Y2lyY2xlIGN4PSIxODkuOSIgY3k9IjE5MC4yIiByPSIxODQuNSIgZmlsbD0iI2ZmZTQyZSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoLTUgLTYpIi8+PHBhdGggZmlsbD0iIzhiYjViNSIgZD0iTTI1MSAyNTZsLTM4LTM4YTE3IDE3IDAgMDEwLTI0bDU2LTU2YzItMiAyLTYgMC03bC0yMC0yMWE1IDUgMCAwMC03IDBsLTEzIDEyLTktOCAxMy0xM2ExNyAxNyAwIDAxMjQgMGwyMSAyMWM3IDcgNyAxNyAwIDI0bC01NiA1N2E1IDUgMCAwMDAgN2wzOCAzOHoiLz48cGF0aCBmaWxsPSIjZDk1NjEyIiBkPSJNMzAwIDI4OGwtOCA4Yy00IDQtMTEgNC0xNiAwbC00Ni00NmMtNS01LTUtMTIgMC0xNmw4LThjNC00IDExLTQgMTUgMGw0NyA0N2M0IDQgNCAxMSAwIDE1eiIvPjxwYXRoIGZpbGw9IiMyNGJmYmUiIGQ9Ik04MSAxODVsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzI1YzRjMyIgZD0iTTIyMCAxMDBsMjMgMjNjNCA0IDQgMTEgMCAxNkwxNDIgMjQwYy00IDQtMTEgNC0xNSAwbC0yNC0yNGMtNC00LTQtMTEgMC0xNWwxMDEtMTAxYzUtNSAxMi01IDE2IDB6Ii8+PHBhdGggZmlsbD0iIzFkZGVkZCIgZD0iTTk5IDE2N2wxOC0xOCAxOCAxOC0xOCAxOHoiLz48cGF0aCBmaWxsPSIjMDBhZmIzIiBkPSJNMjMwIDExMGwxMyAxM2M0IDQgNCAxMSAwIDE2TDE0MiAyNDBjLTQgNC0xMSA0LTE1IDBsLTEzLTEzYzQgNCAxMSA0IDE1IDBsMTAxLTEwMWM1LTUgNS0xMSAwLTE2eiIvPjxwYXRoIGZpbGw9IiMyNGJmYmUiIGQ9Ik0xMTYgMTQ5bDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMxZGRlZGQiIGQ9Ik0xMzQgMTMxbDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMxYmNmY2UiIGQ9Ik0xNTIgMTEzbDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMyNGJmYmUiIGQ9Ik0xNzAgOTVsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzFiY2ZjZSIgZD0iTTYzIDE2N2wxOC0xOCAxOCAxOC0xOCAxOHpNOTggMTMxbDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMzNGVkZWIiIGQ9Ik0xMzQgOTVsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzFiY2ZjZSIgZD0iTTE1MyA3OGwxOC0xOCAxOCAxOC0xOCAxOHoiLz48cGF0aCBmaWxsPSIjMzRlZGViIiBkPSJNODAgMTEzbDE4LTE3IDE4IDE3LTE4IDE4ek0xMzUgNjBsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzk4ZWRlYiIgZD0iTTI3IDEzMWwxOC0xOCAxOCAxOC0xOCAxOHoiLz48cGF0aCBmaWxsPSIjYjUzZTAyIiBkPSJNMjg1IDI1OGw3IDdjNCA0IDQgMTEgMCAxNWwtOCA4Yy00IDQtMTEgNC0xNiAwbC02LTdjNCA1IDExIDUgMTUgMGw4LTdjNC01IDQtMTIgMC0xNnoiLz48cGF0aCBmaWxsPSIjODgzMTAwIiBkPSJNMjQwIDI0OGwtNyA3Yy00IDQtMTEgNC0xNiAwbC02LTdjNCA1IDExIDUgMTUgMGw3LTdjNC01IDQtMTIgMC0xNnoiLz48L3N2Zz4=)](https://github.com/timo-reymann/mealie-calorie-estimator)
-[![codecov](https://codecov.io/gh/timo-reymann/mealie-calorie-estimator/graph/badge.svg?token=lTQRwxnxYl)](https://codecov.io/gh/timo-reymann/mealie-calorie-estimator)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=timo-reymann_mealie-calorie-estimator&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=timo-reymann_mealie-calorie-estimator)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=timo-reymann_mealie-calorie-estimator&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=timo-reymann_mealie-calorie-estimator)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=timo-reymann_mealie-calorie-estimator&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=timo-reymann_mealie-calorie-estimator)
+[![CI](https://github.com/Owndot/mealie-nutrition-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Owndot/mealie-nutrition-engine/actions/workflows/ci.yml)
+[![Release](https://github.com/Owndot/mealie-nutrition-engine/actions/workflows/release.yml/badge.svg)](https://github.com/Owndot/mealie-nutrition-engine/actions/workflows/release.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/Owndot/mealie-nutrition-engine?label=version)](https://github.com/Owndot/mealie-nutrition-engine/releases)
+[![Container image](https://img.shields.io/badge/ghcr.io-mealie--nutrition--engine-blue?logo=docker&logoColor=white)](https://github.com/Owndot/mealie-nutrition-engine/pkgs/container/mealie-nutrition-engine)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](./LICENSE)
+
+> **Originally based on [timo-reymann/mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator), substantially redesigned and extended.**
+> The nutrition engine — provider routing, identity matching, unit/density resolution, caching
+> semantics and provenance tracking — was rewritten for this fork; roughly 79% of the current
+> runtime source is new. Upstream authors did not build and do not support this architecture, and
+> any bugs here are ours. Licensed GPL-3.0-or-later, same as upstream. See [Attribution](#attribution).
 
 <p align="center">
     <img width="300" src="./.github/images/logo.png">
@@ -102,6 +103,15 @@ Tags are created automatically in Mealie when first needed. On re-estimation, ol
 
 It's recommended to install it next to your Mealie instance using docker-compose.
 
+> **Pull from `ghcr.io/owndot/mealie-nutrition-engine`, not from `timoreymann/mealie-calorie-estimator`.**
+> The Docker Hub image belongs to the upstream project this was forked from and does **not** contain
+> the rewritten nutrition engine. Available tags: `1.0.0` (and `1.0`/`1`), `latest` for the newest
+> release, and `edge` for the tip of `main`.
+
+```bash
+docker pull ghcr.io/owndot/mealie-nutrition-engine:latest
+```
+
 ### Prerequisites
 
 - A Mealie service account with an API token (`Settings > Users > Create User`)
@@ -111,9 +121,9 @@ It's recommended to install it next to your Mealie instance using docker-compose
    services:
      mealie:
        # mealie configuration
-     calorie-estimator:
-       image: timoreymann/mealie-calorie-estimator:latest
-       container_name: mealie-calorie-estimator
+     nutrition-engine:
+       image: ghcr.io/owndot/mealie-nutrition-engine:latest
+       container_name: mealie-nutrition-engine
        restart: unless-stopped
        depends_on:
          - mealie
@@ -186,6 +196,37 @@ Recipe nutrition estimated by this service is marked with `extras.calorie_estima
 <!-- Add bit of context why the project has been created -->
 
 Mealie stores nutrition only when entered by hand. Maintaining that for every recipe is tedious, so this service fills the gap automatically from BLS 4.0, Open Food Facts, and USDA (and an optional LLM) while leaving manual entries untouched.
+
+## Attribution
+
+This project began as a fork of **[timo-reymann/mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator)** by Timo Reymann, licensed GPL-3.0. The original webhook/Mealie-integration skeleton, the Fastify service layout, the Docker packaging and the auto-tagging idea come from that project, and copyright in those parts remains with the original authors.
+
+The nutrition engine itself was substantially redesigned and extended in this fork:
+
+- routing-aware provider chain (BLS 4.0 → Open Food Facts → USDA → LLM) with per-provider acceptance rules
+- structural identity matching: authoritative food-type metadata, core-identity gates, language-aware token rules
+- deterministic unit/density resolution, including German compound handling and a physical guard on volume conversions
+- evidence-based provider routing, versioned provider caches and cache revalidation semantics
+- per-ingredient provenance tracking and sanity checking
+
+Measured against the state inherited from upstream, the runtime source under `src/` grew from 1,657 to 5,359 lines across 15 → 29 files, with roughly 79% of the current runtime source written for this fork (+4,246 / −544 lines in `src/`, excluding tests, bundled data and docs).
+
+**The upstream authors did not build this architecture and do not support it.** Please report issues with this fork to [its own issue tracker](https://github.com/Owndot/mealie-nutrition-engine/issues), never to the upstream project.
+
+This project remains licensed **GPL-3.0-or-later**, as required. See [LICENSE](./LICENSE); third-party dependency licences are collected in [NOTICE](./NOTICE).
+
+### Bundled data
+
+- **BLS 4.0** (Bundeslebensmittelschlüssel) — Max Rubner-Institut, CC BY 4.0; see the BLS section above for the full required citation.
+- Open Food Facts (ODbL) and USDA FoodData Central (public domain) are queried at runtime, not bundled.
+
+## Verifying an image
+
+Release images record the commit and tree they were built from, so a running container can be traced back to source:
+
+```bash
+docker buildx imagetools inspect ghcr.io/owndot/mealie-nutrition-engine:1.0.0 --format '{{json .Provenance}}'
+```
 
 ## Contributing
 
