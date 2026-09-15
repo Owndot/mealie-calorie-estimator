@@ -42,7 +42,10 @@ export const config = {
     searchRateLimit: parseInt(process.env.OFF_SEARCH_RATE_LIMIT || "10", 10),
     maxRetries: parseInt(process.env.OFF_MAX_RETRIES || "3", 10),
     retryBackoffMs: parseInt(process.env.OFF_RETRY_BACKOFF_MS || "500", 10),
-    userAgent: process.env.OFF_USER_AGENT || `mealie-calorie-estimator/${version} (mail@timo-reymann.de)`,
+    // Open Food Facts asks callers to identify themselves. The inherited default carried the
+    // UPSTREAM maintainer's personal email, which would attribute this fork's traffic to someone
+    // who did not write it; the project URL is an equally valid contact and is honest.
+    userAgent: process.env.OFF_USER_AGENT || `mealie-nutrition-engine/${version} (+https://github.com/Owndot/mealie-nutrition-engine)`,
   },
 
   llm: {

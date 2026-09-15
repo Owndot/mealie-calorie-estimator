@@ -1,0 +1,97 @@
+name: Release
+
+# Publishes this project's OWN container image to GitHub Container Registry.
+#
+# The inherited CircleCI pipeline pushed to docker.io/timoreymann/mealie-calorie-estimator using
+# upstream's credentials and was never connected to this fork — no release has ever been produced
+# here. GHCR needs no extra secret: the workflow authenticates with the built-in GITHUB_TOKEN.
+#
+# Triggers:
+#   - a v* tag  -> versioned release (1.2.3, 1.2, 1, latest)
+#   - main      -> rolling `edge` tag, so the tip is always pullable without cutting a release
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/mealie-nutrition-engine
+
+jobs:
+  test:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: |
+          npm ci
+          npm install @rolldown/binding-linux-x64-gnu --no-save
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  publish:
+    name: Build and push image
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+          labels: |
+            org.opencontainers.image.title=Mealie Nutrition Engine
+            org.opencontainers.image.description=Automatic, provenance-tracked nutrition estimation for Mealie recipes
+            org.opencontainers.image.licenses=GPL-3.0-or-later
+
+      - name: Build and push
+        id: build
+        # The same Dockerfile that passed v1 validation — unchanged by this workflow.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Records the exact commit/tree the image was built from, so a deployed image can be
+          # traced back to source (see "Verifying an image" in the README).
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report published digest
+        run: |
+          echo "### Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "digest: ${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "commit: ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

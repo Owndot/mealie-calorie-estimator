@@ -1,0 +1,54 @@
+name: CI
+
+# Replaces the inherited CircleCI pipeline, which was never connected to this fork: it referenced
+# upstream's Docker Hub credentials and semantic-release context, so no test or release job has
+# ever run here. Tests now gate the release workflow instead.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        # The optional rolldown native binding is not resolved by `npm ci` on every platform.
+        run: |
+          npm ci
+          npm install @rolldown/binding-linux-x64-gnu --no-save
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker build (no push)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

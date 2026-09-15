@@ -1,8 +1,15 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "local>timo-reymann/renovate-config",
-    "local>timo-reymann/renovate-config//presets/ecosystems/npm",
-    "local>timo-reymann/renovate-config//presets/groups/npm-fastify"
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits"
+  ],
+  "packageRules": [
+    {
+      "description": "Group Fastify and its plugins into one PR (inherited grouping intent, without upstream's preset repo).",
+      "matchPackageNames": ["fastify", "@fastify/**"],
+      "groupName": "fastify"
+    }
   ]
 }

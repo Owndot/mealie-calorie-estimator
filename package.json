@@ -1,6 +1,17 @@
 {
-  "name": "mealie-calorie-estimator",
-  "version": "1.9.0",
+  "name": "mealie-nutrition-engine",
+  "version": "1.0.0",
+  "description": "Automatic, provenance-tracked nutrition estimation for Mealie recipes (BLS 4.0 / Open Food Facts / USDA / LLM fallback)",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Owndot/mealie-nutrition-engine.git"
+  },
+  "homepage": "https://github.com/Owndot/mealie-nutrition-engine#readme",
+  "bugs": {
+    "url": "https://github.com/Owndot/mealie-nutrition-engine/issues"
+  },
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
