@@ -173,8 +173,10 @@ describe("OffProvider", () => {
         hitsResponse([{ product_name: foodName, brands: ["ja!", ""], nutriments: MILK_NUTRIMENTS }]),
       )
 
+      // Brand evidence supplied so the generic-route branded rejection does not apply — this test
+      // is about normalizeOffBrand() surviving the real array shape, not about routing policy.
       const provider = new OffProvider()
-      const match = await provider.lookup(query(foodName))
+      const match = await provider.lookup(query(foodName, "ja!"))
 
       expect(match).not.toBeNull()
       expect(match?.brand).toBe("ja!")

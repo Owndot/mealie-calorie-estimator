@@ -1,7 +1,14 @@
 import type { FoodState, FoodRoute, FoodType, ProviderMatch } from "../../types.js"
 import type { IdentityEvidence } from "../identity-evidence.js"
+import type { FoodAttributes } from "../../types.js"
 
 export interface ProviderQuery {
+  /**
+   * Nutritionally meaningful form/preservation/fat attributes. Participate in candidate validation
+   * (formConflict/preservationConflict/fatConflict) and in cache identity, so a cached "ground
+   * ginger" can never be served to a "fresh ginger" query. "unknown" values stay permissive.
+   */
+  attributes?: FoodAttributes
   /**
    * What is actually KNOWN about this ingredient's identity. Absent evidence must make a provider
    * stricter, never more permissive — see identity-evidence.ts. Optional so existing callers and

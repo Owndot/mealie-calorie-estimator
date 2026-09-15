@@ -6,6 +6,8 @@ import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderM
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
 import { FULL_EVIDENCE, mayQueryOff } from "../identity-evidence.js"
+import { attributesKey } from "./food-semantics.js"
+import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 
 const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
@@ -154,7 +156,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v15"
+const OFF_MATCH_ALGORITHM_VERSION = "v16"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -166,7 +168,8 @@ export class OffProvider implements NutrientProvider {
     // served verbatim for another. A cache hit re-validates nothing but nutrient plausibility
     // (see nutrient-resolver.ts), so e.g. a fresh-parsley match (~36 kcal/100g) could be returned
     // for a dried-parsley query (~292 kcal/100g) whenever both normalized to the same query text.
-    const queryKey = buildQueryKey(`${OFF_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}`, query.brand)
+    const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
+    const queryKey = buildQueryKey(`${OFF_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${attributesKey(attrs)}`, query.brand)
 
     // The negative cache is additionally scoped by the acceptance context — see
     // matchingContextKey(). A miss means "nothing here was acceptable under THESE rules", so it
@@ -241,6 +244,10 @@ export class OffProvider implements NutrientProvider {
       queryFoodType: query.foodType,
       queryCoreFood: query.coreFoodEnglish,
       coreMatchMode: "token" as const,
+      queryAttributes: attrs,
+      // Generic route with no brand evidence: an arbitrary manufacturer's product must not stand
+      // in for a basic food. OFF stays fully available for branded/manufactured lookups.
+      rejectBrandedWithoutBrandEvidence: (query.route ?? "generic") === "generic" && !query.brand,
     })
     const top = ranked[0]
 

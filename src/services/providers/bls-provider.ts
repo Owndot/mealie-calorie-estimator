@@ -7,12 +7,18 @@ import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey } from "./ranking.js"
+import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS } from "./ranking.js"
+import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
+import {
+  compoundMatchesTokens, formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, fatApproximate,
+  inferAttributesFromName, attributesKey,
+} from "./food-semantics.js"
+import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v20"
+const BLS_MATCH_ALGORITHM_VERSION = "v21"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -70,6 +76,8 @@ interface BlsFoodRecord {
   nutrients: NutrientSet
   /** Ordered token sequences (not just sets) — needed for prefix-match scoring, see scoreOne(). */
   tokensDe: string[]
+  /** Tokenized synonym spellings — see blsNameAlternates(). */
+  alternateTokensDe: string[][]
   tokensEn: string[]
 }
 
@@ -136,6 +144,7 @@ async function loadBlsData(): Promise<BlsData | null> {
           cholesterolPer100g: row.cholesterol_per_100g as number | null,
         },
         tokensDe: tokenizeBls(nameDe),
+        alternateTokensDe: blsNameAlternates(nameDe).map(tokenizeBls),
         tokensEn: tokenizeBls(nameEn ?? ""),
       })
     }
@@ -232,6 +241,7 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
     foodType: input.foodType ?? "simple",
     nutrients: input.nutrients,
     tokensDe: tokenizeBls(input.nameDe),
+    alternateTokensDe: blsNameAlternates(input.nameDe).map(tokenizeBls),
     tokensEn: tokenizeBls(input.nameEn ?? ""),
   }))
 
@@ -288,12 +298,61 @@ function isOrderedPrefix(prefix: string[], full: string[]): boolean {
  * geschält, roh" case in form, but wrong in substance, because English noun phrases don't carry
  * BLS's German qualifier-comma convention that rules 1-2 were designed around.
  */
+/**
+ * BLS names are verbose and qualifier-heavy ("Chester (Cheddar) mind. 45 % Fett i. Tr."). Raw
+ * jaccard therefore punishes a perfect identity hit simply for the record being descriptive: a
+ * "Cheddar" query scored 1/7 there. Identity comparison uses only tokens that actually name a
+ * food — qualifiers and numbers are what the descriptor vocabulary already classifies as "not a
+ * different food", so they must not dilute similarity either.
+ */
+/**
+ * BLS spells synonyms two ways: "Karotte/Möhre, roh" and "Chester (Cheddar) mind. 45 % Fett i.
+ * Tr.". Treating those alternates as ADDITIONAL content made a perfect hit look diluted — a
+ * "Cheddar" query scored 36 against the record literally named Cheddar, because "Chester" counted
+ * as a different food. Each alternate is scored separately and the best one wins, which is what
+ * the notation actually means.
+ */
+export function blsNameAlternates(name: string): string[] {
+  const parenthesised = [...name.matchAll(/\(([^)]+)\)/g)].map((m) => m[1])
+  const withoutParens = name.replace(/\([^)]*\)/g, " ")
+  const slashParts = withoutParens.split("/").map((p) => p.trim()).filter(Boolean)
+  const base = slashParts.length > 1 ? slashParts : [withoutParens]
+  // Each parenthesised synonym also stands in for the head noun it qualifies.
+  const combined = parenthesised.flatMap((alt) => base.map((b) => b.replace(/^\s*\S+/, alt)))
+  // Parenthesised text is only a SYNONYM when it reads like a food name. BLS also parenthesises
+  // classification codes ("(S X)") and qualifiers, which are not alternate names.
+  const looksLikeName = (s: string) => /\p{L}{3,}/u.test(s)
+  return [...new Set([...base, ...parenthesised, ...combined].map((s) => s.trim()).filter((s) => s && looksLikeName(s)))]
+}
+
+function identityTokens(tokens: string[]): string[] {
+  const kept = tokens.filter((t) =>
+    t.length >= 3 && !/^\d/.test(t) &&
+    !GENERIC_DESCRIPTOR_WORDS.has(t) && !GERMAN_DESCRIPTOR_WORDS.has(t))
+  return kept.length > 0 ? kept : tokens
+}
+
 function nameScore(queryTokens: string[], candidateTokens: string[], allowPrefixSuffix: boolean): number {
+  const qId = identityTokens(queryTokens)
+  const cId = identityTokens(candidateTokens)
+
   if (!allowPrefixSuffix) {
-    return jaccard(queryTokens, candidateTokens) * 0.7
+    return jaccard(qId, cId) * 0.7
   }
 
-  if (isOrderedPrefix(queryTokens, candidateTokens)) return 0.85
+  if (isOrderedPrefix(queryTokens, candidateTokens) || isOrderedPrefix(qId, cId)) return 0.85
+  // Containment bonuses require the query to explain MOST of the record. Without that guard a
+  // one-word query matched any dish that merely listed it among other foods — "Koriander" vs
+  // "Rote-Linsensuppe mit Koriander" — which an existing regression test guards against.
+  const explainsRecord = cId.length <= qId.length + 1
+
+  if (explainsRecord && qId.length > 0 && cId.length > 0 && germanTokenMatches(qId[0], cId[0])
+    && qId.every((q) => cId.some((c) => germanTokenMatches(q, c)))) return 0.85
+
+  // The record literally contains every identity word the query asked for (e.g. "Cheddar" inside
+  // "Chester (Cheddar) …"). That is strong evidence regardless of how many synonyms or qualifiers
+  // the record carries alongside it.
+  if (explainsRecord && qId.length > 0 && qId.every((q) => cId.some((c) => germanTokenMatches(q, c)))) return 0.8
 
   // A minimum query length guards against coincidental endings: found live, "Ei" (egg, 2 letters)
   // matched "Teigwaren eifrei, roh" (EGG-FREE pasta) because "eifrei" happens to end in "ei" for
@@ -306,8 +365,8 @@ function nameScore(queryTokens: string[], candidateTokens: string[], allowPrefix
   // threshold requirement.
   const MIN_QUERY_LENGTH_FOR_SUFFIX_MATCH = 4
 
-  if (queryTokens.length === 1 && queryTokens[0].length >= MIN_QUERY_LENGTH_FOR_SUFFIX_MATCH) {
-    const q = queryTokens[0]
+  if (qId.length === 1 && qId[0].length >= MIN_QUERY_LENGTH_FOR_SUFFIX_MATCH) {
+    const q = qId[0]
     // Strictly LONGER, not just endsWith: a genuine German compound like "Speisezwiebel" is one
     // fused token strictly longer than its head word "zwiebel". Requiring t.length > q.length
     // (not >=) excludes the trivial t === q case — found live: "Koriander" was matching
@@ -317,9 +376,17 @@ function nameScore(queryTokens: string[], candidateTokens: string[], allowPrefix
     // below, which naturally penalizes it via the dish's other, unrelated tokens.
     const suffixHit = candidateTokens.find((t) => t.length > q.length && t.endsWith(q) && t.length <= q.length + 8)
     if (suffixHit) return 0.6
+
+    // The mirror case: the QUERY is the fused compound and the database spells it as separate
+    // words. Found live — "Hähnchenbrust" is one token while BLS has "Hähnchen Brustfilet, roh",
+    // so they shared nothing and an exact-quality record was unreachable. Both halves must be
+    // evidenced in the candidate, which is what keeps this from becoming substring matching.
+    if (compoundMatchesTokens(q, candidateTokens)) return 0.6
   }
 
-  return jaccard(queryTokens, candidateTokens) * 0.7 // scaled below prefix/suffix — a partial, unordered overlap is the weakest signal of the three
+  if (qId.length === 1 && compoundMatchesTokens(qId[0], cId)) return 0.6
+
+  return jaccard(qId, cId) * 0.7 // scaled below prefix/suffix — a partial, unordered overlap is the weakest signal of the three
 }
 
 interface ScoredRecord {
@@ -332,7 +399,7 @@ interface ScoredRecord {
 /** Conservative threshold for a *fuzzy* (non-exact-normalized-string) BLS match. Exact matches bypass this entirely. */
 const FUZZY_MIN_SCORE = 50
 
-function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null): ScoredRecord[] {
+function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: string | null, queryFoodType: FoodType, queryCoreFood: string | null, attrs = UNKNOWN_ATTRIBUTES): ScoredRecord[] {
   const queryTokens = tokenizeBls(queryText)
   return records.map((record) => {
     // PRIMARY check first, before any lexical scoring: the official BLS Code letter (X/Y =
@@ -348,15 +415,38 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
       }
     }
 
-    const scoreDe = nameScore(queryTokens, record.tokensDe, true)
+    // Score against every synonym spelling BLS offers and keep the best — and remember WHICH
+    // spelling won, so the identity gates below judge the same text the score came from.
+    const deVariants: [string, string[]][] = [
+      [record.nameDe, record.tokensDe],
+      ...blsNameAlternates(record.nameDe).map((n, i) => [n, record.alternateTokensDe[i]] as [string, string[]]),
+    ]
+    let scoreDe = -Infinity
+    let bestDeName = record.nameDe
+    for (const [name, toks] of deVariants) {
+      const sc = nameScore(queryTokens, toks, true)
+      if (sc > scoreDe) { scoreDe = sc; bestDeName = name }
+    }
     const scoreEn = nameScore(queryTokens, record.tokensEn, false)
     const matchedViaEnglish = scoreEn > scoreDe
     const best = Math.max(scoreDe, scoreEn)
-    const candidateName = matchedViaEnglish ? (record.nameEn ?? "") : record.nameDe
+    const candidateName = matchedViaEnglish ? (record.nameEn ?? "") : bestDeName
 
     // Second PRIMARY signal, alongside foodTypeConflict — see coreIdentityConflict() in
     // ranking.ts. Shared with OFF/USDA rather than a separate BLS-specific implementation.
-    const mismatchReason = (coreIdentityConflict(queryCoreFood, candidateName)
+    // Attribute gates rank with foodTypeConflict as PRIMARY signals — a fresh/ground or
+    // canned/dried or fat-class difference is a different food, not a weaker text match.
+    const ca = inferAttributesFromName(record.nameDe)
+    const attrReason =
+      formConflict(attrs.form, ca.form) || freshVsProcessedFormConflict(attrs.preservation, ca.form)
+        ? `form conflict: a "${attrs.form}" query cannot accept a "${ca.form}" BLS entry ("${record.nameDe}")`
+      : preservationConflict(attrs.preservation, ca.preservation)
+        ? `preservation conflict: a "${attrs.preservation}" query cannot accept a "${ca.preservation}" BLS entry ("${record.nameDe}")`
+      : fatConflict(attrs.fatPercent, record.nutrients.fatPer100g)
+        ? `fat conflict: ${attrs.fatPercent}% requested, "${record.nameDe}" has ${record.nutrients.fatPer100g}g/100g`
+      : null
+
+    const mismatchReason = attrReason ?? (coreIdentityConflict(queryCoreFood, candidateName)
       ? `core identity conflict: "${queryCoreFood}" is absent from candidate name ("${candidateName}")`
       : null) ?? findMismatch(queryText, candidateName) ?? (categoryConflict(category, candidateName) ? `category conflict: "${category}" vs "${candidateName}"` : null)
 
@@ -442,6 +532,10 @@ export class BlsProvider implements NutrientProvider {
       { text: structuredName, core: query.coreFoodGerman ?? null },
       { text: canonicalGerman, core: query.coreFoodGerman ?? null },
       { text: query.foodName, core: query.coreFoodEnglish ?? null },
+      // Last resort: the classifier's own modifier-stripped German core. "Basmati-Reis" names a
+      // variety BLS does not model, but its core "Reis" reaches the generic rice record — using
+      // the base noun we already have rather than inventing a synonym list.
+      { text: query.coreFoodGerman ?? null, core: query.coreFoodGerman ?? null },
     ].filter((v, i, arr): v is { text: string; core: string | null } => !!v.text && arr.findIndex((o) => o.text === v.text) === i)
     const queryTexts = queryVariants.map((v) => v.text)
 
@@ -457,7 +551,15 @@ export class BlsProvider implements NutrientProvider {
     // otherwise be silently masked by up to CACHE_MATCH_TTL (7 days by default) of stale matches
     // for any ingredient text already resolved once. Bump this string whenever nameScore's
     // matching behavior changes.
-    const queryKey = buildQueryKey(`${BLS_MATCH_ALGORITHM_VERSION}:${queryTexts.join("|")}|${query.state}`, query.brand)
+    const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
+    // Attributes are part of the POSITIVE key (not merely revalidated) because two queries with the
+    // same text and state but different form/preservation/fat are genuinely different questions —
+    // "Ingwer" fresh vs ground, "Kochsahne 7%" vs "15%". Revalidation alone could not separate
+    // them, since the stored candidate name is identical in both cases.
+    const queryKey = buildQueryKey(
+      `${BLS_MATCH_ALGORITHM_VERSION}:${queryTexts.join("|")}|${query.state}|${attributesKey(attrs)}`,
+      query.brand,
+    )
     // category/foodType/coreFood are not part of the positive key by design — re-checked against
     // the stored candidate instead (cachedMatchConflict). The German core is used here because the
     // stored productName always contains BLS's German name (plus its English name only when the
@@ -496,7 +598,12 @@ export class BlsProvider implements NutrientProvider {
         // BLS-code-derived type outranks string equality (a "simple" query whose text happens to
         // exactly equal a composite dish's name is a contradiction worth rejecting, not trusting).
         const typeOk = !foodTypeConflict(query.foodType, withKcal.foodType)
-        if (stateOk && typeOk) {
+        // An exact NAME match still must not cross a nutritionally meaningful attribute boundary.
+        const exactAttrs = inferAttributesFromName(withKcal.nameDe)
+        const attrOk = !formConflict(attrs.form, exactAttrs.form)
+          && !preservationConflict(attrs.preservation, exactAttrs.preservation)
+          && !fatConflict(attrs.fatPercent, withKcal.nutrients.fatPer100g)
+        if (stateOk && typeOk && attrOk) {
           const match = buildMatch(query, { record: withKcal, score: 100, mismatchReason: null, matchedViaEnglish: false }, true)
           setCachedProviderMatch(this.name, queryKey, match)
           return match
@@ -513,7 +620,7 @@ export class BlsProvider implements NutrientProvider {
       // the FULL pool, so exact German rows outside the curated set (Gemüsebrühe, Hühnerei
       // gekocht, Tomate getrocknet, Sojabohne reif gekocht) remain reachable.
       const pool = degraded ? data.preferredRecords : data.records
-      const scored = scoreCandidates(text, pool, query.category, query.foodType, core).sort((a, b) => b.score - a.score)
+      const scored = scoreCandidates(text, pool, query.category, query.foodType, core, attrs).sort((a, b) => b.score - a.score)
       const picked = pickBestByState(scored, query.state, FUZZY_MIN_SCORE)
       if (picked) {
         const match = buildMatch(query, picked, false)
@@ -527,6 +634,21 @@ export class BlsProvider implements NutrientProvider {
     markProviderMiss(this.name, missKey)
     return null
   }
+}
+
+/**
+ * Test/diagnostic seam: returns the ranked candidate list for one query text, so a regression can
+ * assert WHY a record won rather than only that it did. Mirrors the provider's own scoring path.
+ */
+export async function __scoreForDiagnostics(
+  queryText: string, category: string | null, foodType: FoodType, core: string | null, attrs = UNKNOWN_ATTRIBUTES,
+): Promise<{ code: string; name: string; score: number; reason: string | null }[]> {
+  const data = await getBlsData()
+  if (!data) return []
+  return scoreCandidates(queryText, data.records, category, foodType, core, attrs)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 6)
+    .map((s) => ({ code: s.record.blsCode, name: s.record.nameDe, score: Math.round(s.score), reason: s.mismatchReason }))
 }
 
 export function createBlsProviderIfAvailable(): BlsProvider {
