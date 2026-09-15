@@ -162,11 +162,61 @@ function coreTokensOf(coreText: string | null | undefined): string[] {
  * compounding: BLS's own "Speisezwiebel" must be recognized as containing the core "zwiebel"
  * even though it's fused into one token, not a separate word.
  */
-export function coreIdentityConflict(coreText: string | null | undefined, candidateName: string): boolean {
+/**
+ * Which language's word-formation rules the core token follows.
+ *
+ * "compound" (German): a core may appear FUSED inside a candidate token, because German compounds
+ * genuinely carry the head noun that way — BLS's "Speisezwiebel" really is a "Zwiebel".
+ *
+ * "token" (English): the core must BE a candidate token. English does not fuse identity like that,
+ * so substring containment there matches unrelated words that merely share letters. Found live:
+ * "Gewürzpaste" -> core "spice" was satisfied by USDA's "Spices, allspice, ground" — "allspice"
+ * literally contains "spice", so the wrong food's own name passed the gate — and with zero name
+ * similarity the candidate still reached exactly MIN_ACCEPTABLE_SCORE and was accepted. Same class
+ * as corn/acorn, mint/peppermints, rice/liquorice.
+ */
+export type CoreMatchMode = "compound" | "token"
+
+/**
+ * English token equivalence: the same word, allowing only a regular plural difference.
+ *
+ * Deliberately just exact equality plus a trailing "s"/"es" on either side — no stemming, no
+ * prefix/suffix compounding, no substring containment. That is exactly enough to recover the
+ * singular/plural pairs USDA's descriptions produce (tomato/Tomatoes, onion/Onions,
+ * carrot/Carrots, lentil/Lentils, spice/Spices) while still refusing the superstring class that
+ * caused the live wrong-identity match: "spice" vs "allspice", "corn" vs "acorn", "mint" vs
+ * "peppermints", "rice" vs "liquorice" — in each of those the candidate is a DIFFERENT word that
+ * merely ends with the core, which no plural rule can turn into a match.
+ */
+function englishTokenMatches(core: string, token: string): boolean {
+  if (core === token) return true
+  if (token === `${core}s` || core === `${token}s`) return true
+  if (token === `${core}es` || core === `${token}es`) return true
+  return false
+}
+
+export function coreIdentityConflict(
+  coreText: string | null | undefined,
+  candidateName: string,
+  mode: CoreMatchMode = "compound",
+): boolean {
   const coreTokens = coreTokensOf(coreText)
   if (coreTokens.length === 0) return false
   const candidateTokens = tokenize(candidateName)
-  const hasCore = coreTokens.some((core) => candidateTokens.some((t) => t.includes(core)))
+  const hasCore = coreTokens.some((core) =>
+    mode === "token"
+      // A GENERIC_DESCRIPTOR token cannot BE the identity evidence. USDA prefixes whole families
+      // with a classificatory word ("Spices, allspice, ground", "Herbs, basil, fresh"), so the
+      // plural rule would otherwise let core "spice" be satisfied by the prefix "Spices" — which
+      // is exactly how "Gewürzpaste" reached "Spices, allspice, ground" in production. This only
+      // stops such a token COUNTING as evidence; it never rejects a candidate for containing one,
+      // so "cumin" still matches "Spices, cumin seed" via "cumin" and "basil" still matches
+      // "Herbs, basil, fresh" via "basil". A query whose only core evidence is itself generic
+      // ("spice", "herb", "seed") therefore finds no identity at all and falls back safely,
+      // instead of adopting whichever specific food happens to share the family prefix.
+      ? candidateTokens.some((t) => !GENERIC_DESCRIPTOR_WORDS.has(t) && englishTokenMatches(core, t))
+      : candidateTokens.some((t) => t.includes(core)),
+  )
   return !hasCore
 }
 
@@ -489,6 +539,11 @@ export interface RankOptions {
    * coreIdentityScoreAdjustment(). Absent/null is permissive.
    */
   queryCoreFood?: string | null
+  /**
+   * Word-formation rules for queryCoreFood. English callers (OFF/USDA) must pass "token" so a core
+   * cannot be satisfied by containment inside an unrelated word; German (BLS) keeps "compound".
+   */
+  coreMatchMode?: CoreMatchMode
   /** Scores a provider-specific dataset tier (e.g. USDA dataType) as a ranking signal, not a hard filter. */
   dataTypeScore?: (dataType: string | null | undefined) => number
 }
@@ -518,7 +573,7 @@ export function rankCandidates<T extends RankableCandidate>(
       // Second PRIMARY hard-rejection signal, checked right alongside foodTypeConflict: a
       // candidate whose name contains NONE of the query's core-identity tokens is a different
       // food regardless of any shared adjective/descriptor. See coreIdentityConflict().
-      mismatchReason = mismatchReason ?? (coreIdentityConflict(options.queryCoreFood, candidate.name)
+      mismatchReason = mismatchReason ?? (coreIdentityConflict(options.queryCoreFood, candidate.name, options.coreMatchMode)
         ? `core identity conflict: "${options.queryCoreFood}" is absent from candidate name ("${candidate.name}")`
         : null)
 
@@ -583,6 +638,9 @@ export interface MatchingContext {
   foodType: FoodType
   /** coreFoodGerman or coreFoodEnglish, whichever language this provider matched in. */
   coreFood: string | null | undefined
+  /** Must mirror the RankOptions value the provider ranks with, so a cache hit is revalidated
+   * under the SAME identity rules that would apply to a fresh lookup. */
+  coreMatchMode?: CoreMatchMode
   /** Identity capabilities in force for this lookup — see evidenceKey(). */
   evidence?: IdentityEvidence
 }
@@ -646,7 +704,7 @@ export function cachedMatchConflict(
   if (foodTypeConflict(ctx.foodType, cached.foodType ?? "unknown")) {
     return `food type conflict on cached match: a "${ctx.foodType}" query cannot accept a "composite_dish" candidate ("${candidateName}")`
   }
-  if (coreIdentityConflict(ctx.coreFood, candidateName)) {
+  if (coreIdentityConflict(ctx.coreFood, candidateName, ctx.coreMatchMode)) {
     return `core identity conflict on cached match: "${ctx.coreFood}" is absent from candidate name ("${candidateName}")`
   }
   const mismatch = findMismatch(ctx.foodName, candidateName)

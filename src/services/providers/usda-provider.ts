@@ -199,7 +199,7 @@ export class UsdaProvider implements NutrientProvider {
     // like "olive oil" matches "Oil, olive, ..." and is allowed through.
     const strictCore = evidence.english ? query.coreFoodEnglish : (query.structuredName ?? query.foodName)
     const ctx = {
-      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: strictCore,
+      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: strictCore, coreMatchMode: "token" as const,
       evidence,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
@@ -275,6 +275,7 @@ export class UsdaProvider implements NutrientProvider {
       queryCategory: query.category,
       queryFoodType: query.foodType,
       queryCoreFood: strictCore,
+      coreMatchMode: "token" as const,
       dataTypeScore: (dt) => dataTypeScore(route, dt),
     })
     const top = ranked[0]

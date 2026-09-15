@@ -800,3 +800,50 @@ describe("cachedMatchConflict — re-validates a cache hit against the current q
     ).toBeNull()
   })
 })
+
+// Found live: "Gewürzpaste" (a vegetable-bouillon paste) resolved to USDA "Spices, allspice,
+// ground" — core "spice" was satisfied by substring containment inside "spices"/"allspice", and
+// with zero name similarity the candidate still reached exactly MIN_ACCEPTABLE_SCORE. English does
+// not fuse identity the way German compounds do, so English core evidence now requires a whole
+// token (plus regular s/es plurals), and a classificatory GENERIC_DESCRIPTOR token can never BE
+// the evidence — USDA prefixes entire families with "Spices, …"/"Herbs, …".
+describe("English core identity: whole-token evidence", () => {
+  const conflict = (core: string, name: string) => coreIdentityConflict(core, name, "token")
+
+  it("rejects the superstring class that caused the live wrong identity", () => {
+    expect(conflict("spice", "Spices, allspice, ground")).toBe(true)
+    expect(conflict("corn", "Acorn squash, raw")).toBe(true)
+    expect(conflict("rice", "Liquorice, candy")).toBe(true)
+    expect(conflict("mint", "Peppermints, hard candy")).toBe(true)
+  })
+
+  it("still accepts regular singular/plural pairs", () => {
+    expect(conflict("tomato", "Tomatoes, raw")).toBe(false)
+    expect(conflict("onion", "Onions, raw")).toBe(false)
+    expect(conflict("carrot", "Carrots, frozen, unprepared")).toBe(false)
+    expect(conflict("red lentil", "Lentils, raw")).toBe(false)
+    expect(conflict("spring onion", "Onions, raw")).toBe(false)
+  })
+
+  it("a generic classificatory token is never itself the identity evidence", () => {
+    // the family prefix must not stand in for the food
+    expect(conflict("spice", "Spices, cumin seed")).toBe(true)
+    expect(conflict("herb", "Herbs, basil, fresh")).toBe(true)
+    expect(conflict("seed", "Spices, coriander seed")).toBe(true)
+  })
+
+  it("but a candidate is never rejected merely for CONTAINING a generic descriptor", () => {
+    expect(conflict("cumin", "Spices, cumin seed")).toBe(false)
+    expect(conflict("basil", "Herbs, basil, fresh")).toBe(false)
+    expect(conflict("coriander", "Spices, coriander seed")).toBe(false)
+    expect(conflict("oregano", "Spices, oregano, dried")).toBe(false)
+    expect(conflict("parsley", "Spices, parsley, dried")).toBe(false)
+  })
+
+  it("leaves German compound matching untouched", () => {
+    for (const [core, name] of [["Zwiebel", "Speisezwiebel roh"], ["Brühe", "Gemüsebrühe"],
+                                ["Knoblauch", "Knoblauch roh"], ["Tomaten", "Tomatenmark"]] as const) {
+      expect(coreIdentityConflict(core, name, "compound"), `${core}/${name}`).toBe(false)
+    }
+  })
+})

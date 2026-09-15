@@ -122,7 +122,7 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
     const provider = createUsdaProviderIfConfigured()!
     const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic`, null)
     setCachedProviderMatch("usda", queryKey, {
-      provider: "usda", providerId: "173474", productName: "Peppermint, fresh", brand: null,
+      provider: "usda", providerId: "173474", productName: "Wild mint, fresh", brand: null,
       canonicalName: "Bergminze", state: "unknown", dataType: "SR Legacy",
       confidence: 0.6, matchReason: "fuzzy", foodType: "simple",
       nutrients: { kcalPer100g: 70, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
@@ -130,7 +130,7 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
         fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null },
     } as any)
 
-    // Healthy evidence: the validated core "mint" IS present in the cached name -> reused as-is.
+    // Healthy evidence: the validated core "mint" IS present in the cached name (whole token) -> reused as-is.
     const healthyCalls = router({ usda: [] })
     const healthy = await provider.lookup({
       foodName: "Bergminze", structuredName: "Bergminze", brand: null, category: null, state: "unknown",

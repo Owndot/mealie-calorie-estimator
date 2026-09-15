@@ -185,7 +185,7 @@ export class OffProvider implements NutrientProvider {
     }
 
     const ctx = {
-      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish,
+      foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish, coreMatchMode: "token" as const,
       evidence,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
@@ -240,6 +240,7 @@ export class OffProvider implements NutrientProvider {
       queryCategory: query.category,
       queryFoodType: query.foodType,
       queryCoreFood: query.coreFoodEnglish,
+      coreMatchMode: "token" as const,
     })
     const top = ranked[0]
 

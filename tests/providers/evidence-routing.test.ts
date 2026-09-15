@@ -265,12 +265,32 @@ describe("degraded USDA strict mode", () => {
   })
 
   it("the same German ingredient DOES resolve once a validated English identity exists", async () => {
+    // Candidate names the core exactly. "Peppermint, fresh" deliberately does NOT — see the
+    // English-core policy test below.
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      fdc([{ fdcId: 173474, description: "Peppermint, fresh", dataType: "SR Legacy", foodNutrients: kcal(70) }]),
+      fdc([{ fdcId: 173474, description: "Mint, fresh", dataType: "SR Legacy", foodNutrients: kcal(70) }]),
     )
     const m = await createUsdaProviderIfConfigured()!.lookup(
       q({ foodName: "mint", structuredName: "Minze", coreFoodEnglish: "mint", evidence: HEALTHY }),
     )
     expect(m?.providerId).toBe("173474")
+  })
+
+  // v1 POLICY, deliberately chosen: English core identity requires a whole-token match (plus
+  // regular s/es plurals). "Peppermint" is an English closed compound, so core "mint" no longer
+  // satisfies it and Minze falls back safely instead of taking a database match. The alternative —
+  // substring containment — is what let "Gewürzpaste" match "Spices, allspice, ground", and no
+  // token rule can separate "Peppermint, fresh" (correct) from "Peppermints, hard candy" (wrong)
+  // since they differ only by a plural "s". A safe fallback is preferred to that risk for v1.
+  it("accepts losing Minze -> 'Peppermint, fresh' rather than reopening substring matching", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      fdc([{ fdcId: 173474, description: "Peppermint, fresh", dataType: "SR Legacy", foodNutrients: kcal(70) }]),
+    )
+    // state "raw" keeps this out of the preceding test's positive cache entry, whose key is
+    // (version|foodName|state|route).
+    const m = await createUsdaProviderIfConfigured()!.lookup(
+      q({ foodName: "mint", structuredName: "Minze", coreFoodEnglish: "mint", state: "raw", evidence: HEALTHY }),
+    )
+    expect(m).toBeNull() // falls through to the LLM nutrient fallback
   })
 })
