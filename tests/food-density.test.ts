@@ -172,3 +172,60 @@ describe("compound-head semantic exceptions", () => {
     expect(ml("Rohrzucker")).toBeCloseTo(83.3, 1)
   })
 })
+
+// Found in the block-4 live probe: the German compound guard correctly rejected "Ölsardinen" and
+// "Brühwurst", but the LLM's English translations "oil sardines" / "broth sausage" sailed through,
+// because a plain token match accepts the density word anywhere in the phrase. English noun
+// phrases put the head LAST ("vegetable broth" is a broth; "broth sausage" is a sausage), so for
+// the head-sensitive categories an English keyword only counts as the FINAL token. German keeps
+// the permissive rule, because its qualifiers trail the head ("Brühe, klar" is still broth).
+describe("English head-position rule for head-sensitive density categories", () => {
+  const en = (s: string) => estimateVolumeGrams(100, "ml", { canonicalEnglish: s })
+  const de = (s: string) => estimateVolumeGrams(100, "ml", { canonicalGerman: s })
+
+  it("still matches when the density word IS the English head", () => {
+    for (const s of ["vegetable broth", "coconut milk", "orange juice", "red wine", "broth", "milk", "cream", "water"]) {
+      expect(en(s), s).toBe(100)
+    }
+    for (const s of ["olive oil", "sunflower oil"]) expect(en(s), s).toBeCloseTo(90.7, 1)
+    expect(en("sea salt")).toBe(120)
+    expect(en("brown sugar")).toBeCloseTo(83.3, 1)
+    expect(en("maple syrup")).toBe(140)
+  })
+
+  it("rejects phrases where the density word is only a modifier", () => {
+    for (const s of ["broth sausage", "oil sardines", "milk chocolate", "wine vinegar", "wine grapes", "cream cheese"]) {
+      expect(en(s), s).toBeNull()
+    }
+  })
+
+  it("leaves German post-nominal qualifiers working — they trail the head", () => {
+    for (const s of ["Brühe, klar", "Milch, fettarm", "Sahne, geschlagen", "Gemüsebrühe", "Kokosmilch"]) {
+      expect(de(s), s).toBe(100)
+    }
+    expect(de("Sonnenblumenöl")).toBeCloseTo(90.7, 1)
+    // and the German compounds whose shared word is the modifier stay rejected
+    for (const s of ["Ölsardinen", "Brühwurst"]) expect(de(s), s).toBeNull()
+  })
+
+  it("rejects the full identity bundle the live probe actually sends", () => {
+    const bundle = (g: string, e: string) => estimateVolumeGrams(100, "ml", { canonicalGerman: g, canonicalEnglish: e, structuredName: g })
+    expect(bundle("Ölsardinen", "oil sardines")).toBeNull()
+    expect(bundle("Brühwurst", "broth sausage")).toBeNull()
+    // …while the genuine liquids in the same probe keep resolving
+    expect(bundle("Gemüsebrühe", "vegetable broth")).toBe(100)
+    expect(bundle("Rotwein", "red wine")).toBe(100)
+    expect(bundle("Sonnenblumenöl", "sunflower oil")).toBeCloseTo(90.7, 1)
+  })
+
+  // Reported, deliberately NOT "fixed" with new density constants: in these the head genuinely IS
+  // milk/cream, so the head rule cannot and should not reject them. Their inaccuracy is a density
+  // constant question, not a matching question.
+  it("documents the milk/cream product cases the head rule does not address", () => {
+    expect(en("milk powder")).toBeNull()      // head is "powder" -> correctly rejected
+    expect(en("dry milk")).toBe(100)          // head IS milk; real powder ~0.5 g/ml
+    expect(en("spray cream")).toBe(100)       // head IS cream; real aerosol ~0.3 g/ml
+    expect(en("condensed milk")).toBe(100)    // head IS milk; real ~1.3 g/ml
+    expect(de("Trockenmilch")).toBe(100)      // German compound, head IS milch
+  })
+})

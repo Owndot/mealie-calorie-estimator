@@ -129,34 +129,56 @@ export function toFoodIdentity(food: string | FoodIdentity): FoodIdentity {
   return typeof food === "string" ? { structuredName: food } : food
 }
 
-function identityTexts(identity: FoodIdentity): string[] {
+/**
+ * Identity texts in order of reliability, each tagged with the head position its language uses.
+ *
+ * English noun phrases put the head LAST and modifiers first ("vegetable broth" is a broth,
+ * "broth sausage" is a sausage), so for the head-sensitive categories an English keyword only
+ * counts when it IS the final token. German post-nominal qualifiers run the other way
+ * ("Brühe, klar" is still broth), so German text keeps the permissive any-token rule and relies on
+ * compound-head matching instead. structuredName is the raw Mealie name — German in this
+ * deployment, and the permissive rule is its long-standing behaviour — so it is treated as German.
+ */
+function identityTexts(identity: FoodIdentity): { text: string; englishHeadOnly: boolean }[] {
   return [
-    identity.coreFoodGerman, identity.coreFoodEnglish,
-    identity.canonicalGerman, identity.canonicalEnglish,
-    identity.structuredName,
-  ].filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+    { text: identity.coreFoodGerman, englishHeadOnly: false },
+    { text: identity.coreFoodEnglish, englishHeadOnly: true },
+    { text: identity.canonicalGerman, englishHeadOnly: false },
+    { text: identity.canonicalEnglish, englishHeadOnly: true },
+    { text: identity.structuredName, englishHeadOnly: false },
+  ].filter((e): e is { text: string; englishHeadOnly: boolean } => typeof e.text === "string" && e.text.trim().length > 0)
 }
 
-function matchesCategory(tokens: string[], normalized: string, entry: CategoryEntry): boolean {
+function matchesCategory(tokens: string[], normalized: string, entry: CategoryEntry, englishHeadOnly: boolean): boolean {
   if (entry.requiresAll) {
     return entry.requiresAll.every((group) => group.some((k) => tokens.includes(k)))
   }
+
+  // Only the head-sensitive categories (those that opt into compound heads) get the English
+  // head-position rule; everything else keeps plain token matching.
+  const headOnly = englishHeadOnly && entry.compoundHeads !== undefined && tokens.length > 1
+  const last = tokens[tokens.length - 1]
+
   for (const keyword of entry.keywords) {
     if (keyword.includes(" ")) {
+      // Explicit multi-word keywords ("bread crumbs") are already a full phrase, not a head.
       if (normalized.includes(keyword)) return true
-    } else if (tokens.includes(keyword)) {
+    } else if (headOnly ? last === keyword : tokens.includes(keyword)) {
       return true
     }
   }
-  return entry.compoundHeads?.some((head) => tokens.some((t) => t !== head && t.endsWith(head))) ?? false
+
+  if (!entry.compoundHeads) return false
+  const candidates = headOnly ? [last] : tokens
+  return entry.compoundHeads.some((head) => candidates.some((t) => t !== head && t.endsWith(head)))
 }
 
 function matchCategory(identity: FoodIdentity): SpoonCupDensity | null {
-  for (const text of identityTexts(identity)) {
+  for (const { text, englishHeadOnly } of identityTexts(identity)) {
     const normalized = normalizeIdentityText(text)
     const tokens = normalized.split(" ").filter(Boolean)
     for (const entry of CATEGORY_DENSITIES) {
-      if (matchesCategory(tokens, normalized, entry)) return entry.density
+      if (matchesCategory(tokens, normalized, entry, englishHeadOnly)) return entry.density
     }
   }
   return null
@@ -318,7 +340,8 @@ export function estimatePieceWeightGrams(quantity: number, unitName: string, foo
   const texts = identityTexts(toFoodIdentity(food))
 
   for (const entry of PIECE_WEIGHTS) {
-    if (texts.some((t) => entry.keywords.test(t))) {
+    // Piece weights keep their own \b-anchored keyword regexes and are not head-sensitive.
+    if (texts.some(({ text }) => entry.keywords.test(text))) {
       const weight = entry.unitWeights[key]
       if (weight != null) return quantity * weight
     }
