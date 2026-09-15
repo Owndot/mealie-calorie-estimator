@@ -1,0 +1,49 @@
+name: Build BLS ingredient database
+
+on:
+  push:
+    branches:
+      - bls-db-build
+    paths:
+      - scripts/build_bls_ingredients_db.py
+      - .github/workflows/build-bls-db.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install builder dependencies
+        run: pip install --disable-pip-version-check openpyxl requests
+      - name: Build lossless SQLite subset
+        run: python scripts/build_bls_ingredients_db.py
+      - name: Show validation report
+        run: cat BLS_4_0_ingredients_2992.validation.json
+      - name: Query smoke tests
+        run: |
+          python - <<'PY'
+          import sqlite3
+          db = sqlite3.connect('BLS_4_0_ingredients_2992.sqlite')
+          assert db.execute('select count(*) from foods').fetchone()[0] == 2992
+          assert db.execute('select count(*) from nutrients').fetchone()[0] == 138
+          assert db.execute('select count(*) from food_nutrients').fetchone()[0] == 2992 * 138
+          for code in ('F503100', 'M402600'):
+              print(code, db.execute('select name_de from foods where bls_code=?', (code,)).fetchone())
+          print('special tokens:', db.execute("select value_raw,count(*) from food_nutrients where value_raw in ('TR','<LOD','<LOQ','<LOD or <LOQ','-') group by value_raw").fetchall())
+          print('integrity:', db.execute('pragma integrity_check').fetchone()[0])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BLS_4_0_ingredients_2992
+          path: |
+            BLS_4_0_ingredients_2992.sqlite
+            BLS_4_0_ingredients_2992.validation.json
+          if-no-files-found: error
+          retention-days: 7
