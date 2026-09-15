@@ -59,7 +59,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v16"
+const USDA_MATCH_ALGORITHM_VERSION = "v17"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -204,6 +204,7 @@ export class UsdaProvider implements NutrientProvider {
     const ctx = {
       foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: strictCore, coreMatchMode: "token" as const,
       evidence,
+      attributes: attrs,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 

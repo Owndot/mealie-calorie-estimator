@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
-  NutrientSet, MealieNutrition, Completeness, FoodState,
+  NutrientSet, MealieNutrition, Completeness, MatchQuality, FoodState,
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
@@ -168,6 +168,70 @@ function classifyCompleteness(
   return { completeness: "partial", reason: `${unmatchedCount} ingredient(s) unresolved but weight share is minor` }
 }
 
+/**
+ * Per-ingredient confidence below which a match is reported as needing a caveat. Calibrated
+ * against what the providers actually emit: an exact BLS name match is 0.92, a strong fuzzy BLS or
+ * USDA match lands in the 0.7-0.85 band, a BLS record broadened to a sub-variety is that times
+ * 0.8, and an LLM nutrient estimate is a flat 0.35.
+ */
+const LOW_CONFIDENCE_THRESHOLD = 0.6
+const HIGH_QUALITY_MEAN = 0.75
+const LOW_QUALITY_MEAN = 0.55
+/** A single ingredient contributing more than this share of total energy cannot be outvoted. */
+const DOMINANT_CONTRIBUTION_SHARE = 0.2
+
+/**
+ * Grades the RECORDS that were found, independently of how much of the recipe they cover.
+ *
+ * Weighted by each ingredient's share of total energy, so the grade tracks how much of the number
+ * actually rests on a doubtful match. A dominant ingredient is checked separately as well: a 400 g
+ * bean match at 0.55 confidence is 40% of a curry's calories, and averaging it against a dozen
+ * confident herbs would hide exactly the case worth surfacing.
+ */
+export function classifyMatchQuality(
+  matched: IngredientMatch[],
+): { matchQuality: MatchQuality; reason: string | null; lowConfidence: string[] } {
+  const contributions = matched
+    .filter((i) => i.matched && i.nutrients?.kcalPer100g != null && i.grams != null)
+    .map((i) => ({ i, kcal: Math.abs((i.nutrients!.kcalPer100g! * i.grams!) / 100) }))
+
+  const lowConfidence = matched
+    .filter((i) => i.matched && (i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD)
+    .map((i) => i.name)
+
+  if (contributions.length === 0) {
+    // Nothing energy-bearing resolved; coverage already reports that, and there is no quality
+    // signal to give. Reported as "low" rather than silently "high".
+    return { matchQuality: "low", reason: "no energy-bearing ingredient resolved", lowConfidence }
+  }
+
+  const totalKcal = contributions.reduce((a, c) => a + c.kcal, 0)
+  // With no energy at all (a recipe of water and salt) every weight is 0, so fall back to an
+  // unweighted mean rather than dividing by zero.
+  const weighted = totalKcal > 0
+    ? contributions.reduce((a, c) => a + (c.i.confidence ?? 0) * (c.kcal / totalKcal), 0)
+    : contributions.reduce((a, c) => a + (c.i.confidence ?? 0), 0) / contributions.length
+
+  const dominantDoubt = totalKcal > 0
+    ? contributions.find((c) => c.kcal / totalKcal > DOMINANT_CONTRIBUTION_SHARE && (c.i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD)
+    : undefined
+
+  if (dominantDoubt) {
+    const share = Math.round((dominantDoubt.kcal / totalKcal) * 100)
+    return {
+      matchQuality: weighted < LOW_QUALITY_MEAN ? "low" : "mixed",
+      reason: `"${dominantDoubt.i.name}" contributes ${share}% of the calories from a low-confidence match (${dominantDoubt.i.productName ?? "no record"})`,
+      lowConfidence,
+    }
+  }
+
+  if (weighted >= HIGH_QUALITY_MEAN) return { matchQuality: "high", reason: null, lowConfidence }
+  if (weighted < LOW_QUALITY_MEAN) {
+    return { matchQuality: "low", reason: `calorie-weighted match confidence is ${weighted.toFixed(2)}`, lowConfidence }
+  }
+  return { matchQuality: "mixed", reason: `calorie-weighted match confidence is ${weighted.toFixed(2)}`, lowConfidence }
+}
+
 export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResult> {
   const validIngredients = collectValidIngredients(recipe)
 
@@ -292,6 +356,8 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     completeness !== "withheld" && servings && servings > 0 ? divideByServings(totalNutrients, servings) : emptyNutrients()
   const effectiveTotal = completeness === "withheld" ? emptyNutrients() : totalNutrients
 
+  const { matchQuality, reason: matchQualityReason, lowConfidence } = classifyMatchQuality(matchedIngredients)
+
   const result: EstimateResult = {
     slug: recipe.slug,
     servings,
@@ -303,6 +369,9 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     matchedIngredients,
     completeness,
     completenessReason,
+    matchQuality,
+    matchQualityReason,
+    lowConfidenceIngredients: lowConfidence,
   }
 
   logger.info(
@@ -310,6 +379,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       slug: recipe.slug,
       servings,
       completeness,
+      matchQuality,
       totalKcal: effectiveTotal.kcalPer100g,
       kcalPerServing: perServingNutrients.kcalPer100g,
       matched: result.matchedCount,
@@ -444,6 +514,16 @@ export function buildNutritionPatch(
 
   if (result.completenessReason) {
     extras.calorie_estimator_status_reason = result.completenessReason
+  }
+
+  // COVERAGE and QUALITY are reported as separate keys. calorie_estimator_status keeps its exact
+  // existing values and meaning, so nothing downstream breaks; these are additive.
+  extras.calorie_estimator_match_quality = result.matchQuality
+  if (result.matchQualityReason) {
+    extras.calorie_estimator_match_quality_reason = result.matchQualityReason
+  }
+  if (result.lowConfidenceIngredients.length > 0) {
+    extras.calorie_estimator_low_confidence = JSON.stringify(result.lowConfidenceIngredients)
   }
 
   const llmIngredients = result.matchedIngredients.filter((i) => i.llmParticipated).map((i) => i.name)

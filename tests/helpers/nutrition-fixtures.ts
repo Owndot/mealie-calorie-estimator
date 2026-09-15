@@ -125,4 +125,47 @@ export const USDA_HITS: Record<string, unknown[]> = {
   "canned kidney beans, drained": [{ fdcId: 2345678, description: "Kidney beans, NFS", dataType: "Survey (FNDDS)", foodNutrients: kcal(127, 0.5) }],
   "chicken breast": [{ fdcId: 171477, description: "Chicken, broiler, breast, meat only, raw", dataType: "SR Legacy", foodNutrients: kcal(114, 2.6) }],
   "tomato paste": [{ fdcId: 170459, description: "Tomato products, canned, paste", dataType: "SR Legacy", foodNutrients: kcal(82, 0.5) }],
+
+  // Verbatim candidate sets from the live FoodData Central API (2026-09, pageSize 25, Branded
+  // entries dropped exactly as the generic route does), for the ingredients the real-recipe
+  // validation got wrong. Recorded rather than invented so a regression test asserts what USDA
+  // actually offers — including that the CORRECT record was present and lost.
+  "canned kidney beans": [
+    { fdcId: 2341573, description: "Kidney beans, from canned, fat added", dataType: "Survey (FNDDS)", foodCategory: "Beans, peas, legumes", foodNutrients: kcal(186, 8.2) },
+    { fdcId: 2341574, description: "Kidney beans, from canned, no added fat", dataType: "Survey (FNDDS)", foodCategory: "Beans, peas, legumes", foodNutrients: kcal(135, 0.5) },
+    { fdcId: 175196, description: "Beans, kidney, all types, mature seeds, canned", dataType: "SR Legacy", foodCategory: "Legumes and Legume Products", foodNutrients: kcal(84, 0.3) },
+    { fdcId: 175198, description: "Beans, kidney, red, mature seeds, canned, drained solids", dataType: "SR Legacy", foodCategory: "Legumes and Legume Products", foodNutrients: kcal(124, 0.5) },
+    { fdcId: 2707379, description: "Kidney beans, NFS", dataType: "Survey (FNDDS)", foodCategory: "Beans, peas, legumes", foodNutrients: kcal(177, 6.97) },
+  ],
+  "coriander": [
+    { fdcId: 170922, description: "Spices, coriander seed", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(298, 17.77) },
+    { fdcId: 169997, description: "Coriander (cilantro) leaves, raw", dataType: "SR Legacy", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(23, 0.52) },
+    { fdcId: 170921, description: "Spices, coriander leaf, dried", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(279, 4.78) },
+  ],
+  "dried coriander": [
+    { fdcId: 170922, description: "Spices, coriander seed", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(298, 17.77) },
+    { fdcId: 170921, description: "Spices, coriander leaf, dried", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(279, 4.78) },
+  ],
+  "garlic seasoning": [
+    { fdcId: 2345900, description: "Garlic sauce", dataType: "Survey (FNDDS)", foodCategory: "Dips, gravies, other sauces", foodNutrients: kcal(683, 72.0) },
+    { fdcId: 2345901, description: "Garlic, cooked", dataType: "Survey (FNDDS)", foodCategory: "Mustard and other condiments", foodNutrients: kcal(142, 0.5) },
+    { fdcId: 1104647, description: "Garlic, raw", dataType: "Foundation", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(143, 0.5) },
+    { fdcId: 169230, description: "Garlic, raw", dataType: "SR Legacy", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(149, 0.5) },
+    { fdcId: 171325, description: "Spices, garlic powder", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(331, 0.73) },
+  ],
+  "cucumber water": [
+    { fdcId: 168409, description: "Cucumber, raw", dataType: "SR Legacy", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(15, 0.11) },
+    { fdcId: 169225, description: "Cucumber, with peel, raw", dataType: "SR Legacy", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(15, 0.11) },
+  ],
+  "pasta": [
+    { fdcId: 2343000, description: "Pasta, cooked", dataType: "Survey (FNDDS)", foodCategory: "Pasta, noodles, cooked grains", foodNutrients: kcal(157, 0.9) },
+    { fdcId: 168927, description: "Pasta, dry, enriched", dataType: "SR Legacy", foodCategory: "Cereal Grains and Pasta", foodNutrients: kcal(371, 1.5) },
+  ],
+  "mustard": [
+    { fdcId: 2345432, description: "Mustard", dataType: "Survey (FNDDS)", foodCategory: "Mustard and other condiments", foodNutrients: kcal(69, 4.0) },
+    { fdcId: 172281, description: "Spices, mustard seed, ground", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(508, 36.2) },
+  ],
+  "ghee": [
+    { fdcId: 2341061, description: "Ghee, clarified butter", dataType: "Survey (FNDDS)", foodCategory: "Butter and animal fats", foodNutrients: kcal(876, 99.5) },
+  ],
 }

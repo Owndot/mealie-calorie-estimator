@@ -28,21 +28,35 @@ export const GERMAN_DESCRIPTOR_WORDS = new Set([
   // preparation
   "roh", "frisch", "gekocht", "gegart", "gebraten", "gebacken", "geduenstet", "gedaempft",
   "geschmort", "gegrillt", "frittiert", "geroestet", "pochiert", "blanchiert", "zubereitet",
-  // preservation / handling
-  "konserve", "abgetropft", "eingelegt", "tiefgefroren", "gefroren", "getrocknet", "haltbar",
-  "pasteurisiert", "ultrahocherhitzt", "uht", "sterilisiert",
+  // preservation / handling. "dose"/"dosen"/"glas" name the CONTAINER, exactly like BLS's own
+  // "Konserve" — found live: "Kidneybohnen a. d. Dose" scored 23 against the perfect record
+  // "Kidneybohne reif, Konserve, abgetropft" because "Dose" was counted as a second food.
+  "konserve", "konserven", "dose", "dosen", "glas", "abgetropft", "eingelegt", "tiefgefroren",
+  "gefroren", "getrocknet", "haltbar", "pasteurisiert", "ultrahocherhitzt", "uht", "sterilisiert",
   // preparation of the piece
   "geschaelt", "ungeschaelt", "entkernt", "entsteint", "entbeint", "gewaschen", "geputzt",
   "gehackt", "geschnitten", "gewuerfelt", "gestueckelt", "halbiert",
   // quality / generic qualifiers
   "mild", "gesaeuert", "gesalzen", "ungesalzen", "gezuckert", "gesuesst", "ungesuesst",
   "natur", "klassisch", "ganz", "gross", "klein", "mittel", "reif", "unreif", "bio",
+  // ORGANOLEPTIC qualifiers — heat, texture and cut describe how the SAME food tastes or is cut,
+  // not what it is. Found live: BLS's four mustards ("Senf mittelscharf/scharf/extra scharf",
+  // all 111 kcal) each lost 35 points for their heat word and tied at 39.5 against a threshold of
+  // 50, so the only mustard that could still be reached was the one whose modifier happened to be
+  // whitelisted — "Senf süß" (177 kcal), the single nutritionally DIFFERENT record of the four.
+  "scharf", "mittelscharf", "pikant", "wuerzig", "herzhaft", "kraeftig", "zart", "fein", "grob",
   // BLS structural words that describe the RECORD, not the food
   "mind", "durchschnitt", "mittelwert", "sorte", "sorten", "art", "allgemein", "sonstige",
   // BLS record qualifiers that describe the preparation of the same food, not a different one
   "poliert", "unpoliert", "parboiled", "geschliffen", "vorgegart", "instant", "loeslich",
   "ausgeloest", "ausgepresst", "gepresst", "verzehrfertig", "ungezuckert", "haushaltsueblich",
   "fett", "tr", "i", "gehalt", "anteil",
+  // Compound PREFIXES BLS uses to mark an ordinary table/household grade of a food rather than a
+  // different food: Speise|zwiebel, Speise|salz, Speise|quark, Tafel|wasser, Voll|milch,
+  // Haushalts|zucker. Needed by compoundSpecifier(), which otherwise reads them as introduced
+  // content. They are listed here rather than special-cased because that is exactly what they are:
+  // category-A descriptors that happen to be fused rather than spelled as separate words.
+  "speise", "speisen", "tafel", "haushalts", "voll", "standard", "normal",
 ])
 
 /**
@@ -74,6 +88,84 @@ export function compoundIdentityModifier(token: string, headCore: string): strin
     if (prefix === mod || prefix.startsWith(mod) || prefix.endsWith(mod)) return mod
   }
   return null
+}
+
+/** Minimum length for a compound prefix to be read as a word rather than a linking fragment. */
+const MIN_SPECIFIER_LENGTH = 3
+
+/**
+ * The generalization of compoundIdentityModifier(): ANY substantial compound prefix that is not a
+ * recognized descriptor narrows the candidate to a SUB-VARIETY of the query's core food.
+ *
+ * German is right-headed, so "Reis|nudeln" really is a kind of "Nudeln" — which is precisely the
+ * problem. Found live across three of the reported failures:
+ *
+ *   query "Nudeln"    -> BLS "Reisnudeln roh"      (rice noodles: a different grain entirely)
+ *   query "Teigwaren" -> BLS "Eierteigwaren roh"   (egg pasta: an added ingredient)
+ *   query "Butter"    -> BLS "Halbfettbutter"      (the case the old closed list already caught)
+ *
+ * In each, the candidate token literally contains the query's core, so the old
+ * `t.includes(core) -> fully explained` rule scored the narrower food as if it were the plain one.
+ * The query never asked for rice, egg or half fat; a candidate must not introduce them.
+ *
+ * Returns the introduced specifier, or null when the token is just the core (possibly inflected,
+ * or carrying a descriptor prefix like "Speise|zwiebel" / "Voll|milch").
+ */
+export function compoundSpecifier(token: string, core: string, descriptors: ReadonlySet<string>): string | null {
+  if (germanTokenMatches(token, core)) return null
+
+  // Match the core as the compound HEAD, tolerating inflection on EITHER side: the core may be the
+  // plural ("Kidneybohnen" against core "Kidneybohne") or the candidate may be ("Back|erbsen"
+  // against core "Erbse"). Missing the second direction let BLS's "Backerbsen" — deep-fried snack
+  // peas at 469 kcal — pass as plain peas, since the token still merely *contained* the core.
+  const heads = [core, germanStem(core), ...(core.length >= MIN_PLURAL_BASE ? PLURAL_ENDINGS.map((e) => core + e) : [])]
+  const head = heads.find((h) => h.length >= MIN_SPECIFIER_LENGTH && token.endsWith(h) && token.length > h.length)
+  // The core appears somewhere else in the token (as its prefix, or in the middle). German
+  // identity lives in the head, so this is not sub-variety evidence — left permissive, as before.
+  if (!head) return null
+
+  const prefix = token.slice(0, token.length - head.length)
+  // Both spellings count as the same word: a descriptor may carry the linking morpheme
+  // ("Speise|zwiebel" -> "speise") or not ("Rind|er|hackfleisch" -> "rind"), and checking only the
+  // stripped form silently turned "speise" into the unknown fragment "speis".
+  const spellings = [prefix]
+  for (const link of LINKING_MORPHEMES) {
+    if (link && prefix.endsWith(link) && prefix.length - link.length >= MIN_SPECIFIER_LENGTH) {
+      spellings.push(prefix.slice(0, prefix.length - link.length))
+      break
+    }
+  }
+  if (spellings.every((p) => p.length < MIN_SPECIFIER_LENGTH)) return null
+  if (spellings.some((p) => descriptors.has(p) || GERMAN_DESCRIPTOR_WORDS.has(p) || absenceMarkerStem(p) !== null)) return null
+  // The stripped spellings exist only to look the word up; the specifier itself is returned as it
+  // actually appears, since stripping is a guess ("reis" is not "rei" with a linking -s).
+  return prefix
+}
+
+/**
+ * Macronutrient/energy components whose removal genuinely changes a food's nutrition. Used by
+ * absenceMarkerStem() to keep "zuckerfrei"/"alkoholfrei" identity-changing while letting
+ * "eifrei"/"glutenfrei"/"laktosefrei" behave as the descriptors they are.
+ */
+const ENERGY_BEARING_COMPONENTS = new Set(["fett", "zucker", "alkohol", "kohlenhydrat", "kohlenhydrate", "fat", "sugar", "alcohol", "carb", "carbs"])
+
+/**
+ * "Free-from" markers state the ABSENCE of an ingredient. They never add a foreign food, so for a
+ * query that does not mention the excluded ingredient they are descriptive, not identity-changing
+ * — found live: BLS's plain durum pasta is named "Teigwaren eifrei, roh" ("egg-FREE"), and the
+ * -35 foreign-content penalty on "eifrei" was the only reason it lost to "Eierteigwaren roh", the
+ * egg pasta that actually does add an ingredient.
+ *
+ * Returns the excluded stem so the caller can check whether the query asked for it ("Eiernudeln"
+ * must still reject an egg-free record). Energy-bearing components are excluded outright: a
+ * sugar-free or alcohol-free product IS nutritionally different regardless of the query.
+ */
+export function absenceMarkerStem(token: string): string | null {
+  const suffix = ["frei", "free"].find((s) => token.length > s.length + 1 && token.endsWith(s))
+  if (!suffix) return null
+  const stem = token.slice(0, token.length - suffix.length).replace(/[-\s]+$/, "")
+  if (stem.length < 2 || ENERGY_BEARING_COMPONENTS.has(stem)) return null
+  return stem
 }
 
 /**
@@ -119,8 +211,25 @@ export function germanStem(token: string): string {
   return token
 }
 
+/** Regular plural/inflection endings a German noun picks up: Erbse -> Erbsen, Tomate -> Tomaten. */
+const PLURAL_ENDINGS = ["n", "en", "e", "s"]
+
+/**
+ * Minimum length of the SHORTER form before a plural ending is allowed to join two words.
+ *
+ * germanStem() alone is asymmetric near its own floor — it stems "erbsen" to "erbs" but returns
+ * "erbse" untouched, so the two never met and BLS's "Erbse reif" was unreachable from "Erbsen".
+ * Comparing the shorter form against the longer plus an ending fixes that without loosening the
+ * stemmer for everything else: at five characters "erbse"/"erbsen" join while the four-character
+ * "reis"/"reise" (rice vs journey) deliberately still do not.
+ */
+const MIN_PLURAL_BASE = 5
+
 export function germanTokenMatches(a: string, b: string): boolean {
-  return a === b || germanStem(a) === germanStem(b)
+  if (a === b || germanStem(a) === germanStem(b)) return true
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  if (short.length < MIN_PLURAL_BASE) return false
+  return PLURAL_ENDINGS.some((e) => long === short + e)
 }
 
 function halfMatches(half: string, candidateTokens: string[]): boolean {
@@ -175,17 +284,135 @@ const PRESERVATION_MARKERS: [FoodPreservation, string[]][] = [
   ["fresh", ["frisch", "fresh", "roh", "raw"]],
 ]
 
+/**
+ * German adjectives inflect for case and gender ("getrocknet" -> "getrocknete Tomate",
+ * "getrockneter Thymian"), and the compound-head test is an endsWith, so the inflected form
+ * matched nothing at all: "Getrocknete Tomate in Öl" came back with preservation "unknown" instead
+ * of "dried". The weak-declension endings are tried explicitly rather than by running germanStem(),
+ * which is a conservative PLURAL stemmer and does not know "-er"/"-es"/"-em".
+ *
+ * Returns the index of the earliest matching token, or -1. The position matters: a BLS name may
+ * carry two preservation words ("Tomate getrocknet, in Öl, Konserve, abgetropft" is a DRIED tomato
+ * that happens to be jarred), and BLS states the primary transformation first, so earliest-wins
+ * reads the name the way it is written instead of the order the marker table happens to use.
+ */
+const ADJECTIVE_ENDINGS = ["", "e", "er", "es", "en", "em"]
+
+function markerIndex(tokens: string[], markers: string[]): number {
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]
+    const hit = markers.some((m) =>
+      ADJECTIVE_ENDINGS.some((e) => t === m + e) || (t.length > m.length && t.endsWith(m)))
+    if (hit) return i
+  }
+  return -1
+}
+
 function markerHit(tokens: string[], markers: string[]): boolean {
-  return markers.some((m) => tokens.some((t) => t === m || (t.length > m.length && t.endsWith(m))))
+  return markerIndex(tokens, markers) >= 0
+}
+
+export function semanticTokens(name: string): string[] {
+  return normalizeGermanText(name).replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean)
+}
+
+/**
+ * DERIVED-PRODUCT markers: words naming something MADE FROM a food rather than the food itself —
+ * a seasoning blend, a brine, a juice, a stock, an extract, a powder, a paste.
+ *
+ * This is the mirror image of ranking.ts's categoryConflict(), which only ever fires when the
+ * CANDIDATE looks like a manufactured product. The reported failures run the other way: the QUERY
+ * named a derived product and the candidate was the raw whole food —
+ *
+ *   "Knoblauchgewürz" (garlic seasoning) -> USDA "Garlic, raw"    (143 kcal for a spice blend)
+ *   "Gurkenwasser"    (pickle brine)     -> USDA "Cucumber, raw"
+ *
+ * Nothing rejected these because the unmatched query words ("gewürz", "wasser") cost nothing:
+ * coreIdentityScoreAdjustment only ever penalized unexplained CANDIDATE content. Grouped into one
+ * class deliberately — a garlic seasoning may legitimately resolve to a garlic POWDER record, both
+ * being derived preparations, while neither may become the raw clove.
+ */
+const DERIVED_PRODUCT_MARKERS = [
+  // seasoning blends
+  "gewuerz", "gewuerze", "gewuerzmischung", "wuerzmischung", "wuerzer", "streuwuerze",
+  "seasoning", "seasonings", "mischung", "blend", "rub",
+  // liquids drawn off or extracted from a food
+  "wasser", "water", "lake", "sud", "aufguss", "brine", "saft", "juice", "nektar", "nectar",
+  "bruehe", "broth", "stock", "fond", "essig", "vinegar",
+  // concentrates and preparations
+  "extrakt", "extract", "konzentrat", "concentrate", "sirup", "syrup", "essenz", "essence",
+  "pulver", "powder", "paste", "mark", "puree", "pueree", "mus",
+]
+
+/** True when a name carries any derived-product marker — see DERIVED_PRODUCT_MARKERS. */
+export function namesDerivedProduct(text: string): boolean {
+  return markerHit(semanticTokens(text), DERIVED_PRODUCT_MARKERS)
+}
+
+/** True for a single token that names a derived product — used to credit it instead of penalizing it. */
+export function isDerivedProductMarker(token: string): boolean {
+  return markerHit([token], DERIVED_PRODUCT_MARKERS)
+}
+
+/**
+ * True when the query names a derived product (per DERIVED_PRODUCT_MARKERS) that the candidate
+ * does not.
+ *
+ * Self-limiting by the CANDIDATE side alone, deliberately not by the core: a bare
+ * "Wasser"/"Gemüsebrühe"/"Tomatenmark" query — whose core IS the derived product — is satisfied
+ * because its correct candidates ("Trinkwasser", "Gemüsebrühe", "Tomatenmark") all carry a marker
+ * of their own. An earlier version also exempted a marker appearing in the CORE text, which turned
+ * out to disable the gate exactly when the classifier had NOT stripped the modifier: with
+ * coreFoodEnglish "garlic seasoning" instead of "garlic", "Garlic, raw" was accepted again. A rule
+ * that stops working when the upstream classification is less precise is the wrong rule — absent
+ * evidence must make a provider stricter, never more permissive.
+ *
+ * `coreText` is retained so callers need not change, and so this stays the obvious place to
+ * reintroduce a core-based exemption should one ever prove genuinely necessary.
+ */
+export function derivedProductConflict(queryText: string, _coreText: string | null | undefined, candidateName: string): boolean {
+  if (!namesDerivedProduct(queryText)) return false
+  return !namesDerivedProduct(candidateName)
+}
+
+/**
+ * Plant-part words, as SEPARATE tokens only. A fused compound ("Sesam|samen",
+ * "Sonnenblumen|kerne") names the food itself; a standalone part word narrows a food to one of its
+ * parts ("Spices, coriander SEED" vs "Coriander (cilantro) LEAVES, raw" — 298 vs 23 kcal/100 g).
+ */
+export type PlantPart = "seed" | "leaf" | "root"
+
+const PLANT_PART_TOKENS: [PlantPart, string[]][] = [
+  ["seed", ["samen", "saat", "kerne", "kern", "seed", "seeds"]],
+  ["leaf", ["blatt", "blaetter", "leaf", "leaves", "kraut", "cilantro", "greens"]],
+  ["root", ["wurzel", "wurzeln", "root", "roots", "knolle"]],
+]
+
+/** The plant part a candidate name names as a separate word, or null. */
+export function standalonePlantPart(name: string): PlantPart | null {
+  const tokens = semanticTokens(name)
+  return PLANT_PART_TOKENS.find(([, words]) => words.some((w) => tokens.includes(w)))?.[0] ?? null
 }
 
 /** Derives attributes from a food NAME (German or English). Used for candidates, and as a
  *  deterministic backstop for queries when the classifier supplied nothing. */
+function earliestMarker<T>(tokens: string[], table: [T, string[]][]): T | null {
+  let best: T | null = null
+  let bestAt = Infinity
+  for (const [value, markers] of table) {
+    const at = markerIndex(tokens, markers)
+    if (at >= 0 && at < bestAt) { bestAt = at; best = value }
+  }
+  return best
+}
+
 export function inferAttributesFromName(name: string): FoodAttributes {
-  const tokens = normalizeGermanText(name).replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter(Boolean)
-  const form = FORM_MARKERS.find(([, m]) => markerHit(tokens, m))?.[0] ?? "unknown"
-  const preservation = PRESERVATION_MARKERS.find(([, m]) => markerHit(tokens, m))?.[0] ?? "unknown"
-  return { form, preservation, fatPercent: null }
+  const tokens = semanticTokens(name)
+  return {
+    form: earliestMarker(tokens, FORM_MARKERS) ?? "unknown",
+    preservation: earliestMarker(tokens, PRESERVATION_MARKERS) ?? "unknown",
+    fatPercent: null,
+  }
 }
 
 /**
@@ -220,6 +447,12 @@ export function formConflict(query: FoodForm, candidate: FoodForm): boolean {
 /** Preservation classes whose nutrition differs materially per 100 g. */
 const INCOMPATIBLE_PRESERVATION: [FoodPreservation, FoodPreservation][] = [
   ["fresh", "dried"], ["canned", "dried"], ["frozen", "dried"],
+  // canned vs fresh was deliberately permissive and should not have been: "Thunfisch a. d. Dosen"
+  // (classified preservation "canned") took BLS's "Thunfisch roh" — raw tuna, 139 kcal/100 g,
+  // against 95 for the drained canned record. A candidate that is SILENT about preservation stays
+  // acceptable (that is the common case, and attributeFit() prefers a stated match over silence);
+  // one that states the OPPOSITE is a contradiction on an axis the query actually specified.
+  ["canned", "fresh"],
 ]
 
 export function preservationConflict(query: FoodPreservation, candidate: FoodPreservation): boolean {

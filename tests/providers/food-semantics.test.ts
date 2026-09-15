@@ -3,6 +3,7 @@ import {
   compoundMatchesTokens, compoundIdentityModifier, germanStem, germanTokenMatches,
   formConflict, preservationConflict, fatConflict, fatApproximate, freshVsProcessedFormConflict,
   inferAttributesFromName, attributesKey,
+  compoundSpecifier, absenceMarkerStem, derivedProductConflict, standalonePlantPart,
 } from "../../src/services/providers/food-semantics.js"
 
 // These encode the general linguistic/semantic rules the manual recipe testing exposed. They are
@@ -112,5 +113,124 @@ describe("form / preservation / fat conflicts", () => {
     const cream7 = attributesKey({ form: "unknown", preservation: "unknown", fatPercent: 7 })
     const cream15 = attributesKey({ form: "unknown", preservation: "unknown", fatPercent: 15 })
     expect(new Set([fresh, ground, cream7, cream15]).size).toBe(4)
+  })
+})
+
+describe("candidate-side sub-variety detection (compoundSpecifier)", () => {
+  const D = new Set<string>()
+
+  it("flags a compound prefix that names something the query never asked for", () => {
+    // German is right-headed, so "Reisnudeln" really IS a kind of "Nudeln" — which is the problem:
+    // containment scored rice noodles as if they were plain pasta.
+    expect(compoundSpecifier("reisnudeln", "nudeln", D)).toBe("reis")
+    expect(compoundSpecifier("eierteigwaren", "teigwaren", D)).toBe("eier")
+    expect(compoundSpecifier("halbfettbutter", "butter", D)).toBe("halbfett")
+    expect(compoundSpecifier("wurzelpetersilie", "petersilie", D)).toBe("wurzel")
+  })
+
+  it("does not flag the core itself, an inflection of it, or a descriptor prefix", () => {
+    expect(compoundSpecifier("nudeln", "nudeln", D)).toBeNull()
+    expect(compoundSpecifier("kidneybohnen", "kidneybohne", D)).toBeNull() // regular plural
+    expect(compoundSpecifier("speisezwiebel", "zwiebel", D)).toBeNull()    // descriptor + linking -e
+    expect(compoundSpecifier("speisesalz", "salz", D)).toBeNull()
+    expect(compoundSpecifier("vollmilch", "milch", D)).toBeNull()
+    expect(compoundSpecifier("teigwaren", "waren", D)).toBe("teig")        // sanity: a real prefix IS flagged
+  })
+
+  it("only reads the core as the compound HEAD, never anywhere else in the token", () => {
+    // German identity lives in the head; "Zwiebelsuppe" is a soup, not a narrower onion, and is
+    // left to the composite-dish gates rather than being mistaken for a sub-variety.
+    expect(compoundSpecifier("zwiebelsuppe", "zwiebel", D)).toBeNull()
+  })
+
+  it("respects a caller-supplied descriptor vocabulary as well as the German one", () => {
+    expect(compoundSpecifier("organicbutter", "butter", new Set(["organic"]))).toBeNull()
+  })
+})
+
+describe("'free-from' markers are absences, not added foods", () => {
+  it("reads the excluded ingredient out of the marker", () => {
+    // BLS's plain durum pasta is literally named "Teigwaren eifrei" — egg-FREE — and the
+    // foreign-content penalty on that word was the only reason it lost to the egg pasta.
+    expect(absenceMarkerStem("eifrei")).toBe("ei")
+    expect(absenceMarkerStem("glutenfrei")).toBe("gluten")
+    expect(absenceMarkerStem("laktosefrei")).toBe("laktose")
+    expect(absenceMarkerStem("gluten-free")).toBe("gluten")
+  })
+
+  it("never neutralises the removal of an energy-bearing component", () => {
+    // Sugar-free and alcohol-free products ARE nutritionally different, whatever the query said.
+    expect(absenceMarkerStem("zuckerfrei")).toBeNull()
+    expect(absenceMarkerStem("alkoholfrei")).toBeNull()
+    expect(absenceMarkerStem("fettfrei")).toBeNull()
+  })
+
+  it("ignores words that merely end in the same letters", () => {
+    expect(absenceMarkerStem("brei")).toBeNull()
+    expect(absenceMarkerStem("frei")).toBeNull()
+  })
+})
+
+describe("derived products (seasoning / brine / juice / powder) are their own identity", () => {
+  it("rejects the raw whole food for a query that named a derived product", () => {
+    expect(derivedProductConflict("Knoblauchgewürz", "Knoblauch", "Knoblauch roh")).toBe(true)
+    expect(derivedProductConflict("garlic seasoning", "garlic", "Garlic, raw")).toBe(true)
+    expect(derivedProductConflict("Gurkenwasser", "Gurke", "Gurke roh")).toBe(true)
+    expect(derivedProductConflict("pickle brine", "pickle", "Pickles, NFS")).toBe(true)
+  })
+
+  it("accepts a DIFFERENT word for the same derived class", () => {
+    // A garlic seasoning legitimately resolves to a garlic powder record; both are preparations.
+    expect(derivedProductConflict("Knoblauchgewürz", "Knoblauch", "Knoblauch Pulver")).toBe(false)
+    expect(derivedProductConflict("garlic seasoning", "garlic", "Spices, garlic powder")).toBe(false)
+  })
+
+  it("never fires for a query that is not a derived product", () => {
+    expect(derivedProductConflict("Knoblauch", "Knoblauch", "Knoblauch roh")).toBe(false)
+    expect(derivedProductConflict("Basmati-Reis", "Reis", "Reis poliert, roh")).toBe(false)
+  })
+
+  it("is satisfied by the candidate alone, so a query that IS the derived product still resolves", () => {
+    // Deliberately not exempted via the core: that exemption vanished the moment the classifier
+    // failed to strip the modifier. These pass because the right candidates carry a marker too.
+    expect(derivedProductConflict("Tomatenmark", "Tomatenmark", "Tomatenmark")).toBe(false)
+    expect(derivedProductConflict("Wasser", "Wasser", "Trinkwasser")).toBe(false)
+    expect(derivedProductConflict("Gemüsebrühe", "Brühe", "Gemüsebrühe")).toBe(false)
+  })
+})
+
+describe("plant parts are only read from standalone words", () => {
+  it("recognises a part named as its own word", () => {
+    expect(standalonePlantPart("Spices, coriander seed")).toBe("seed")
+    expect(standalonePlantPart("Coriander (cilantro) leaves, raw")).toBe("leaf")
+    expect(standalonePlantPart("Petersilie Wurzel")).toBe("root")
+  })
+
+  it("does not read a part out of a fused compound that names the food itself", () => {
+    // "Sesamsamen" IS sesame; "Sonnenblumenkerne" IS sunflower seeds. Treating those as narrowing
+    // would reject foods whose only database form is the seed.
+    expect(standalonePlantPart("Sesamsamen")).toBeNull()
+    expect(standalonePlantPart("Sonnenblumenkerne geschält")).toBeNull()
+    expect(standalonePlantPart("Korianderblätter")).toBeNull()
+  })
+})
+
+describe("attribute inference reads the name as written", () => {
+  it("handles inflected German adjectives", () => {
+    expect(inferAttributesFromName("Getrocknete Tomate").preservation).toBe("dried")
+    expect(inferAttributesFromName("getrockneter Thymian").preservation).toBe("dried")
+  })
+
+  it("takes the FIRST preservation word when a name carries two", () => {
+    // Dried tomatoes packed in oil in a jar are a DRIED product; BLS states the primary
+    // transformation first, so reading in name order beats reading in marker-table order.
+    expect(inferAttributesFromName("Tomate getrocknet, in Öl, Konserve, abgetropft").preservation).toBe("dried")
+    expect(inferAttributesFromName("Kidneybohne reif, Konserve, abgetropft").preservation).toBe("canned")
+  })
+
+  it("keeps canned apart from fresh, while staying permissive about silence", () => {
+    // "Thunfisch a. d. Dosen" took BLS's raw tuna because canned-vs-fresh was not a conflict.
+    expect(preservationConflict("canned", "fresh")).toBe(true)
+    expect(preservationConflict("canned", "unknown")).toBe(false)
   })
 })
