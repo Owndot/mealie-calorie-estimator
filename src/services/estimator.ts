@@ -6,6 +6,7 @@ import type {
 import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
 import { evidenceFor } from "./identity-evidence.js"
+import { UNKNOWN_ATTRIBUTES } from "../types.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
 import { estimateGrams } from "./llm-estimator.js"
@@ -233,6 +234,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       {
         foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand,
         category: classification?.category ?? null, state, foodType, coreFoodGerman, coreFoodEnglish, route,
+        attributes: classification?.attributes ?? UNKNOWN_ATTRIBUTES,
         // What is actually KNOWN about this ingredient's identity. Absent evidence must make a
         // provider stricter, never more permissive — see identity-evidence.ts.
         evidence: evidenceFor(

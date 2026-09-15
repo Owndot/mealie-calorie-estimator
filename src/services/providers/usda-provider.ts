@@ -6,6 +6,8 @@ import type { NutrientSet, ProviderMatch, FoodRoute, FoodType } from "../../type
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
 import { FULL_EVIDENCE } from "../identity-evidence.js"
+import { attributesKey } from "./food-semantics.js"
+import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 
 interface FdcNutrient {
   nutrientId: number
@@ -57,7 +59,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v15"
+const USDA_MATCH_ALGORITHM_VERSION = "v16"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -183,7 +185,8 @@ export class UsdaProvider implements NutrientProvider {
     // food name queried "raw"/"unknown". Route also participates: the *same* food name can
     // legitimately resolve differently on the generic vs branded route (Branded is excluded
     // outright on generic).
-    const queryKey = buildQueryKey(`${USDA_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${route}`, query.brand)
+    const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
+    const queryKey = buildQueryKey(`${USDA_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${route}|${attributesKey(attrs)}`, query.brand)
 
     // category/foodType/coreFood are not part of the positive key by design — re-checked against
     // the stored candidate instead (cachedMatchConflict). The NEGATIVE key does carry them, since
@@ -276,6 +279,9 @@ export class UsdaProvider implements NutrientProvider {
       queryFoodType: query.foodType,
       queryCoreFood: strictCore,
       coreMatchMode: "token" as const,
+      queryAttributes: attrs,
+      candidateFat: (c) => findNutrient((c as RankableFdcFood).food, NUTRIENT_IDS.fat),
+      rejectBrandedWithoutBrandEvidence: route === "generic" && !query.brand,
       dataTypeScore: (dt) => dataTypeScore(route, dt),
     })
     const top = ranked[0]

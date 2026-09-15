@@ -7,7 +7,7 @@ import { createUsdaProviderIfConfigured } from "../../src/services/providers/usd
 import { buildQueryKey, setCachedProviderMatch } from "../../src/utils/cache.js"
 
 /** Mirrors USDA_MATCH_ALGORITHM_VERSION; a bump here must be mirrored, which is the point. */
-const USDA_CACHE_VERSION = "v15"
+const USDA_CACHE_VERSION = "v16"
 import type { MealieRecipe, MealieIngredient } from "../../src/types.js"
 
 /**
@@ -120,7 +120,9 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
   // recipe that cannot exist.
   it("a USDA candidate cached under validated English is rejected before reuse under German-only evidence", async () => {
     const provider = createUsdaProviderIfConfigured()!
-    const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic`, null)
+    // Mirrors the provider's key shape, including the attribute segment added with structured
+    // food state — a bump here must be mirrored, which is the point of asserting it.
+    const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic|unknown/unknown/-`, null)
     setCachedProviderMatch("usda", queryKey, {
       provider: "usda", providerId: "173474", productName: "Wild mint, fresh", brand: null,
       canonicalName: "Bergminze", state: "unknown", dataType: "SR Legacy",

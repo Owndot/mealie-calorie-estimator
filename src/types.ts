@@ -133,6 +133,43 @@ export interface NutrientSet {
 /** Preparation state of a resolved food, used for provider matching only — never derived from originalText. */
 export type FoodState = "raw" | "cooked" | "dried" | "unknown"
 
+/**
+ * Physical FORM of the food — orthogonal to FoodState (which is about preparation) and to
+ * FoodPreservation (which is about how it was kept). Found live: "Ingwer" resolved to USDA
+ * "Spices, ginger, ground" (~335 kcal/100g) when the recipe meant the fresh root (~48), and
+ * "Koriander" resolved to coriander SEED when the leaf may have been intended. Neither error is
+ * expressible with state alone, because both candidates are legitimately "dried"/"unknown".
+ *
+ * "unknown" is permissive and is the correct answer for a genuinely ambiguous ingredient — see
+ * formConflict(): we never invent a precise form the source text does not support.
+ */
+export type FoodForm = "whole" | "ground" | "powder" | "leaf" | "seed" | "flakes" | "paste" | "unknown"
+
+/**
+ * How the food was preserved. Separate from FoodState because "canned" is not a preparation:
+ * found live, "Kidneybohnen a. d. Dose" lost its canned identity and matched USDA "Kidney beans,
+ * NFS", where dry beans (~330 kcal/100g) and canned drained beans (~128) differ ~2.6x.
+ */
+export type FoodPreservation = "fresh" | "dried" | "canned" | "frozen" | "unknown"
+
+/**
+ * Nutritionally meaningful attributes that must survive normalization and participate in candidate
+ * validation, rather than being flattened into the canonical name and lost.
+ */
+export interface FoodAttributes {
+  form: FoodForm
+  preservation: FoodPreservation
+  /**
+   * Requested fat content in g/100 g, when the ingredient names one ("Kochsahne 15%"). Compared
+   * against a candidate's ACTUAL measured fat per 100 g — never against a percentage parsed out of
+   * the candidate's name, because German cheese names quote "Fett i. Tr." (fat in dry matter),
+   * which is a different scale entirely and would mis-compare by a factor of ~2.
+   */
+  fatPercent: number | null
+}
+
+export const UNKNOWN_ATTRIBUTES: FoodAttributes = { form: "unknown", preservation: "unknown", fatPercent: null }
+
 /** Which side of the routing split an ingredient was classified into. Branded requires explicit structured evidence. */
 export type FoodRoute = "generic" | "branded"
 
@@ -166,6 +203,8 @@ export interface IngredientClassification {
   canonicalEnglish: string
   brand: string | null
   state: FoodState
+  /** Form/preservation/fat% — see FoodAttributes. Always present; "unknown" when unsupported. */
+  attributes: FoodAttributes
   category: string | null
   /** "unknown" (never simple/processed by default) when the LLM is disabled/failed — see FoodType. */
   foodType: FoodType
