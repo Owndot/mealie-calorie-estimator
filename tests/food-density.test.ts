@@ -73,3 +73,71 @@ describe("estimatePieceWeightGrams", () => {
     expect(estimatePieceWeightGrams(1, "glas", "unrecognized-jarred-thing")).toBe(340)
   })
 })
+
+// Found live: `/\bbrühe\b/` cannot fire inside "Gemüsebrühe" — JS \b needs a non-word char before
+// it, and in a German compound the preceding letter is a word char. The ingredient therefore fell
+// through to an unvalidated LLM gram estimate, which is how 750 ml became 75000 g. Separately,
+// only canonicalEnglish was ever passed in, so a degraded classification handed this table a raw
+// German name it structurally could not match.
+describe("identity-aware density resolution", () => {
+  const ml = (food: any) => estimateVolumeGrams(100, "ml", food)
+
+  it("resolves German compounds via opt-in head matching", () => {
+    for (const n of ["Gemüsebrühe", "Hühnerbrühe", "Rinderbrühe", "Kokosmilch", "Buttermilch",
+                     "Schlagsahne", "Orangensaft", "Leitungswasser", "Mineralwasser"]) {
+      expect(ml(n)).toBe(100) // water-based liquid, 1.0 g/ml
+    }
+    expect(ml("Sonnenblumenöl")).toBeCloseTo(90.7, 1)
+    expect(ml("Rapsöl")).toBeCloseTo(90.7, 1)
+    expect(ml("Öl")).toBeCloseTo(90.7, 1) // bare "Öl" never matched before: \b fails before "ö"
+  })
+
+  it("keeps every previously-working match working", () => {
+    expect(ml("vegetable broth")).toBe(100)
+    expect(ml("broth")).toBe(100)
+    expect(ml("coconut milk")).toBe(100)
+    expect(ml("cream")).toBe(100)
+    expect(ml("water")).toBe(100)
+    expect(ml("olive oil")).toBeCloseTo(90.7, 1)
+    expect(ml("Olivenöl")).toBeCloseTo(90.7, 1)
+  })
+
+  // Real data gap found by the live block-3 probe: Rotwein missed this table entirely and the LLM
+  // answered 0.85 g/ml — inside the catastrophic guard but wrong for a water-based beverage.
+  it("resolves wine through the generic-liquid category, not a Rotwein special case", () => {
+    for (const n of ["Rotwein", "Weißwein", "Wein", "red wine", "white wine", "wine", "Glühwein"]) {
+      expect(ml(n)).toBe(100)
+    }
+  })
+
+  it("does NOT match foods where the shared word is the modifier, not the head", () => {
+    // Each of these WOULD match under naive substring containment.
+    for (const n of ["Wassermelone", "Milchreis", "Saftschorle", "Brühwurst", "Ölsardinen",
+                     "Buttermilchbrot", "Weintrauben", "Rotweinessig", "Weinessig", "Weinbrand"]) {
+      expect(ml(n)).toBeNull()
+    }
+  })
+
+  it("does not fall for the corn/acorn class — exact tokens, never substrings", () => {
+    expect(estimateSpoonCupGrams(1, "el", "acorn")).toBe(12)      // generic default, not a category
+    expect(estimateSpoonCupGrams(1, "el", "Salzkartoffeln")).toBe(12) // not the salt category
+    expect(estimateSpoonCupGrams(1, "el", "Salz")).toBe(18)       // the real salt still works
+  })
+
+  it("prefers the core identity, then canonical names, then the raw structured name", () => {
+    // Only the German core is usable — an English-only table lookup would have missed this.
+    expect(ml({ coreFoodGerman: "Brühe", structuredName: "Gemüsebrühe" })).toBe(100)
+    // Degraded classification: structuredName is all that exists.
+    expect(ml({ structuredName: "Hühnerbrühe" })).toBe(100)
+    // A usable English canonical works even when the German side is absent.
+    expect(ml({ canonicalEnglish: "red wine" })).toBe(100)
+    // Nothing usable anywhere -> null, so the caller falls through honestly.
+    expect(ml({ structuredName: "Rinderbraten" })).toBeNull()
+  })
+
+  it("still requires BOTH a cheese word and a grated word for the grated-cheese density", () => {
+    expect(estimateSpoonCupGrams(1, "el", "geriebener Parmesan")).toBe(5)
+    expect(estimateSpoonCupGrams(1, "el", "grated cheese")).toBe(5)
+    expect(estimateSpoonCupGrams(1, "el", "Parmesan")).toBe(12) // plain cheese -> generic default
+  })
+})

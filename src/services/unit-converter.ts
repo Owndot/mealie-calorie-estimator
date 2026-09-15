@@ -1,5 +1,5 @@
 import type { MealieUnit } from "../types.js"
-import { estimateSpoonCupGrams, estimatePieceWeightGrams, estimateVolumeGrams } from "./food-density.js"
+import { estimateSpoonCupGrams, estimatePieceWeightGrams, estimateVolumeGrams, type FoodIdentity } from "./food-density.js"
 
 export interface GramConversion {
   grams: number
@@ -69,7 +69,7 @@ const PIECE_PACKAGE_UNIT_NAMES = new Set([
  * 4. known piece/package weight (Stück/Dose/Glas/Bund/Zehe/...)
  * LLM estimation (priority 5) is the caller's responsibility when this returns null.
  */
-export function convertToGrams(quantity: number, unit: MealieUnit | null, canonicalFoodName?: string): GramConversion | null {
+export function convertToGrams(quantity: number, unit: MealieUnit | null, food?: string | FoodIdentity): GramConversion | null {
   if (unit?.standardQuantity != null && unit.standardUnit != null) {
     const standardUnit = unit.standardUnit.toLowerCase().trim()
     const totalStandardQty = unit.standardQuantity * quantity
@@ -77,8 +77,8 @@ export function convertToGrams(quantity: number, unit: MealieUnit | null, canoni
     const mass = FIXED_MASS_UNITS[standardUnit]
     if (mass) return { grams: totalStandardQty * mass.gramsPerUnit, estimated: false }
 
-    if (VOLUME_UNIT_NAMES.has(standardUnit) && canonicalFoodName) {
-      const grams = estimateVolumeGrams(totalStandardQty, standardUnit, canonicalFoodName)
+    if (VOLUME_UNIT_NAMES.has(standardUnit) && food) {
+      const grams = estimateVolumeGrams(totalStandardQty, standardUnit, food)
       if (grams !== null) return { grams, estimated: true }
     }
     // Falls through to the candidate-based resolution below (e.g. unit.name) if the standard
@@ -93,18 +93,18 @@ export function convertToGrams(quantity: number, unit: MealieUnit | null, canoni
     const mass = FIXED_MASS_UNITS[name]
     if (mass) return { grams: quantity * mass.gramsPerUnit, estimated: false }
 
-    if (VOLUME_UNIT_NAMES.has(name) && canonicalFoodName) {
-      const grams = estimateVolumeGrams(quantity, name, canonicalFoodName)
+    if (VOLUME_UNIT_NAMES.has(name) && food) {
+      const grams = estimateVolumeGrams(quantity, name, food)
       if (grams !== null) return { grams, estimated: true }
     }
 
-    if (SPOON_CUP_UNIT_NAMES.has(name) && canonicalFoodName) {
-      const grams = estimateSpoonCupGrams(quantity, name, canonicalFoodName)
+    if (SPOON_CUP_UNIT_NAMES.has(name) && food) {
+      const grams = estimateSpoonCupGrams(quantity, name, food)
       if (grams !== null) return { grams, estimated: true }
     }
 
-    if (PIECE_PACKAGE_UNIT_NAMES.has(name) && canonicalFoodName) {
-      const grams = estimatePieceWeightGrams(quantity, name, canonicalFoodName)
+    if (PIECE_PACKAGE_UNIT_NAMES.has(name) && food) {
+      const grams = estimatePieceWeightGrams(quantity, name, food)
       if (grams !== null) return { grams, estimated: true }
     }
   }

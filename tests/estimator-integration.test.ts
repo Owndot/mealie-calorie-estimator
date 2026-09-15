@@ -255,3 +255,55 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
     expect(resultA.matchedIngredients[0].grams).toBe(159) // 3 * 53g/egg
   })
 })
+
+// The 75 kg incident's proximate trigger: a deterministic density SHOULD have resolved the broth,
+// but the table couldn't see the German compound, so the ingredient reached the LLM gram estimator
+// — which is the only path that can produce a physically impossible number. Whenever the table can
+// answer, that path must not be reached at all.
+describe("deterministic density short-circuits the LLM gram estimator", () => {
+  const ML = { id: "ml", name: "Milliliter", pluralName: "Milliliter", abbreviation: "ml", standardQuantity: 1, standardUnit: "milliliter" }
+
+  beforeEach(() => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+  })
+
+  it("never calls the LLM for grams when the density table resolves the ingredient", async () => {
+    // Providers share global fetch, so record URLs instead of throwing: an empty provider result
+    // lets OFF/USDA miss cleanly and fast, while any LLM call still shows up in the recorded list.
+    // Only GRAM-estimate prompts matter here; the llm-nutrient fallback legitimately calls the LLM
+    // because every provider is stubbed empty.
+    const gramPrompts: string[] = []
+    const fetchMock = vi.fn(async (url: any, init: any) => {
+      const body = typeof init?.body === "string" ? init.body : ""
+      if (body.includes("Estimate the weight in grams")) gramPrompts.push(body)
+      return { ok: true, status: 200, json: async () => ({ products: [], foods: [] }) } as any
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    for (const name of ["Gemüsebrühe", "Hühnerbrühe", "Kokosmilch", "Schlagsahne", "Orangensaft", "Leitungswasser", "Rotwein", "Olivenöl", "Sonnenblumenöl"]) {
+      const r = recipe({
+        recipeServings: 1,
+        recipeIngredient: [ing({ quantity: 750, unit: ML, food: { id: "x", name, pluralName: null, aliases: [] } })],
+      })
+      const result = await estimateRecipe(r)
+      const match = result!.matchedIngredients[0]
+      expect(match.grams, `${name} should resolve deterministically`).not.toBeNull()
+      // 750 ml of a water-based liquid is 750 g; oils are ~91% of that.
+      expect(match.grams!).toBeGreaterThan(600)
+      expect(match.grams!).toBeLessThan(800)
+    }
+
+    expect(gramPrompts).toEqual([])
+  })
+
+  it("750 ml Gemüsebrühe resolves to 750 g — the exact live regression", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ products: [], foods: [] }) }) as any))
+    const r = recipe({
+      recipeServings: 1,
+      recipeIngredient: [ing({ quantity: 750, unit: ML, food: { id: "x", name: "Gemüsebrühe", pluralName: null, aliases: [] } })],
+    })
+    const result = await estimateRecipe(r)
+    expect(result!.matchedIngredients[0].grams).toBe(750) // not 75000
+  })
+})

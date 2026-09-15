@@ -198,7 +198,13 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     let grams: number | null = null
     let gramsEstimated = false
 
-    const converted = convertToGrams(ing.quantity, ing.unit, canonicalEnglish)
+    // The density/piece tables get the SAME identity bundle the providers use, so a German
+    // compound like "Gemuesebruehe" is recognised as a broth even when the English canonical is
+    // unavailable — previously only canonicalEnglish was passed, so a degraded classification sent
+    // the raw German name into a table that could not match it, and the ingredient fell through to
+    // an unvalidated LLM gram estimate.
+    const foodIdentity = { coreFoodGerman, coreFoodEnglish, canonicalGerman, canonicalEnglish, structuredName: ing.foodName }
+    const converted = convertToGrams(ing.quantity, ing.unit, foodIdentity)
     if (converted) {
       grams = converted.grams
       gramsEstimated = converted.estimated
