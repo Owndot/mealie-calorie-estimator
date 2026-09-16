@@ -122,6 +122,10 @@ export const GENERIC_DESCRIPTOR_WORDS = new Set([
   "whole", "ground", "pure", "plain", "style", "tender", "petite", "small", "large", "mild",
   "sweet", "ripe", "nfs", "unspecified", "generic", "bottled", "prepared", "unprepared", "extra",
   "premium", "select", "product", "products", "type", "flavor", "flavour", "flavored", "flavoured",
+  // "uncooked" is the plain negation of "cooked" and belongs beside "raw"/"unprepared" — without
+  // it, USDA's "Quinoa, uncooked" was charged 35 points of foreign content for stating the very
+  // state the query asked for, and lost to "Flour, quinoa" on a dataset tie-break.
+  "uncooked",
   // "sweet" stays here for ENGLISH candidate names only, and the asymmetry is deliberate: USDA
   // names whole varietal families with it ("Peppers, sweet, raw" IS the ordinary bell pepper, and
   // demoting the word dropped that correct match below the acceptance threshold). Its German
@@ -153,6 +157,44 @@ export const GENERIC_DESCRIPTOR_WORDS = new Set([
   // unrelated candidate's powder FORM as if it were harmless, when powder-vs-liquid is exactly
   // the kind of form difference that matters for cream specifically.
   "spice", "spices", "seed", "seeds", "herb", "herbs",
+])
+
+/**
+ * Candidate words naming a MATERIAL TRANSFORMATION of the base food — a preservation, a
+ * preparation, or a derived form. These are not interchangeable with the plain food: canned green
+ * chilli is 21 kcal/100 g against 40 for raw, and quinoa flour is 385 against 368 for the grain.
+ *
+ * They are listed separately from GENERIC_DESCRIPTOR_WORDS because their exemption has to be
+ * CONDITIONAL. The generic list exists so USDA's precise naming convention ("Beans, kidney, red,
+ * mature seeds, canned, drained solids") does not lose to a vague one ("Kidney beans, NFS") purely
+ * by paying a penalty per precise word — but that exemption was unconditional, so a transformation
+ * the query never asked for was free too. Found live, twice over:
+ *
+ *   "green chilies" -> "Peppers, chili, green, canned" (21) scored 50 while the correct
+ *      "Peppers, hot chili, green, raw" (40) scored 13 — "canned" cost nothing while "hot" cost 35.
+ *   "quinoa" (raw)  -> "Flour, quinoa" (385) beat "Quinoa, uncooked" (368) on a dataset tie-break.
+ *
+ * A word here is free when the query NAMES it, and foreign content when it does not. That is the
+ * whole rule: a candidate may answer what was asked, and may not earn preference for volunteering
+ * a transformation nobody requested.
+ *
+ * There is deliberately NO exemption for spice/herb records volunteering their conventional
+ * dried/ground form. It was tried and removed: a candidate being classified as a spice is not
+ * evidence about what the QUERY meant. It let bare "Chili" — a word that names both a fresh pod
+ * and a ground powder — resolve to "Spices, chili powder" at 282 kcal/100 g, which no one asked
+ * for. Separating that from "Oregano", where the dried leaf really is what a recipe means, needs
+ * knowledge of which foods have a common fresh form; that is per-food knowledge, and this file
+ * does not have any. The conservative reading costs bare "Oregano" its database record — it falls
+ * back to an estimate, exactly as it does on the live-API build — and that is the cheaper mistake.
+ */
+const MATERIAL_TRANSFORM_WORDS = new Set([
+  // Preservation — changes water content and often adds salt/sugar/oil.
+  "canned", "dried", "dehydrated", "frozen", "pickled", "smoked", "cured",
+  // Preparation — changes water content and may add fat.
+  "cooked", "boiled", "baked", "fried", "roasted", "grilled", "steamed", "braised", "poached",
+  "stewed", "sauteed",
+  // Derived forms — a different product made FROM the food.
+  "flour", "juice", "paste", "concentrate", "powder", "puree", "syrup", "extract",
 ])
 
 /** Minimum length for a core-identity token to participate in substring containment checks — a
@@ -355,6 +397,15 @@ export function coreIdentityScoreAdjustment(
     // German qualifiers count exactly like their English counterparts. Without this, every BLS
     // name's "roh"/"gekocht"/"Konserve" was scored as a DIFFERENT FOOD at -35 and sank the
     // candidate below FUZZY_MIN_SCORE — the defect that made correct classification hurt BLS.
+    // A material transformation is free only if the query asked for it. Checked BEFORE the generic
+    // exemption, because several of these words sit in that list for the naming-convention reason
+    // above and would otherwise stay unconditionally free.
+    if (MATERIAL_TRANSFORM_WORDS.has(t)) {
+      const requested = queryTokens.some((q) => q === t || q.startsWith(t) || t.startsWith(q))
+      if (requested) { modifierMatches++; continue }
+      extraCount++
+      continue
+    }
     if (GENERIC_DESCRIPTOR_WORDS.has(t) || GERMAN_DESCRIPTOR_WORDS.has(t)) continue
     extraCount++
   }

@@ -85,6 +85,17 @@ jobs:
           echo "BLS database size: ${size} bytes"
           test "${size}" -gt 1000000
 
+      # Same reasoning as the BLS check above: the USDA generic database is a bundled resource, so
+      # a Dockerfile that forgets it still builds and still starts — it just silently loses a
+      # provider. The row count is asserted too, because an empty or truncated database would pass
+      # a mere existence check.
+      - name: Verify bundled USDA generic database is in the image
+        run: |
+          size=$(docker run --rm --entrypoint sh mealie-calorie-estimator:ci \
+            -c 'wc -c < resources/usda/usda-generic.sqlite')
+          echo "USDA database size: ${size} bytes"
+          test "${size}" -gt 1000000
+
       - name: Start container
         run: |
           docker run -d --name estimator -p 18000:8000 \
@@ -129,6 +140,31 @@ jobs:
                 });
                 if (!m || m.nutrients.kcalPer100g == null) { console.error('BLS lookup failed', m); process.exit(1); }
                 console.log('BLS ok:', m.providerId, m.productName, m.nutrients.kcalPer100g);"
+
+      # The whole point of this provider is that it needs no network. `--network none` removes any
+      # possibility of a cached API response or DNS-resolved fallback explaining a pass.
+      - name: Smoke test the USDA generic database loads and resolves OFFLINE
+        run: |
+          docker run --rm --network none --entrypoint node \
+            -e MEALIE_API_TOKEN=ci-smoke-token \
+            mealie-calorie-estimator:ci \
+            --input-type=module \
+            -e "const { usdaLocalProvider, getUsdaLocalData } = await import('/app/dist/services/providers/usda-local-provider.js');
+                const { initCache } = await import('/app/dist/utils/cache.js');
+                await initCache();
+                const data = await getUsdaLocalData();
+                if (!data || data.records.length !== 8262) { console.error('bad corpus', data && data.records.length); process.exit(1); }
+                const bad = data.records.filter((r) => r.dataType !== 'SR Legacy' && r.dataType !== 'Foundation');
+                if (bad.length) { console.error('non-generic rows present', bad.length); process.exit(1); }
+                const m = await usdaLocalProvider.lookup({
+                  foodName: 'turmeric', structuredName: 'Kurkuma', canonicalGerman: 'Kurkuma',
+                  brand: null, category: 'spice', state: 'unknown', foodType: 'simple',
+                  coreFoodGerman: 'Kurkuma', coreFoodEnglish: 'turmeric', route: 'generic',
+                  attributes: { form: 'ground', preservation: 'unknown', fatPercent: null },
+                  evidence: { german: true, english: true, core: true, brand: false },
+                });
+                if (!m || m.providerId !== '172231' || m.nutrients.kcalPer100g !== 312) { console.error('USDA lookup failed', m); process.exit(1); }
+                console.log('USDA local ok (offline):', data.records.length, 'records;', m.providerId, m.productName, m.nutrients.kcalPer100g, m.dataType);"
 
       - name: Container logs
         if: always()

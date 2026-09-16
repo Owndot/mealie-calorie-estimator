@@ -3,6 +3,7 @@ import { config } from "../src/config.js"
 import { initCache, setCachedProviderMatch, getCachedProviderMatch, buildQueryKey, __clearProviderCachesForTests } from "../src/utils/cache.js"
 import { recipe, runPipeline, row, type ClassificationStub, type E2EOptions } from "./helpers/e2e-pipeline.js"
 import { MealieRecipeProvider, __resetRecipeIndexForTests } from "../src/services/providers/mealie-recipe-provider.js"
+import { useUsdaLocalFixture, useEmptyUsdaLocal, resetUsdaLocalFixture } from "./helpers/usda-local-fixture.js"
 import { UNKNOWN_ATTRIBUTES, type ProviderMatch, type NutrientSet } from "../src/types.js"
 
 /**
@@ -37,7 +38,6 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  config.usda.retryBackoffMs = 1
   config.openFoodFacts.retryBackoffMs = 1
   vi.restoreAllMocks()
 })
@@ -45,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   config.llm.enabled = false
   config.llm.apiKey = ""
+  resetUsdaLocalFixture()
 })
 
 const kcal = (v: number, fat = 0) => [
@@ -76,31 +77,27 @@ async function one(
 }
 
 describe("a stated nutritional attribute steers which provider is used", () => {
-  it("light mayonnaise: skips BLS's full-fat record for USDA's actual light one", async () => {
+  it("light mayonnaise: the claim stays unmet, because the bundled USDA datasets have no light record", async () => {
     // BLS holds only "Mayonnaise (Fertigprodukt)" 750 kcal and "Salatmayonnaise" 490 — neither is
-    // light. USDA holds "Mayonnaise, light" at 238. Identity is equally good in both; only the
-    // attribute separates them.
+    // light. USDA's clean "Mayonnaise, light" (238 kcal) lives in FNDDS, which this build
+    // deliberately does not bundle: measured, FNDDS lifted two benchmark concepts while adding
+    // 5,432 rows, half of them prepared dishes, and inflating candidate sets ~65%. SR Legacy's
+    // nearest records all bolt on an attribute the ingredient never asked for ("low sodium",
+    // "cholesterol-free"), so none of them satisfies the claim either.
+    //
+    // The honest outcome is therefore the flagged BLS record — PR #9's rule working exactly as
+    // intended: nothing displaces it without positive evidence, and there is none to be had.
     const { r } = await one("Mayo Light", 12, "Gramm", {
       canonicalGerman: "Mayonnaise, leicht", canonicalEnglish: "light mayonnaise",
       coreFoodGerman: "Mayonnaise", coreFoodEnglish: "mayonnaise",
       category: "condiment", foodType: "processed_single_food",
-    }, { usda: USDA })
-
-    // The complete provenance row. `unmetAttributes` empty is the load-bearing field: BLS's record
-    // was kept as a shortfall carrying ["reduced-fat"], and the accepted USDA record must not
-    // inherit it — a caveat that outlives the thing it was about is worse than none.
-    expect({
-      provider: r.provider, productName: r.productName, kcalPer100g: r.kcalPer100g,
-      grams: r.grams, confidence: r.confidence, matchReason: r.matchReason,
-      llmReranked: r.llmReranked, unmetAttributes: r.unmetAttributes,
-      requestedFatPercent: r.requestedFatPercent,
-    }).toEqual({
-      provider: "usda", productName: "Mayonnaise, light", kcalPer100g: 238,
-      grams: 12, confidence: 0.8, matchReason: "fuzzy",
-      llmReranked: false, unmetAttributes: [], requestedFatPercent: null,
     })
-    // A satisfied attribute means no caveat and no confidence cap.
-    expect(r.confidence!).toBeGreaterThan(0.6)
+
+    expect(r.provider).toBe("bls")
+    expect(r.productName).toMatch(/[Mm]ayonnaise/)
+    // Still flagged, still capped — the caveat is the deliverable when no record satisfies it.
+    expect(r.unmetAttributes).toEqual(["reduced-fat"])
+    expect(r.confidence!).toBeLessThanOrEqual(0.55)
   })
 
   it("lean ground beef: an estimate cannot displace the flagged record, however lean it claims to be", async () => {
@@ -117,7 +114,7 @@ describe("a stated nutritional attribute steers which provider is used", () => {
       canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef",
       coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef",
       state: "raw", category: "meat",
-    }, { usda: USDA, llmNutrients: { "lean ground beef": { kcal: 250, protein: 20, carbs: 0, fat: 18 } } })
+    }, { llmNutrients: { "lean ground beef": { kcal: 250, protein: 20, carbs: 0, fat: 18 } } })
 
     // The complete provenance row, pinned field by field.
     expect({
@@ -158,7 +155,7 @@ describe("a stated nutritional attribute steers which provider is used", () => {
       canonicalGerman: "Kochsahne 15 % Fett", canonicalEnglish: "cooking cream 15% fat",
       coreFoodGerman: "Sahne", coreFoodEnglish: "cream", fatPercent: 15,
       category: "dairy", foodType: "processed_single_food",
-    }, { usda: USDA, llmNutrients: { "cooking cream 15% fat": { kcal: 150, protein: 3, carbs: 4, fat: 15 } } })
+    }, { llmNutrients: { "cooking cream 15% fat": { kcal: 150, protein: 3, carbs: 4, fat: 15 } } })
 
     expect(r.provider).toBe("llm-nutrient")
     expect(r.kcalPer100g).toBe(150)
@@ -219,21 +216,19 @@ describe("displacing a flagged record requires positive evidence, not merely an 
   })
 
   it("a later record whose NAME states the claim DOES replace it", async () => {
+    // The evidence comes from a real USDA-local database containing exactly this record, so the
+    // provider's own load, retrieval, ranking and gating decide — not a stubbed search response.
+    await useUsdaLocalFixture([
+      // Macros consistent with the energy, or the sanity check rejects the record before the
+      // resolver sees it: 10*4 + 20*4 + 3*9 = 147 ~ 150.
+      { fdcId: 9000001, description: "Zorbal, low fat", dataType: "SR Legacy",
+        category: "Dairy and Egg Products", kcal: 150, protein: 10, carbs: 20, fat: 3 },
+    ])
     const { r } = await one("Zorbal mager", 100, "Gramm", CLAIM, {
       off: { "low-fat zorbal": flagged },
-      usda: {
-        "low-fat zorbal": [{
-          fdcId: 9000001, description: "Zorbal, low fat", dataType: "SR Legacy",
-          foodCategory: "Dairy and Egg Products",
-          foodNutrients: [
-            { nutrientId: 1008, nutrientName: "Energy", unitName: "KCAL", value: 150 },
-            { nutrientId: 1004, nutrientName: "Total lipid (fat)", unitName: "G", value: 3 },
-          ],
-        }],
-      },
       llmNutrients: { "low-fat zorbal": { kcal: 120, protein: 10, carbs: 5, fat: 2 } },
     })
-    expect(r.provider).toBe("usda")
+    expect(r.provider).toBe("usda-local")
     expect(r.productName).toBe("Zorbal, low fat")
     expect(r.kcalPer100g).toBe(150)
     // Satisfied, so no caveat carried forward from the record it replaced.
@@ -285,7 +280,6 @@ describe("recipe-level quality explains WHY a total is risky", () => {
         { index: 0, canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef", coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef", state: "raw", category: "meat" },
         { index: 1, canonicalGerman: "Eisbergsalat", canonicalEnglish: "iceberg lettuce", coreFoodGerman: "Eisbergsalat", coreFoodEnglish: "lettuce", state: "raw", category: "vegetable" },
       ],
-      usda: USDA,
     })
     expect(result.matchQuality).not.toBe("high")
     expect(result.matchQualityReason).toMatch(/mageres Rinderhackfleisch/)
@@ -380,7 +374,6 @@ describe("the provenance written back to Mealie carries every attribute field", 
         { index: 0, canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef", coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef", state: "raw", category: "meat" },
         { index: 1, canonicalGerman: "Kochsahne 15 % Fett", canonicalEnglish: "cooking cream 15% fat", coreFoodGerman: "Sahne", coreFoodEnglish: "cream", fatPercent: 15, category: "dairy", foodType: "processed_single_food" },
       ],
-      usda: USDA,
       llmNutrients: { "cooking cream 15% fat": { kcal: 150, protein: 3, carbs: 4, fat: 15 } },
     })
 

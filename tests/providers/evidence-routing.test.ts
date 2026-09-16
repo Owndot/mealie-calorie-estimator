@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest"
+import { describe, it, expect, beforeEach, beforeAll, vi , afterEach } from "vitest"
 import { config } from "../../src/config.js"
 import { initCache, clearLlmCache } from "../../src/utils/cache.js"
 import { offProvider } from "../../src/services/providers/off-provider.js"
-import { createUsdaProviderIfConfigured } from "../../src/services/providers/usda-provider.js"
+import { usdaLocalProvider } from "../../src/services/providers/usda-local-provider.js"
+import { useUsdaLocalFixture, resetUsdaLocalFixture } from "../helpers/usda-local-fixture.js"
 import { createBlsProviderIfAvailable, __buildTestBlsData, __resetBlsDataForTests } from "../../src/services/providers/bls-provider.js"
 import { evidenceFor, evidenceKey, mayQueryOff, usesDegradedBlsPolicy, FULL_EVIDENCE } from "../../src/services/identity-evidence.js"
 import { matchingContextKey, rankCandidates, MIN_ACCEPTABLE_SCORE } from "../../src/services/providers/ranking.js"
@@ -218,16 +219,13 @@ describe("degraded USDA strict mode", () => {
     new Response(JSON.stringify({ foods }), { status: 200, headers: { "content-type": "application/json" } })
   const kcal = (v: number) => [{ nutrientId: 1008, nutrientName: "Energy", unitName: "KCAL", value: v }]
 
-  beforeEach(() => {
-    config.usda.apiKey = "test-key"
-    config.usda.retryBackoffMs = 1
+  afterEach(() => {
+    resetUsdaLocalFixture()
   })
 
   it("a degraded STRUCTURED-ENGLISH ingredient (olive oil) can still use USDA", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      fdc([{ fdcId: 748608, description: "Olive oil", dataType: "SR Legacy", foodNutrients: kcal(884) }]),
-    )
-    const m = await createUsdaProviderIfConfigured()!.lookup(
+    await useUsdaLocalFixture([{ fdcId: 748608, description: "Olive oil", kcal: 884, fat: 100 }])
+    const m = await usdaLocalProvider.lookup(
       q({ foodName: "olive oil", structuredName: "olive oil" }),
     )
     expect(m?.providerId).toBe("748608")
@@ -254,10 +252,8 @@ describe("degraded USDA strict mode", () => {
   })
 
   it("a degraded GERMAN-only ingredient cannot reach USDA through its raw German name", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      fdc([{ fdcId: 173474, description: "Peppermint, fresh", dataType: "SR Legacy", foodNutrients: kcal(70) }]),
-    )
-    const m = await createUsdaProviderIfConfigured()!.lookup(
+    await useUsdaLocalFixture([{ fdcId: 173474, description: "Peppermint, fresh", kcal: 70, protein: 3.8, carbs: 14.9, fat: 0.9 }])
+    const m = await usdaLocalProvider.lookup(
       q({ foodName: "Minze", structuredName: "Minze" }),
     )
     // "minze" is absent from "Peppermint, fresh" -> core-identity conflict -> rejected
@@ -267,10 +263,8 @@ describe("degraded USDA strict mode", () => {
   it("the same German ingredient DOES resolve once a validated English identity exists", async () => {
     // Candidate names the core exactly. "Peppermint, fresh" deliberately does NOT — see the
     // English-core policy test below.
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      fdc([{ fdcId: 173474, description: "Mint, fresh", dataType: "SR Legacy", foodNutrients: kcal(70) }]),
-    )
-    const m = await createUsdaProviderIfConfigured()!.lookup(
+    await useUsdaLocalFixture([{ fdcId: 173474, description: "Mint, fresh", kcal: 70, protein: 3.8, carbs: 14.9, fat: 0.9 }])
+    const m = await usdaLocalProvider.lookup(
       q({ foodName: "mint", structuredName: "Minze", coreFoodEnglish: "mint", evidence: HEALTHY }),
     )
     expect(m?.providerId).toBe("173474")
@@ -283,12 +277,10 @@ describe("degraded USDA strict mode", () => {
   // token rule can separate "Peppermint, fresh" (correct) from "Peppermints, hard candy" (wrong)
   // since they differ only by a plural "s". A safe fallback is preferred to that risk for v1.
   it("accepts losing Minze -> 'Peppermint, fresh' rather than reopening substring matching", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      fdc([{ fdcId: 173474, description: "Peppermint, fresh", dataType: "SR Legacy", foodNutrients: kcal(70) }]),
-    )
+    await useUsdaLocalFixture([{ fdcId: 173474, description: "Peppermint, fresh", kcal: 70, protein: 3.8, carbs: 14.9, fat: 0.9 }])
     // state "raw" keeps this out of the preceding test's positive cache entry, whose key is
     // (version|foodName|state|route).
-    const m = await createUsdaProviderIfConfigured()!.lookup(
+    const m = await usdaLocalProvider.lookup(
       q({ foodName: "mint", structuredName: "Minze", coreFoodEnglish: "mint", state: "raw", evidence: HEALTHY }),
     )
     expect(m).toBeNull() // falls through to the LLM nutrient fallback

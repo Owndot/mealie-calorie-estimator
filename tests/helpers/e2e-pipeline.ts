@@ -16,8 +16,10 @@ import type { MealieRecipe, MealieIngredient } from "../../src/types.js"
  * while the real classifier returns the plural "Kidneybohnen", which the German core-identity gate
  * then rejected outright. Nothing below the normalizer can catch that class of bug.
  *
- * So the only thing stubbed here is the network: every LLM reply is a canned string, OFF and USDA
- * are recorded response shapes. Everything between the Mealie payload and the provenance is real.
+ * So the only thing stubbed here is the network: every LLM reply is a canned string and OFF is a
+ * recorded response shape. USDA is no longer stubbed at all — it is a bundled local database, so
+ * these tests run against the real generic corpus. Everything between the Mealie payload and the
+ * provenance is real.
  */
 
 export interface ClassificationStub {
@@ -44,7 +46,6 @@ export interface E2EOptions {
   llmNutrients?: Record<string, Record<string, number>>
   /** Gram estimates for units the deterministic converter cannot resolve, keyed by "unit|food". */
   llmGrams?: Record<string, number>
-  usda?: Record<string, unknown[]>
   off?: Record<string, unknown[]>
 }
 
@@ -129,8 +130,6 @@ export async function runPipeline(r: MealieRecipe, options: E2EOptions = {}): Pr
   config.llm.enabled = llmOn
   config.llm.apiKey = llmOn ? "e2e-key" : ""
   config.llm.rerankEnabled = true
-  config.usda.apiKey = "e2e-key"
-  config.usda.retryBackoffMs = 1
   config.openFoodFacts.retryBackoffMs = 1
 
   vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: { body?: string }) => {
@@ -140,11 +139,6 @@ export async function runPipeline(r: MealieRecipe, options: E2EOptions = {}): Pr
       const q = decodeURIComponent(new URL(u).searchParams.get("q") ?? "").toLowerCase()
       return new Response(JSON.stringify({ hits: options.off?.[q] ?? [] }), { status: 200, headers: { "content-type": "application/json" } })
     }
-    if (u.startsWith(config.usda.baseUrl)) {
-      const q = decodeURIComponent(new URL(u).searchParams.get("query") ?? "").toLowerCase()
-      return new Response(JSON.stringify({ foods: options.usda?.[q] ?? [] }), { status: 200, headers: { "content-type": "application/json" } })
-    }
-
     // Everything else is the configured LLM endpoint; the prompt says which feature is asking.
     const prompt = String(JSON.parse(init?.body ?? "{}").messages?.[0]?.content ?? "")
 

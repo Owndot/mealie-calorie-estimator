@@ -10,7 +10,7 @@ export interface ResolvedNutrients {
   fallbackStatus: FallbackStatus
 }
 
-const KNOWN_FALLBACK_STATUSES: FallbackStatus[] = ["mealie-recipe", "bls", "usda", "off", "llm-nutrient"]
+const KNOWN_FALLBACK_STATUSES: FallbackStatus[] = ["mealie-recipe", "bls", "usda-local", "off", "llm-nutrient"]
 
 /**
  * Maps a provider's `name` to a FallbackStatus without an unchecked cast — a provider whose name

@@ -6,6 +6,7 @@ import { initCache, flushCache } from "./utils/cache.js"
 import { webhookRoutes } from "./routes/webhook.js"
 import { estimateRoutes } from "./routes/estimate.js"
 import { backfillRoutes } from "./routes/backfill.js"
+import { getUsdaLocalData } from "./services/providers/usda-local-provider.js"
 
 async function main() {
   await initCache()
@@ -44,11 +45,18 @@ async function main() {
 
   try {
     await app.listen({ port: config.port, host: "0.0.0.0" })
-    // Boolean-only — never the key itself — so operators can confirm USDA is wired up from logs
-    // alone, without anyone (including an operator debugging remotely) ever needing to read the
-    // actual secret value out of the environment/config.
+    // Booleans and a version only — never a key — so operators can confirm from logs alone what
+    // is wired up, without anyone (including an operator debugging remotely) needing to read a
+    // secret out of the environment. `usdaConfigured` used to mean "an API key is set"; USDA is
+    // now a bundled offline database, so the honest signal is whether that database loaded.
+    const usdaLocal = await getUsdaLocalData()
     logger.info(
-      { port: config.port, usdaConfigured: Boolean(config.usda.apiKey), llmEnabled: config.llm.enabled && Boolean(config.llm.apiKey) },
+      {
+        port: config.port,
+        usdaLocalEnabled: usdaLocal !== null,
+        usdaLocalDatasets: usdaLocal?.datasets ?? null,
+        llmEnabled: config.llm.enabled && Boolean(config.llm.apiKey),
+      },
       "Calorie estimator server started",
     )
   } catch (err) {

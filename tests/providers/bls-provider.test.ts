@@ -311,18 +311,18 @@ describe("BLS in the routing-aware provider chain", () => {
       canonicalName: "Ganz Unbekanntes Ding",
       brand: null,
       state: "unknown" as const,
-      provider: "usda",
-      providerId: "usda-1",
+      provider: "usda-local",
+      providerId: "usda-local-1",
       productName: "Ganz Unbekanntes Ding",
       confidence: 0.8,
     }
     const usdaLookup = vi.fn().mockResolvedValue(usdaMatch)
-    vi.doMock("../../src/services/providers/usda-provider.js", () => ({
-      createUsdaProviderIfConfigured: () => ({ name: "usda", lookup: usdaLookup }),
+    vi.doMock("../../src/services/providers/usda-local-provider.js", () => ({
+      usdaLocalProvider: { name: "usda-local", lookup: usdaLookup },
     }))
-    // OFF now comes before USDA in the generic-route chain — mock it out (rather than let a real
-    // network call decide the test) so this test stays about "BLS miss -> USDA", not OFF's live
-    // search behavior for an intentionally-nonsense food name.
+    // OFF sits after USDA on the generic route — mock it out (rather than let a real network call
+    // decide the test) so this test stays about "BLS miss -> USDA", not OFF's live search
+    // behaviour for an intentionally-nonsense food name.
     const offLookup = vi.fn().mockResolvedValue(null)
     vi.doMock("../../src/services/providers/off-provider.js", () => ({
       offProvider: { name: "off", lookup: offLookup },
@@ -330,7 +330,6 @@ describe("BLS in the routing-aware provider chain", () => {
 
     await (await import("../../src/utils/cache.js")).initCache()
     const { config } = await import("../../src/config.js")
-    config.usda.apiKey = "test-key"
 
     const { __resetBlsDataForTests: resetBls, __buildTestBlsData: buildTestData } = await import("../../src/services/providers/bls-provider.js")
     resetBls(Promise.resolve(buildTestData([]))) // BLS has nothing at all
@@ -339,11 +338,9 @@ describe("BLS in the routing-aware provider chain", () => {
     const result = await resolveNutrients(query({ foodName: "Ganz Unbekanntes Ding", structuredName: "Ganz Unbekanntes Ding" }), "generic")
 
     expect(result).not.toBeNull()
-    expect(result!.fallbackStatus).toBe("usda")
+    expect(result!.fallbackStatus).toBe("usda-local")
     expect(usdaLookup).toHaveBeenCalledTimes(1)
-
-    config.usda.apiKey = ""
-    vi.doUnmock("../../src/services/providers/usda-provider.js")
+    vi.doUnmock("../../src/services/providers/usda-local-provider.js")
     vi.doUnmock("../../src/services/providers/off-provider.js")
   })
 })

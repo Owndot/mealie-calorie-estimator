@@ -17,7 +17,6 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  config.usda.retryBackoffMs = 1
   config.openFoodFacts.retryBackoffMs = 1
   vi.restoreAllMocks()
 })

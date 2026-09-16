@@ -15,7 +15,7 @@ There is **no destructive migration and no manual step**. Every cache key carrie
 prefix, so when matching semantics change the old rows simply stop being addressable and expire
 through the normal TTL sweep:
 
-- `BLS_MATCH_ALGORITHM_VERSION`, `OFF_MATCH_ALGORITHM_VERSION`, `USDA_MATCH_ALGORITHM_VERSION`
+- `BLS_MATCH_ALGORITHM_VERSION`, `OFF_MATCH_ALGORITHM_VERSION`, `USDA_LOCAL_MATCH_ALGORITHM_VERSION`
   prefix each provider's positive and negative keys.
 - `LLM_ESTIMATE_CACHE_KEY_VERSION` / `LLM_NUTRIENT_CACHE_KEY_VERSION` do the same for the LLM
   caches.
@@ -116,3 +116,17 @@ type and the read-back call but omitted from the SELECT, so `row.provenance` was
 and every cache HIT came back claiming it had never been reranked — visible in production as
 `matchReason: "llm-reranked"` next to `llmReranked: false`. A regression test now round-trips all
 four fields.
+
+
+## USDA moves local (Foundation + SR Legacy)
+
+The live FoodData Central search provider was replaced by a bundled SQLite database, so its cache
+namespace changed from `usda` to `usda-local` and its version from `v18` to `v1`. Old `usda` rows
+are simply never read again — they are addressed by a provider name nothing looks up any more, and
+they age out under the normal match TTL. No manual invalidation is needed.
+
+The new provider's cache key carries **two** versions: its own
+`USDA_LOCAL_MATCH_ALGORITHM_VERSION` and the bundled database's `usda_meta.schema_version`
+(`v1/1:...`). Re-importing a newer USDA release therefore invalidates this provider's cached
+matches on its own, without a code change and without touching any other provider's cache — a
+stale row can never point at an `fdc_id` whose meaning moved.

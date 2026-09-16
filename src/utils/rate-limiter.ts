@@ -12,15 +12,9 @@ const llmLimiter = new RateLimiterMemory({
   duration: 60,
 })
 
-const usdaLimiter = new RateLimiterMemory({
-  points: config.usda.rateLimit,
-  duration: 60,
-})
-
 export enum RateLimitType {
   Search = "search",
   Llm = "llm",
-  Usda = "usda",
 }
 
 function getLimiter(type: RateLimitType): RateLimiterMemory {
@@ -29,8 +23,6 @@ function getLimiter(type: RateLimitType): RateLimiterMemory {
       return searchLimiter
     case RateLimitType.Llm:
       return llmLimiter
-    case RateLimitType.Usda:
-      return usdaLimiter
   }
 }
 

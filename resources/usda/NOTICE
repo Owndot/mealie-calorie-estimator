@@ -1,0 +1,44 @@
+USDA FoodData Central — bundled generic food composition data
+=============================================================
+
+Source
+  U.S. Department of Agriculture, Agricultural Research Service, Beltsville Human
+  Nutrition Research Center. FoodData Central. https://fdc.nal.usda.gov/
+
+Licence
+  Public domain. FoodData Central states: "USDA FoodData Central data are in the public
+  domain and they are not copyrighted. They are published under CC0 1.0 Universal
+  (CC0 1.0)." No permission is required for reuse; USDA requests that FoodData Central
+  be listed as the source, which is what this file does.
+
+Suggested citation (USDA's own wording)
+  U.S. Department of Agriculture, Agricultural Research Service, Beltsville Human
+  Nutrition Research Center. FoodData Central. [Internet]. [cited 2026-09-16].
+  Available from https://fdc.nal.usda.gov/.
+
+Included in usda-generic.sqlite
+  Foundation Foods   release 2026-04-30    469 records
+  SR Legacy          release 2018-04     7,793 records
+                                         -----
+                                         8,262 records
+
+Deliberately excluded
+  Branded Foods      428 MB of product-label data whose rows consumed the live search
+                     API's result window — a query for "ground beef" returned 25 Branded
+                     rows out of 25. Excluding them makes that failure structurally
+                     impossible rather than merely filtered.
+  FNDDS (Survey)     Measured against a 48-concept benchmark it lifted only two concepts
+                     over Foundation + SR Legacy, while adding 5,432 rows (2,710 of them
+                     prepared or composite dishes) and inflating candidate sets ~65%.
+
+Provenance and regeneration
+  SOURCES.json in this directory records the exact archive filenames and their SHA-256
+  digests. Regenerate with:
+
+      python3 scripts/import_usda.py \
+        FoodData_Central_foundation_food_csv_2026-04-30.zip \
+        FoodData_Central_sr_legacy_food_csv_2018-04.zip
+
+  Every stored value is a verbatim FoodData Central figure. Sodium and cholesterol are
+  divided by 1000 (mg -> g) so the units match every other provider; nothing else is
+  transformed, and no value is estimated, averaged or hand-authored.
