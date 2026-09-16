@@ -1,7 +1,8 @@
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
 import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
-import type { FoodState, FoodType, IngredientClassification } from "../types.js"
+import type { FoodState, FoodType, FoodForm, FoodPreservation, IngredientClassification } from "../types.js"
+import { inferAttributesFromName } from "./providers/food-semantics.js"
 
 export interface NormalizerInput {
   index: number
@@ -12,6 +13,27 @@ export interface NormalizerInput {
 
 const VALID_STATES: FoodState[] = ["raw", "cooked", "dried", "unknown"]
 const VALID_FOOD_TYPES: FoodType[] = ["simple", "processed_single_food", "composite_dish", "unknown"]
+const VALID_FORMS: FoodForm[] = ["whole", "ground", "powder", "leaf", "seed", "flakes", "paste", "unknown"]
+const VALID_PRESERVATIONS: FoodPreservation[] = ["fresh", "dried", "canned", "frozen", "unknown"]
+
+/**
+ * Attributes are taken from the model when it supplies a valid value, and otherwise inferred
+ * deterministically from the structured name. The inference is evidence-based only — it reads
+ * words that are actually present ("frisch", "gemahlen", "Konserve", "Blätter") and returns
+ * "unknown" otherwise. We never upgrade a genuinely ambiguous ingredient like a bare "Koriander"
+ * into a precise form; "unknown" is permissive in formConflict() and simply keeps both leaf and
+ * seed candidates eligible rather than silently picking one.
+ */
+function resolveAttributes(o: Record<string, unknown>, structuredName: string, canonicalGerman: string) {
+  const inferred = inferAttributesFromName(`${structuredName} ${canonicalGerman}`)
+  const form = VALID_FORMS.includes(o.form as FoodForm) ? (o.form as FoodForm) : inferred.form
+  const preservation = VALID_PRESERVATIONS.includes(o.preservation as FoodPreservation)
+    ? (o.preservation as FoodPreservation)
+    : inferred.preservation
+  const raw = o.fatPercent
+  const fatPercent = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : null
+  return { form, preservation, fatPercent }
+}
 
 function deterministicClassification(input: NormalizerInput): IngredientClassification {
   const name = input.foodName.trim()
@@ -24,6 +46,9 @@ function deterministicClassification(input: NormalizerInput): IngredientClassifi
     canonicalEnglish: name,
     brand: null,
     state: "unknown",
+    // Even without the LLM, form/preservation words physically present in the structured name are
+    // real evidence and are kept — this is reading the text, not guessing.
+    attributes: inferAttributesFromName(name),
     category: null,
     // "unknown" is deliberately permissive (see foodTypeConflict in ranking.ts) — without the
     // LLM there's no reliable signal to hard-reject composite-dish candidates on the query side,
@@ -62,6 +87,12 @@ interface RawItem {
   foodType: unknown
   coreFoodGerman: unknown
   coreFoodEnglish: unknown
+  // Attribute fields are intentionally NOT hard-validated: an unrecognised value falls back to
+  // deterministic inference from the name rather than discarding an otherwise-valid item. The
+  // batch-collapse incident showed how expensive strict all-or-nothing validation is.
+  form?: unknown
+  preservation?: unknown
+  fatPercent?: unknown
 }
 
 /**
@@ -143,6 +174,9 @@ function validateItem(raw: unknown, position: number): { ok: true; item: RawItem
       foodType: o.foodType,
       coreFoodGerman: o.coreFoodGerman,
       coreFoodEnglish: o.coreFoodEnglish,
+      form: o.form,
+      preservation: o.preservation,
+      fatPercent: o.fatPercent,
     } as RawItem,
   }
 }
@@ -254,6 +288,9 @@ For each ingredient, return:
 - category: a short generic food category (e.g. "spice", "herb", "vegetable", "fruit", "dairy", "egg", "meat", "grain", "legume", "fat", "oil", "water", "beverage", "condiment", "seasoning"), or null if unclear. Plain water ("Wasser") is category "water", not "beverage" or null — this field is used to reject a candidate whose name merely happens to share a word with the query (e.g. plain water must never accept a product literally named "water" that isn't water, like a cracker or a soft drink), so pick the most specific matching category rather than defaulting to null when one of the examples clearly fits.
 - foodType: one of "simple", "processed_single_food", "composite_dish", or "unknown" — see definitions and examples below. This field will be used to hard-reject a database match of the wrong type, so accuracy here matters more than most other fields.
 - coreFoodGerman: the CORE food-identity noun within canonicalGerman — the base food itself, with every descriptive MODIFIER (color, origin/style, state/preparation, brand) stripped away. This is the single most important field: a database candidate whose name contains none of this word's tokens will be HARD-REJECTED, no matter how well it otherwise matches on a shared adjective. Never include a modifier here — only the base noun(s). Examples: "Zwiebel" for "rote Zwiebel" (modifier "rote" excluded), "Gewürzmischung" for "italienische Gewürzmischung" (modifier "italienische" excluded — NOT "italienische Gewürzmischung", NOT "Italian"), "Basilikum" for "getrockneter Basilikum" (modifier "getrocknet" excluded), "Paprika" for "grüne Paprika" (modifier "grüne" excluded), "Brühe" for "Gemüsebrühe" (the compound's head noun — "Gemüse" is the modifier), "Knoblauch" for "Knoblauchzehe"/"Knoblauchpulver" (the food is garlic; "-zehe"/"-pulver" describe the FORM, not a different food). If canonicalGerman IS just the base food with no modifiers (e.g. "Tomate", "Ei", "Salz"), coreFoodGerman equals canonicalGerman. null only if genuinely unclear.
+- form: EXACTLY one of "whole", "ground", "powder", "leaf", "seed", "flakes", "paste", "unknown" — the food's physical form. Use "unknown" unless the given name actually supports a specific form; do NOT infer a form from what a recipe probably means. "Ingwer" alone is "unknown" (it is not automatically the dried ground spice), "Ingwer frisch"/"frischer Ingwer" is "whole", "gemahlener Koriander" is "ground", "Korianderblätter" is "leaf", "Koriandersamen" is "seed", "Knoblauchpulver" is "powder", "Chiliflocken" is "flakes", "Tomatenmark" is "paste".
+- preservation: EXACTLY one of "fresh", "dried", "canned", "frozen", "unknown" — how the food was kept. Again only when the name supports it: "aus der Dose"/"Konserve" is "canned", "getrocknet" is "dried", "frisch" is "fresh", "TK"/"tiefgefroren" is "frozen", otherwise "unknown".
+- fatPercent: the fat content in g/100 g when the name states one, as a NUMBER ("Kochsahne 15%" -> 15, "Schlagsahne 30 % Fett" -> 30, "Milch 3,5%" -> 3.5), otherwise null. Never guess a typical value for a food that does not state one.
 - coreFoodEnglish: the same core identity in English, following the identical rule — e.g. "onion", "seasoning" (NOT "Italian seasoning"), "basil", "bell pepper", "broth", "garlic". null only if genuinely unclear.
 
 foodType definitions:
@@ -272,7 +309,7 @@ Ingredients:
 ${lines.join("\n")}
 
 Return ONLY a JSON array, one object per ingredient, in this exact shape, no explanation, no markdown:
-[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","category":"...","foodType":"simple","coreFoodGerman":"...","coreFoodEnglish":"..."}]`
+[{"index":0,"canonicalGerman":"...","canonicalEnglish":"...","brand":null,"state":"raw","form":"unknown","preservation":"unknown","fatPercent":null,"category":"...","foodType":"simple","coreFoodGerman":"...","coreFoodEnglish":"..."}]`
 }
 
 /**
@@ -458,6 +495,8 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
       canonicalEnglish: (item.canonicalEnglish as string).trim() || input.foodName.trim(),
       brand,
       state: item.state as FoodState,
+      attributes: resolveAttributes(item as unknown as Record<string, unknown>,
+        input.foodName, (item.canonicalGerman as string) ?? ""),
       category: (item.category as string | null) ?? null,
       foodType: item.foodType as FoodType,
       coreFoodGerman,

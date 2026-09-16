@@ -1,6 +1,10 @@
 /** Shared candidate-ranking helpers for network providers (OFF, USDA) that return multiple hits. */
-import type { FoodState, FoodType } from "../../types.js"
+import type { FoodState, FoodType, FoodAttributes } from "../../types.js"
 import { evidenceKey, type IdentityEvidence } from "../identity-evidence.js"
+import {
+  GERMAN_DESCRIPTOR_WORDS, compoundIdentityModifier, compoundMatchesTokens,
+  formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, inferAttributesFromName, compoundSegments,
+} from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /**
@@ -111,7 +115,7 @@ export function nameSimilarity(a: string, b: string): number {
  * pineapple, ...) still counts. This is a broad, reusable vocabulary of quality/state words that
  * apply across many foods — not a blacklist of specific wrong foods, unlike MISMATCH_RULES below.
  */
-const GENERIC_DESCRIPTOR_WORDS = new Set([
+export const GENERIC_DESCRIPTOR_WORDS = new Set([
   "raw", "fresh", "cooked", "boiled", "baked", "fried", "roasted", "grilled", "steamed", "braised",
   "poached", "stewed", "dried", "dry", "dehydrated", "frozen", "canned", "organic", "natural",
   "whole", "ground", "pure", "plain", "style", "tender", "petite", "small", "large", "mild",
@@ -215,7 +219,11 @@ export function coreIdentityConflict(
       // ("spice", "herb", "seed") therefore finds no identity at all and falls back safely,
       // instead of adopting whichever specific food happens to share the family prefix.
       ? candidateTokens.some((t) => !GENERIC_DESCRIPTOR_WORDS.has(t) && englishTokenMatches(core, t))
-      : candidateTokens.some((t) => t.includes(core)),
+      // German: containment covers "Zwiebel" inside "Speisezwiebel"; compound segmentation covers
+      // the mirror case where the CORE is the fused compound and the record spells it out
+      // ("Hähnchenbrust" vs "Hähnchen Brustfilet"). Without the second, supplying a more precise
+      // core turned a perfect record into a hard rejection.
+      : candidateTokens.some((t) => t.includes(core)) || compoundMatchesTokens(core, candidateTokens),
   )
   return !hasCore
 }
@@ -245,12 +253,29 @@ export function coreIdentityScoreAdjustment(coreText: string | null | undefined,
   let extraCount = 0
   for (const t of candidateTokens) {
     if (t.length < CORE_TOKEN_MIN_LENGTH) continue
+    // "Halbfettbutter" contains "butter", so containment alone declared it fully explained and it
+    // outscored the correct "Butter mild gesäuert". A compound whose PREFIX is an identity
+    // modifier is extra content, not a synonym — see compoundIdentityModifier().
+    const fusedModifier = coreTokens.map((c) => compoundIdentityModifier(t, c)).find(Boolean)
+    if (fusedModifier) { extraCount++; continue }
     if (coreTokens.some((c) => t.includes(c))) continue
     if (modifierTokens.some((m) => t.includes(m) || m.includes(t))) {
       modifierMatches++
       continue
     }
-    if (GENERIC_DESCRIPTOR_WORDS.has(t)) continue
+    // The query may itself be a fused German compound, in which case the candidate spells its
+    // parts as separate words: "Hähnchenbrust" vs "Hähnchen Brustfilet, roh". A candidate token
+    // that continues one of the query's own compound segments is content the query ASKED for, so
+    // penalising it as foreign is exactly backwards.
+    if (queryTokens.some((q) => compoundSegments(q).some(([a, b]) =>
+      (t.startsWith(a) || a.startsWith(t)) || (t.startsWith(b) || b.startsWith(t))))) {
+      modifierMatches++
+      continue
+    }
+    // German qualifiers count exactly like their English counterparts. Without this, every BLS
+    // name's "roh"/"gekocht"/"Konserve" was scored as a DIFFERENT FOOD at -35 and sank the
+    // candidate below FUZZY_MIN_SCORE — the defect that made correct classification hurt BLS.
+    if (GENERIC_DESCRIPTOR_WORDS.has(t) || GERMAN_DESCRIPTOR_WORDS.has(t)) continue
     extraCount++
   }
 
@@ -538,6 +563,20 @@ export interface RankOptions {
    * hard-rejection signal alongside queryFoodType. See coreIdentityConflict()/
    * coreIdentityScoreAdjustment(). Absent/null is permissive.
    */
+  /** Query attributes — see FoodAttributes. Gated before any lexical scoring. */
+  queryAttributes?: FoodAttributes
+  /**
+   * Candidate fat per 100 g, when the provider can supply it. Compared against
+   * queryAttributes.fatPercent using measured values rather than names.
+   */
+  candidateFat?: (candidate: unknown) => number | null
+  /**
+   * Generic route with no brand evidence: a BRANDED candidate is a manufacturer's product standing
+   * in for a basic food. Found live — plain "Parmesan" took "Billa Bio Parmesan", "pasta" took a
+   * branded pasta, "Baby-Spinat" took a Kroger product. Rejected outright rather than nudged,
+   * because the previous -15 penalty was routinely outweighed by a good lexical score.
+   */
+  rejectBrandedWithoutBrandEvidence?: boolean
   queryCoreFood?: string | null
   /**
    * Word-formation rules for queryCoreFood. English callers (OFF/USDA) must pass "token" so a core
@@ -569,6 +608,26 @@ export function rankCandidates<T extends RankableCandidate>(
       let mismatchReason: string | null = foodTypeConflict(options.queryFoodType ?? "unknown", candidate.foodType ?? "unknown")
         ? `food type conflict: a "${options.queryFoodType}" query cannot accept a "composite_dish" candidate ("${candidate.name}")`
         : null
+
+      // Attribute gates rank alongside foodTypeConflict as PRIMARY signals: a nutritionally
+      // meaningful form/preservation/fat difference is a different food, not a worse text match.
+      const qa = options.queryAttributes
+      if (!mismatchReason && qa) {
+        const ca = inferAttributesFromName(candidate.name)
+        if (formConflict(qa.form, ca.form) || freshVsProcessedFormConflict(qa.preservation, ca.form)) {
+          mismatchReason = `form conflict: a "${qa.form}" query cannot accept a "${ca.form}" candidate ("${candidate.name}")`
+        } else if (preservationConflict(qa.preservation, ca.preservation)) {
+          mismatchReason = `preservation conflict: a "${qa.preservation}" query cannot accept a "${ca.preservation}" candidate ("${candidate.name}")`
+        } else if (fatConflict(qa.fatPercent, options.candidateFat?.(candidate) ?? null)) {
+          mismatchReason = `fat conflict: ${qa.fatPercent}% requested, candidate has ${options.candidateFat?.(candidate)}g/100g ("${candidate.name}")`
+        }
+      }
+
+      // Generic route, no brand evidence: an arbitrary manufacturer's product must not stand in
+      // for a basic food when an authoritative generic record exists.
+      if (!mismatchReason && options.rejectBrandedWithoutBrandEvidence && !queryBrand && candidate.brand) {
+        mismatchReason = `branded product for a generic query ("${candidate.brand}" / "${candidate.name}")`
+      }
 
       // Second PRIMARY hard-rejection signal, checked right alongside foodTypeConflict: a
       // candidate whose name contains NONE of the query's core-identity tokens is a different
