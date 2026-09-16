@@ -292,12 +292,9 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
     "cooking cream 15%": { kcal: 150, protein: 3, carbs: 4, fat: 15 },
   },
   // 1430.975 from the database + recipe rows + 782.620 from these four = 2213.595 against
-  // production's 2215.155 — a 0.07% modelling residual (the cream would have to be 150.312 rather
-  // than 150 to close it). The tolerance is wider than that because THIS BRANCH deliberately
-  // changes one row: grüne Chilischoten moves from a 40 kcal estimate to USDA's 21 kcal canned
-  // record over 20 g, costing a further 3.8 kcal. See fixtureDeviations for why that is recorded
-  // as questionable rather than welcomed.
-  reconcilesWithin: 5.5,
+  // production's 2215.155. Same 0.07% residual, same reason: the cream would have to be 150.312
+  // rather than 150 to close it.
+  reconcilesWithin: 1.6,
   productionRows: [
     ["Hähnchenbrust", "bls", "Hähnchen Brustfilet, roh", 500, 0.75],
     ["Tikka-Paste", "mealie-recipe", "Tikka-Paste", 100, 0.85],
@@ -315,23 +312,6 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
     ["Tomatenmark", "bls", "Tomatenmark", 70, 0.92],
     ["Kochsahne 15%", "llm-nutrient", null, 500, 0.35],
   ],
-  fixtureDeviations: {
-    // QUESTIONABLE, and recorded as such rather than accepted quietly. Production answered this
-    // with an LLM estimate (40 kcal). The local corpus makes USDA's chilli family reachable and
-    // ranking picks "Peppers, chili, green, canned" (168577, 21 kcal) over the record that is
-    // actually right — "Peppers, hot chili, green, raw" (170497, 40 kcal) — because the extra
-    // qualifier "hot" is penalised as an unexplained word while "canned" is not, and the
-    // ingredient states no preservation for the preservation gate to catch.
-    //
-    // This is the same pre-existing ranking weakness that puts sweet pepper ahead of hot chilli,
-    // surfacing on a new food now that the record is reachable at all. It is NOT fixed here:
-    // ranking is out of scope for this PR and belongs to the deferred ranking-design follow-up.
-    // Cost: Butter Chicken 2215.155 -> 2209.795 kcal, 554 -> 552 per serving (-0.24%).
-    "grüne Chilischoten": {
-      provider: "usda-local", record: "Peppers, chili, green, canned", confidence: 0.7,
-      why: "reachable locally, but ranking prefers the canned record over the raw one",
-    },
-  },
 }
 
 /**

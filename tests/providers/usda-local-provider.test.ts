@@ -330,3 +330,104 @@ describe("cached provenance round-trips for usda-local", () => {
       buildQueryKey("v1/1:Versioncheck food|unknown|generic|unknown/unknown/-", null))?.providerId).toBe("111")
   })
 })
+
+describe("an unrequested material transformation cannot outrank the plain food", () => {
+  /**
+   * Both halves of the rule, on the real bundled corpus.
+   *
+   * An unrequested preservation or derived form used to be FREE: `canned`, `cooked`, `dried` and
+   * friends sit in GENERIC_DESCRIPTOR_WORDS so USDA's precise naming ("Beans, kidney, red, mature
+   * seeds, canned, drained solids") would not lose to a vague one ("Kidney beans, NFS") purely by
+   * paying a penalty per precise word. That exemption was unconditional, so a transformation
+   * nobody asked for was free too — and a candidate could win by volunteering one.
+   *
+   * It is now conditional: free when the query names it, foreign content when it does not. The
+   * conventional dried/ground form of a spice or herb record is exempt either way, because that
+   * IS what a recipe means by "oregano".
+   */
+  const q = (structured: string, english: string, core: string, over: Record<string, unknown> = {}) => ({
+    foodName: english, structuredName: structured, canonicalGerman: structured, brand: null,
+    category: (over.category as string) ?? null, state: (over.state as string) ?? "unknown",
+    foodType: "simple", coreFoodGerman: structured, coreFoodEnglish: core, route: "generic",
+    attributes: {
+      ...UNKNOWN_ATTRIBUTES,
+      ...(over.form ? { form: over.form } : {}),
+      ...(over.preservation ? { preservation: over.preservation } : {}),
+    },
+    evidence: { german: true, english: true, core: true, brand: false },
+  } as unknown as ProviderQuery)
+
+  const lookup = async (query: ProviderQuery) => {
+    __resetUsdaLocalForTests()
+    config.usdaLocal.dbPath = ""
+    __clearProviderCachesForTests()
+    return usdaLocalProvider.lookup(query)
+  }
+
+  it("generic green chili does not resolve to CANNED green chili", async () => {
+    const m = await lookup(q("grüne Chilischoten", "green chilies", "chili pepper", { state: "raw", category: "vegetable" }))
+    expect(m?.productName ?? "").not.toMatch(/canned/i)
+    expect(m?.providerId).not.toBe("168577")
+  })
+
+  it("explicitly canned green chili MAY resolve to the canned record", async () => {
+    const m = await lookup(q("grüne Chilischoten a.d. Dose", "canned green chilies", "chili pepper",
+      { category: "vegetable", preservation: "canned" }))
+    expect(m?.providerId).toBe("168577")
+    expect(m?.productName).toBe("Peppers, chili, green, canned")
+  })
+
+  it("generic quinoa does not resolve to quinoa FLOUR", async () => {
+    const m = await lookup(q("Quinoa", "quinoa", "quinoa", { state: "raw", category: "grain" }))
+    expect(m?.productName ?? "").not.toMatch(/flour/i)
+    expect(m?.providerId).toBe("168874")
+    expect(m?.productName).toBe("Quinoa, uncooked")
+  })
+
+  it("explicitly named quinoa flour MAY resolve to quinoa flour", async () => {
+    const m = await lookup(q("Quinoamehl", "quinoa flour", "quinoa", { category: "grain", form: "flour" }))
+    expect(m?.providerId).toBe("2512372")
+    expect(m?.productName).toBe("Flour, quinoa")
+  })
+
+  it("does not over-block: a spice keeps its conventional dried/ground form", async () => {
+    // "oregano" means the dried spice; requiring the word "dried" in the query would reject the
+    // conventional answer for the entire spice category.
+    const plain = await lookup(q("Oregano", "oregano", "oregano", { category: "herb" }))
+    expect(plain?.productName).toBe("Spices, oregano, dried")
+    const explicit = await lookup(q("getrockneter Oregano", "dried oregano", "oregano",
+      { category: "herb", preservation: "dried" }))
+    expect(explicit?.productName).toBe("Spices, oregano, dried")
+
+    const turmeric = await lookup(q("Kurkuma", "turmeric", "turmeric", { form: "ground", category: "spice" }))
+    expect(turmeric?.providerId).toBe("172231")
+    const coriander = await lookup(q("Korianderkörner", "coriander seeds", "coriander seeds",
+      { form: "seed", category: "spice" }))
+    expect(coriander?.providerId).toBe("170922")
+  })
+
+  it("does not over-block: an explicitly named derived form still resolves", async () => {
+    const m = await lookup(q("Knoblauchgewürz", "garlic seasoning", "garlic", { category: "seasoning" }))
+    expect(m?.providerId).toBe("171325")
+    expect(m?.productName).toBe("Spices, garlic powder")
+  })
+
+  it("candidate order cannot decide between the plain food and a transformed one", async () => {
+    // Invariant C, on the pair that actually collided. Whatever order the corpus is read in, the
+    // unrequested transformation must not win.
+    const foods = [
+      { fdcId: 168874, description: "Quinoa, uncooked", kcal: 368, protein: 14.1, carbs: 64.2, fat: 6.1 },
+      { fdcId: 2512372, description: "Flour, quinoa", dataType: "Foundation" as const, kcal: 385, protein: 13.6, carbs: 68.9, fat: 5.9 },
+    ]
+    const pick = async (list: typeof foods) => {
+      await useUsdaLocalFixture(list)
+      __clearProviderCachesForTests()
+      return (await usdaLocalProvider.lookup(
+        q("Quinoa", "quinoa", "quinoa", { state: "raw", category: "grain" })))?.providerId ?? null
+    }
+    const forward = await pick(foods)
+    const reversed = await pick([...foods].reverse())
+    expect(forward).toBe("168874")
+    expect(reversed).toBe("168874")
+  })
+})
