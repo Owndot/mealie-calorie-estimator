@@ -390,15 +390,36 @@ describe("an unrequested material transformation cannot outrank the plain food",
     expect(m?.productName).toBe("Flour, quinoa")
   })
 
-  it("does not over-block: a spice keeps its conventional dried/ground form", async () => {
-    // "oregano" means the dried spice; requiring the word "dried" in the query would reject the
-    // conventional answer for the entire spice category.
-    const plain = await lookup(q("Oregano", "oregano", "oregano", { category: "herb" }))
-    expect(plain?.productName).toBe("Spices, oregano, dried")
+  it("an explicitly dried herb resolves; a bare one does not take the dried record on its own", async () => {
+    // The asymmetry is the rule, not an accident. An exemption letting spice/herb records
+    // volunteer their conventional dried/ground form was tried and removed: it let bare "Chili"
+    // — which names both a fresh pod and a ground powder — resolve to "Spices, chili powder"
+    // (282 kcal/100 g) that nobody asked for. Telling that apart from "Oregano", where the dried
+    // leaf genuinely is what a recipe means, needs per-food knowledge this file does not have.
+    // A bare herb therefore falls back to an estimate, exactly as it does on the live-API build.
     const explicit = await lookup(q("getrockneter Oregano", "dried oregano", "oregano",
       { category: "herb", preservation: "dried" }))
     expect(explicit?.productName).toBe("Spices, oregano, dried")
 
+    const plain = await lookup(q("Oregano", "oregano", "oregano", { category: "herb" }))
+    expect(plain?.productName ?? "").not.toMatch(/dried/i)
+  })
+
+  it("a bare food name whose form is ambiguous never takes a ground/powdered record", async () => {
+    // "Chili" is the case that killed the spice exemption. Both classifications are plausible for
+    // the bare German word, and neither may reach a powder without the query saying so.
+    const asSpice = await lookup(q("Chili", "chili", "chili", { category: "spice" }))
+    expect(asSpice?.productName ?? "").not.toMatch(/powder/i)
+    const asVegetable = await lookup(q("Chili", "chili pepper", "chili pepper", { state: "raw", category: "vegetable" }))
+    expect(asVegetable?.productName ?? "").not.toMatch(/powder/i)
+
+    // Naming the powder still reaches it.
+    const powder = await lookup(q("Chilipulver", "chili powder", "chili", { form: "powder", category: "spice" }))
+    expect(powder?.providerId).toBe("171319")
+    expect(powder?.productName).toBe("Spices, chili powder")
+  })
+
+  it("keeps the spice records whose queries do name their form", async () => {
     const turmeric = await lookup(q("Kurkuma", "turmeric", "turmeric", { form: "ground", category: "spice" }))
     expect(turmeric?.providerId).toBe("172231")
     const coriander = await lookup(q("Korianderkörner", "coriander seeds", "coriander seeds",

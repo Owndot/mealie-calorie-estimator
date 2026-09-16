@@ -177,6 +177,15 @@ export const GENERIC_DESCRIPTOR_WORDS = new Set([
  * A word here is free when the query NAMES it, and foreign content when it does not. That is the
  * whole rule: a candidate may answer what was asked, and may not earn preference for volunteering
  * a transformation nobody requested.
+ *
+ * There is deliberately NO exemption for spice/herb records volunteering their conventional
+ * dried/ground form. It was tried and removed: a candidate being classified as a spice is not
+ * evidence about what the QUERY meant. It let bare "Chili" — a word that names both a fresh pod
+ * and a ground powder — resolve to "Spices, chili powder" at 282 kcal/100 g, which no one asked
+ * for. Separating that from "Oregano", where the dried leaf really is what a recipe means, needs
+ * knowledge of which foods have a common fresh form; that is per-food knowledge, and this file
+ * does not have any. The conservative reading costs bare "Oregano" its database record — it falls
+ * back to an estimate, exactly as it does on the live-API build — and that is the cheaper mistake.
  */
 const MATERIAL_TRANSFORM_WORDS = new Set([
   // Preservation — changes water content and often adds salt/sugar/oil.
@@ -187,18 +196,6 @@ const MATERIAL_TRANSFORM_WORDS = new Set([
   // Derived forms — a different product made FROM the food.
   "flour", "juice", "paste", "concentrate", "powder", "puree", "syrup", "extract",
 ])
-
-/**
- * Spice and herb records conventionally ARE the dried/ground form — "Spices, oregano, dried" is
- * what a recipe means by "oregano". Treating that as an unrequested transformation would reject
- * the conventional answer for the whole category, so the transformation rule steps aside when the
- * candidate is classified as a spice or herb and the word is one of those conventional forms.
- *
- * Read off the CANDIDATE's own classificatory prefix, not a list of spice names — nothing here
- * knows what oregano is.
- */
-const SPICE_CLASSIFIER_TOKENS = new Set(["spice", "spices", "herb", "herbs"])
-const CONVENTIONAL_SPICE_FORMS = new Set(["dried", "ground", "powder"])
 
 /** Minimum length for a core-identity token to participate in substring containment checks — a
  *  1-2 letter fragment risks matching coincidentally inside an unrelated word. */
@@ -402,13 +399,10 @@ export function coreIdentityScoreAdjustment(
     // candidate below FUZZY_MIN_SCORE — the defect that made correct classification hurt BLS.
     // A material transformation is free only if the query asked for it. Checked BEFORE the generic
     // exemption, because several of these words sit in that list for the naming-convention reason
-    // above and would otherwise stay unconditionally free. Spice/herb records keep their
-    // conventional dried/ground form.
+    // above and would otherwise stay unconditionally free.
     if (MATERIAL_TRANSFORM_WORDS.has(t)) {
       const requested = queryTokens.some((q) => q === t || q.startsWith(t) || t.startsWith(q))
-      const conventionalForSpice = CONVENTIONAL_SPICE_FORMS.has(t)
-        && candidateTokens.some((c) => SPICE_CLASSIFIER_TOKENS.has(c))
-      if (requested || conventionalForSpice) { modifierMatches++; continue }
+      if (requested) { modifierMatches++; continue }
       extraCount++
       continue
     }
