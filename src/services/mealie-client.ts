@@ -125,6 +125,32 @@ export async function getAllRecipes(householdId?: string | null): Promise<string
   return slugs
 }
 
+/**
+ * Slug AND display name for every recipe, for the homemade-ingredient index. Separate from
+ * getAllRecipes() (which backfill uses and only needs slugs) so neither has to carry the other's
+ * payload, and so a failure here degrades to "no homemade sources" rather than breaking backfill.
+ */
+export async function listRecipeNames(householdId?: string | null): Promise<{ slug: string; name: string }[]> {
+  const out: { slug: string; name: string }[] = []
+  let page = 1
+  const perPage = 100
+  const token = getMealieToken(householdId)
+
+  while (true) {
+    const data = await request<{
+      items: { slug: string; name: string }[]
+      total_pages: number
+    }>("GET", `/api/recipes?page=${page}&per_page=${perPage}&order_direction=asc`, undefined, token)
+
+    for (const item of data.items) {
+      if (item.slug && item.name) out.push({ slug: item.slug, name: item.name })
+    }
+    if (page >= data.total_pages) break
+    page++
+  }
+  return out
+}
+
 interface TagsPagination {
   items: MealieTag[]
   total: number

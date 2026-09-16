@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vite
 import { config } from "../../src/config.js"
 import { initCache, clearLlmCache } from "../../src/utils/cache.js"
 import { parseRerankReply, rerankCandidates, type RerankCandidate, type RerankQuery } from "../../src/services/providers/candidate-rerank.js"
-import { rerankTrigger, type TriggerCandidate } from "../../src/services/providers/bls-provider.js"
+import { rerankTrigger, type TriggerCandidate } from "../../src/services/providers/candidate-rerank.js"
 import { UNKNOWN_ATTRIBUTES, type FoodForm, type FoodPreservation, type FoodState } from "../../src/types.js"
 
 /**

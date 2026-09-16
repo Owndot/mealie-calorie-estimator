@@ -77,6 +77,45 @@ export const IDENTITY_MODIFIERS = new Set([
 ])
 
 /**
+ * Families of IDENTITY_MODIFIERS that answer for one another. "Light", "leicht", "fettarm" and
+ * "mager" all state the same nutritional claim, so any of them satisfies a query asking for any
+ * other; none of them is satisfied by a candidate that states nothing.
+ */
+const MODIFIER_FAMILIES: [string, string[]][] = [
+  ["reduced-fat", ["halbfett", "fettarm", "fettreduziert", "magerstufe", "mager", "leicht", "light",
+    "lite", "lowfat", "low", "reduced", "skim", "skimmed", "nonfat", "fatfree", "entrahmt",
+    "teilentrahmt", "diaet", "diet", "leichte", "leichter"]],
+  ["full-fat", ["vollfett", "sahne", "creme", "cream"]],
+  ["substitute", ["ersatz", "imitat", "analog", "substitute", "imitation", "alternative", "vegan"]],
+]
+
+/**
+ * Nutritional claims the query makes that the candidate does not.
+ *
+ * Found live twice: "Mayo Light" resolved to BLS's "Salatmayonnaise (Fertigprodukt)" and
+ * "mageres Rinderhackfleisch" to "Rind Hackfleisch, roh" — in both cases the explicit modifier
+ * simply evaporated, and the match was then reported as if it were equivalent. These are real
+ * nutritional differences (a light mayonnaise is roughly half the energy of a full one), so the
+ * shortfall is scored against the candidate, recorded in provenance and reflected in match quality
+ * rather than silently dropped.
+ *
+ * Returns family names, not raw words, so "mager" is answered by "fettarm" and vice versa.
+ */
+export function unmetModifierFamilies(queryText: string, candidateName: string): string[] {
+  const asked = semanticTokens(queryText)
+  const offered = semanticTokens(candidateName)
+  const unmet: string[] = []
+  for (const [family, words] of MODIFIER_FAMILIES) {
+    // A family is "asked for" only when the query names it as its own word or compound head —
+    // never when it merely appears inside an unrelated token.
+    if (!markerHit(asked, words)) continue
+    if (markerHit(offered, words)) continue
+    unmet.push(family)
+  }
+  return unmet
+}
+
+/**
  * A German compound whose PREFIX is an identity modifier ("Halbfett|butter", "Mager|quark").
  * German fuses modifiers onto the head noun, so a token-level check cannot see them — which is
  * exactly how "Halbfettbutter" passed as a plain "Butter".
@@ -332,17 +371,44 @@ export function semanticTokens(name: string): string[] {
  * class deliberately — a garlic seasoning may legitimately resolve to a garlic POWDER record, both
  * being derived preparations, while neither may become the raw clove.
  */
-const DERIVED_PRODUCT_MARKERS = [
-  // seasoning blends
-  "gewuerz", "gewuerze", "gewuerzmischung", "wuerzmischung", "wuerzer", "streuwuerze",
-  "seasoning", "seasonings", "mischung", "blend", "rub",
-  // liquids drawn off or extracted from a food
-  "wasser", "water", "lake", "sud", "aufguss", "brine", "saft", "juice", "nektar", "nectar",
-  "bruehe", "broth", "stock", "fond", "essig", "vinegar",
-  // concentrates and preparations
-  "extrakt", "extract", "konzentrat", "concentrate", "sirup", "syrup", "essenz", "essence",
-  "pulver", "powder", "paste", "mark", "puree", "pueree", "mus",
+const DERIVED_PRODUCT_CLASSES: [string, string[]][] = [
+  ["seasoning", ["gewuerz", "gewuerze", "gewuerzmischung", "wuerzmischung", "wuerzer", "streuwuerze",
+    "seasoning", "seasonings", "mischung", "blend", "rub"]],
+  ["powder", ["pulver", "powder"]],
+  ["paste", ["paste", "mark", "puree", "pueree", "mus"]],
+  // Liquid DRAWN OFF a food — a pickling brine, a steeping liquor. Not the food, and not its juice.
+  ["brine", ["wasser", "water", "lake", "sud", "aufguss", "brine"]],
+  ["juice", ["saft", "juice", "nektar", "nectar"]],
+  ["broth", ["bruehe", "broth", "stock", "fond"]],
+  ["vinegar", ["essig", "vinegar"]],
+  ["concentrate", ["extrakt", "extract", "konzentrat", "concentrate", "sirup", "syrup", "essenz", "essence"]],
 ]
+
+const DERIVED_PRODUCT_MARKERS = DERIVED_PRODUCT_CLASSES.flatMap(([, m]) => m)
+
+/**
+ * Which derived-product classes may stand in for one another. Dry preparations of a spice are
+ * interchangeable enough — a "garlic seasoning" is fairly answered by a garlic POWDER record — but
+ * liquids are not: found live, the reranker accepted BLS's "Gemüsesaft aus Gurke" (cucumber JUICE)
+ * for "Gurkenwasser" (pickle brine), reasoning that "both are derived from cucumbers". Sharing a
+ * source ingredient is not being the same food product, and treating every derived marker as one
+ * undifferentiated class is what let that through.
+ */
+const COMPATIBLE_DERIVED_CLASSES: [string, string][] = [
+  ["seasoning", "powder"], ["seasoning", "paste"], ["powder", "paste"],
+]
+
+function derivedClasses(text: string): Set<string> {
+  const tokens = semanticTokens(text)
+  const found = new Set<string>()
+  for (const [name, markers] of DERIVED_PRODUCT_CLASSES) if (markerHit(tokens, markers)) found.add(name)
+  return found
+}
+
+function classesCompatible(a: string, b: string): boolean {
+  if (a === b) return true
+  return COMPATIBLE_DERIVED_CLASSES.some(([x, y]) => (x === a && y === b) || (x === b && y === a))
+}
 
 /** True when a name carries any derived-product marker — see DERIVED_PRODUCT_MARKERS. */
 export function namesDerivedProduct(text: string): boolean {
@@ -371,8 +437,12 @@ export function isDerivedProductMarker(token: string): boolean {
  * reintroduce a core-based exemption should one ever prove genuinely necessary.
  */
 export function derivedProductConflict(queryText: string, _coreText: string | null | undefined, candidateName: string): boolean {
-  if (!namesDerivedProduct(queryText)) return false
-  return !namesDerivedProduct(candidateName)
+  const asked = derivedClasses(queryText)
+  if (asked.size === 0) return false
+  const offered = derivedClasses(candidateName)
+  if (offered.size === 0) return true
+  // Every class the query named must be answerable by something the candidate names.
+  return ![...asked].some((a) => [...offered].some((o) => classesCompatible(a, o)))
 }
 
 /**

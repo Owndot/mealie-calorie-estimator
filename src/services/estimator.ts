@@ -195,9 +195,18 @@ export function classifyMatchQuality(
     .filter((i) => i.matched && i.nutrients?.kcalPer100g != null && i.grams != null)
     .map((i) => ({ i, kcal: Math.abs((i.nutrients!.kcalPer100g! * i.grams!) / 100) }))
 
-  const lowConfidence = matched
-    .filter((i) => i.matched && (i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD)
-    .map((i) => i.name)
+  // "Risky" is broader than "low confidence in the record". An ingredient can be matched perfectly
+  // and still be the riskiest number in the recipe — because its WEIGHT was guessed, or because the
+  // record answers a different product than the one written down. Match quality is meant to point
+  // at nutrition totals a user should not trust, so it weighs all three.
+  const risky = (i: IngredientMatch): string | null => {
+    if (!i.matched) return null
+    if ((i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD) return "low-confidence match"
+    if ((i.unmetAttributes?.length ?? 0) > 0) return `does not satisfy: ${i.unmetAttributes!.join(", ")}`
+    if (i.gramsEstimated && i.fallbackStatus !== "unresolved") return "weight was estimated"
+    return null
+  }
+  const lowConfidence = matched.filter((i) => risky(i) !== null).map((i) => i.name)
 
   if (contributions.length === 0) {
     // Nothing energy-bearing resolved; coverage already reports that, and there is no quality
@@ -213,14 +222,14 @@ export function classifyMatchQuality(
     : contributions.reduce((a, c) => a + (c.i.confidence ?? 0), 0) / contributions.length
 
   const dominantDoubt = totalKcal > 0
-    ? contributions.find((c) => c.kcal / totalKcal > DOMINANT_CONTRIBUTION_SHARE && (c.i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD)
+    ? contributions.find((c) => c.kcal / totalKcal > DOMINANT_CONTRIBUTION_SHARE && risky(c.i) !== null)
     : undefined
 
   if (dominantDoubt) {
     const share = Math.round((dominantDoubt.kcal / totalKcal) * 100)
     return {
       matchQuality: weighted < LOW_QUALITY_MEAN ? "low" : "mixed",
-      reason: `"${dominantDoubt.i.name}" contributes ${share}% of the calories from a low-confidence match (${dominantDoubt.i.productName ?? "no record"})`,
+      reason: `"${dominantDoubt.i.name}" contributes ${share}% of the calories and ${risky(dominantDoubt.i)} (${dominantDoubt.i.productName ?? "no record"})`,
       lowConfidence,
     }
   }
@@ -301,6 +310,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
         attributes: classification?.attributes ?? UNKNOWN_ATTRIBUTES,
         // What is actually KNOWN about this ingredient's identity. Absent evidence must make a
         // provider stricter, never more permissive — see identity-evidence.ts.
+        householdId: recipe.householdId ?? recipe.household_id ?? null,
+        // This recipe is an ancestor of anything it resolves, which is what stops a recipe
+        // resolving through itself or through a cycle.
+        ancestorSlugs: [recipe.slug],
         evidence: evidenceFor(
           { llmClassified: classification?.llmClassified ?? false, canonicalGerman, coreFoodGerman, coreFoodEnglish, brand },
           ing.foodName,
@@ -342,6 +355,9 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       matchReason: resolved.match.matchReason,
       llmReranked: resolved.match.llmReranked ?? false,
       rerankReason: resolved.match.rerankReason ?? null,
+      unmetAttributes: resolved.match.unmetAttributes ?? [],
+      sourceRecipeSlug: resolved.match.sourceRecipeSlug ?? null,
+      sourceRecipeFingerprint: resolved.match.sourceRecipeFingerprint ?? null,
       // A reranked match DID involve the LLM, even though its nutrients came from a database.
       llmParticipated: (classification?.llmClassified ?? false)
         || resolved.fallbackStatus === "llm-nutrient"
@@ -531,6 +547,18 @@ export function buildNutritionPatch(
     extras.calorie_estimator_low_confidence = JSON.stringify(result.lowConfidenceIngredients)
   }
 
+  // Dependencies on the user's OWN recipes, with a fingerprint of the nutrition/yield state each
+  // one had when this estimate was made. A dependent recipe otherwise keeps a stale value forever:
+  // its own ingredient hash does not change when a SOURCE recipe is re-estimated, so nothing would
+  // ever prompt it to look again. Deliberately recorded rather than cascaded — a source change
+  // invalidates the dependent at its next run, which is safe and cannot storm.
+  const sources = result.matchedIngredients
+    .filter((i) => i.sourceRecipeSlug && i.sourceRecipeFingerprint)
+    .map((i) => [i.sourceRecipeSlug!, i.sourceRecipeFingerprint!] as const)
+  if (sources.length > 0) {
+    extras.calorie_estimator_recipe_sources = JSON.stringify(Object.fromEntries(sources))
+  }
+
   const llmIngredients = result.matchedIngredients.filter((i) => i.llmParticipated).map((i) => i.name)
   if (llmIngredients.length > 0) {
     extras.calorie_estimator_llm_ingredients = JSON.stringify(llmIngredients)
@@ -548,6 +576,8 @@ export function buildNutritionPatch(
     // Records that the SELECTION was model-assisted while the nutrients stayed with `provider`.
     llmReranked: i.llmReranked ?? false,
     rerankReason: i.rerankReason ?? null,
+    unmetAttributes: i.unmetAttributes ?? [],
+    sourceRecipeSlug: i.sourceRecipeSlug ?? null,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,
     matched: i.matched,

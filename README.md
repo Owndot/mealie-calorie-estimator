@@ -181,6 +181,40 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 
 Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
 
+### Your own recipes as an ingredient source
+
+A recipe that is itself an ingredient — a curry paste, a spice mix, a stock — is the one food a
+public database can never know. If an ingredient's name matches one of your own Mealie recipes
+**exactly**, its nutrition is derived from that recipe instead of guessed:
+
+```
+total recipe nutrients ÷ finished yield in grams × the grams this recipe uses
+```
+
+It is deliberately the most conservative provider in the chain, and declines rather than guesses:
+
+- **Exact normalized-name match only.** `Tikka-Paste` finds the `Tikka-Paste` recipe; nothing merely
+  containing "Tikka" does.
+- **The source must state a yield in mass.** Mealie already models this (`recipeYieldQuantity` +
+  `recipeYield`), so no new metadata is invented. A recipe yielding "4 servings" is declined, and
+  cooked weight is never inferred from ingredient weights — evaporation makes that unreliable in
+  exactly the cases that matter.
+- **The source must already have nutrition.** This provider reads what Mealie holds; it never
+  triggers a nested estimation, which is what makes recursion impossible rather than merely guarded.
+- **Cycles are refused.** A recipe never resolves through itself or through an ancestor, and nesting
+  is depth-capped.
+
+Provenance records `provider: "mealie-recipe"`, the `sourceRecipeSlug` and
+`matchReason: "exact-recipe-name"`. The consumer also records a fingerprint of the source's
+nutrition/servings/yield, so if the source changes, the dependent re-estimates at its next run
+rather than keeping a stale value — checked at the dependent, never cascaded, so no update storms.
+
+| variable | default | purpose |
+|---|---|---|
+| `MEALIE_RECIPE_SOURCE_ENABLED` | `true` | turn the whole feature off |
+| `MEALIE_RECIPE_INDEX_TTL` | `300` | seconds the recipe-name index is reused |
+| `MEALIE_RECIPE_MAX_DEPTH` | `1` | how deep recipe-in-recipe resolution may nest |
+
 ### LLM-assisted candidate reranking
 
 When retrieval is genuinely ambiguous, an LLM acts as a **semantic judge between database records**
@@ -247,7 +281,13 @@ its existing values and meaning, so these are purely additive:
 |---|---|
 | `calorie_estimator_match_quality` | `high`, `mixed`, or `low` — confidence in the chosen records, weighted by each ingredient's share of the recipe's calories rather than by ingredient count |
 | `calorie_estimator_match_quality_reason` | present when the grade is not `high`; names the ingredient or the weighted figure responsible |
-| `calorie_estimator_low_confidence` | JSON array of matched ingredients whose individual record needs a caveat (confidence < 0.6), whatever the overall grade |
+| `calorie_estimator_low_confidence` | JSON array of matched ingredients that need a caveat — a low-confidence record, a dropped nutritional claim, or an estimated weight |
+| `calorie_estimator_recipe_sources` | JSON map of source recipe slug → nutrition fingerprint, for ingredients drawn from your own recipes |
+
+Confidence is based on **semantic evidence**, not lexical similarity: a record that passed every
+hard gate and matched the classifier's core noun is confident even when its name carries extra
+words, because `Speisezwiebel` being longer than `Zwiebel` is a fact about German compounding, not
+doubt about identity. Conversely an LLM answering "0.9" never overrides an objective conflict.
 
 Weighting by calories is what makes the grade useful: a shaky match on a pinch of pepper should not
 move it, while a shaky match on 400 g of beans should dominate it. An ingredient contributing more

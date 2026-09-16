@@ -50,6 +50,9 @@ export interface MealieRecipe {
   slug: string
   name: string
   recipeYield: string | null
+  /** Mealie's own mass/count yield quantity, paired with recipeYield as its unit ("800" + "g").
+   *  Optional because older Mealie versions and hand-built fixtures may not carry it. */
+  recipeYieldQuantity?: number | null
   recipeServings: number | null
   recipeIngredient: MealieIngredient[]
   nutrition: MealieNutrition | null
@@ -224,7 +227,7 @@ export interface IngredientClassification {
   llmClassified: boolean
 }
 
-export type FallbackStatus = "bls" | "usda" | "off" | "llm-nutrient" | "unresolved"
+export type FallbackStatus = "mealie-recipe" | "bls" | "usda" | "off" | "llm-nutrient" | "unresolved"
 
 export interface ProviderMatch {
   nutrients: NutrientSet
@@ -247,6 +250,14 @@ export interface ProviderMatch {
   llmReranked?: boolean
   /** The model's one-line justification, carried into provenance. */
   rerankReason?: string | null
+  /** Nutritional claims the ingredient made that this record does not answer (e.g. "reduced-fat").
+   *  The match is still the best available; it is simply not equivalent. */
+  unmetAttributes?: string[]
+  /** Set by the mealie-recipe provider: which of the user's own recipes supplied these nutrients. */
+  sourceRecipeSlug?: string
+  /** Fingerprint of that recipe's nutrition/servings/yield, so a stale dependent value is detected. */
+  sourceRecipeFingerprint?: string
+  sourceRecipeYieldGrams?: number
 }
 
 export interface IngredientMatch {
@@ -275,6 +286,11 @@ export interface IngredientMatch {
    *  The nutrients still come from `provider`; only the SELECTION was model-assisted. */
   llmReranked?: boolean
   rerankReason?: string | null
+  /** See ProviderMatch.unmetAttributes. */
+  unmetAttributes?: string[]
+  /** See ProviderMatch.sourceRecipeSlug. */
+  sourceRecipeSlug?: string | null
+  sourceRecipeFingerprint?: string | null
   /** @deprecated use fallbackStatus === "unresolved" ? gramsEstimated via LLM : false */
   llmEstimated?: boolean
 }
