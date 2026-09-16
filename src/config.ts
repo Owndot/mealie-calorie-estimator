@@ -62,6 +62,21 @@ export const config = {
     rerankMinConfidence: Math.min(1, Math.max(0, parseFloat(process.env.LLM_RERANK_MIN_CONFIDENCE || "0.6"))),
     /** A hung rerank must never hold up a recipe — on timeout the deterministic result stands. */
     rerankTimeoutMs: parseInt(process.env.LLM_RERANK_TIMEOUT_MS || "8000", 10),
+
+    /**
+     * The semantic candidate judge — OFF BY DEFAULT, and deliberately a separate switch from
+     * rerankEnabled. While this is false, askJudge() returns before touching the network, so the
+     * judge cannot spend a token or influence a resolution; eligibility is still computed and
+     * recorded in provenance (judgeTrigger), which is how the trigger can be validated against
+     * real recipes before any behaviour depends on it.
+     */
+    judgeEnabled: (process.env.LLM_JUDGE_ENABLED || "false").toLowerCase() === "true",
+    /** Defaults to the main model; separable so the judge can be evaluated independently. */
+    judgeModel: process.env.LLM_JUDGE_MODEL || process.env.LLM_MODEL || "mistral-small-latest",
+    /** Small on purpose: retrieval stays local and the prompt stays cheap. */
+    judgeMaxCandidates: Math.min(20, Math.max(1, parseInt(process.env.LLM_JUDGE_MAX_CANDIDATES || "12", 10))),
+    /** A hung judge must never hold up a recipe — on timeout the deterministic result stands. */
+    judgeTimeoutMs: parseInt(process.env.LLM_JUDGE_TIMEOUT_MS || "8000", 10),
   },
 
   // USDA FoodData Central generic foods, bundled at resources/usda/usda-generic.sqlite (built by

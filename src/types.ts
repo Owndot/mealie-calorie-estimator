@@ -294,6 +294,22 @@ export interface IngredientMatch {
   /** See ProviderMatch.sourceRecipeSlug. */
   sourceRecipeSlug?: string | null
   sourceRecipeFingerprint?: string | null
+  /**
+   * SEMANTIC JUDGE observability. `judgeTrigger` names why this ingredient is judge-ELIGIBLE —
+   * a specific unresolved thing about it, never a confidence threshold (see JudgeTriggerReason).
+   * It is recorded whether or not the judge is enabled, which is what lets the trigger be
+   * validated against real recipes before any behaviour depends on it. The remaining fields are
+   * populated only when the judge actually ran; with LLM_JUDGE_ENABLED=false they stay absent.
+   */
+  judgeTrigger?: string | null
+  judgeVerdict?: "selected" | "ambiguous" | "none" | null
+  judgeReason?: string | null
+  /** How many real records the judge was shown. */
+  judgeCandidates?: number | null
+  /** Which pool it saw, so a decision can be tied back to the exact question. */
+  judgePoolFingerprint?: string | null
+  judgeModel?: string | null
+  judgePromptVersion?: string | null
   /** @deprecated use fallbackStatus === "unresolved" ? gramsEstimated via LLM : false */
   llmEstimated?: boolean
 }

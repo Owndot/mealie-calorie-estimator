@@ -9,7 +9,8 @@ import type { NutrientSet, ProviderMatch, FoodRoute, FoodType, FoodState } from 
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import {
   rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey,
-  tokenize, englishTokenSpellings, GENERIC_DESCRIPTOR_WORDS, type RankableCandidate, type RankedCandidate,
+  tokenize, englishTokenSpellings, answersOnlyPartOfCore, GENERIC_DESCRIPTOR_WORDS,
+  type RankableCandidate, type RankedCandidate,
 } from "./ranking.js"
 import { FULL_EVIDENCE } from "../identity-evidence.js"
 import { attributesKey, inferAttributesFromName, unmetModifierFamilies } from "./food-semantics.js"
@@ -208,26 +209,6 @@ export function getUsdaLocalData(): Promise<UsdaData | null> {
 /** Test seam: forces the next lookup to re-read the database from disk. */
 export function __resetUsdaLocalForTests(): void {
   loadPromise = null
-}
-
-/**
- * True when a multi-word core is only partly present in the candidate name.
- *
- * "chili pepper" against "Peppers, sweet, red, raw" matches the generic head and loses the word
- * that carried the identity — which is how a chili became a sweet bell pepper in production, right
- * after BLS's own reranker had declined its chili candidates. A single-word core is excluded: the
- * core gate already requires it outright, and demanding more would fire on every ordinary match.
- *
- * This is a question, not a verdict: it only asks the judge to look. "bell pepper" against
- * "Peppers, sweet, raw" is the same shape and IS correct, which is precisely why the decision
- * belongs to a semantic judge rather than another lexical rule.
- */
-function answersOnlyPartOfCore(core: string | null | undefined, candidateName: string): boolean {
-  const coreTokens = tokenize(core ?? "").filter((t) => t.length >= 3 && !GENERIC_DESCRIPTOR_WORDS.has(t))
-  if (coreTokens.length < 2) return false
-  const candidate = tokenize(candidateName)
-  const matched = coreTokens.filter((c) => candidate.some((t) => t === c || t === `${c}s` || c === `${t}s`))
-  return matched.length > 0 && matched.length < coreTokens.length
 }
 
 /** English identity of a candidate name: the words that actually name a food. */

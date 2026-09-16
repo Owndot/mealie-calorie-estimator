@@ -145,7 +145,24 @@ export async function initCache(): Promise<void> {
     updated_at INTEGER NOT NULL
   )`)
 
+  // The semantic judge's decisions. Its OWN table, not a second use of llm_rerank_cache: the two
+  // ask different questions with different prompts and different key shapes, and versioning one
+  // must never invalidate the other. The key already carries prompt version, model, ingredient
+  // identity and the exact ordered candidate pool (see judge/candidate-pool.ts), so a row here can
+  // only ever answer the question it was stored for. provider_id is the empty string for an
+  // ambiguous or none verdict, which is cached like any other answer — it is a real judgement
+  // about this candidate set, and re-asking would spend a call to be told the same thing.
+  db.run(`CREATE TABLE IF NOT EXISTS llm_judge_cache (
+    lookup_key TEXT PRIMARY KEY,
+    verdict TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    reason TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
   const now = Date.now()
+  db.run("DELETE FROM llm_judge_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
   db.run("DELETE FROM provider_match_cache WHERE updated_at < ?", [now - config.cache.matchTtlMs])
   db.run("DELETE FROM provider_miss_cache WHERE updated_at < ?", [now - config.cache.missTtlMs])
   db.run("DELETE FROM llm_estimate_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
@@ -439,6 +456,51 @@ export function setCachedRerank(lookupKey: string, decision: CachedRerank): void
   scheduleSave()
 }
 
+/** One stored judge verdict. Mirrors JudgeDecision without importing it, so cache.ts stays a leaf. */
+export interface CachedJudgeDecision {
+  verdict: "selected" | "ambiguous" | "none"
+  candidateId: string | null
+  confidence: number
+  reason: string
+}
+
+/** undefined = not cached (ask the judge); a value = a stored verdict, possibly ambiguous/none. */
+export function getCachedJudgeDecision(lookupKey: string): CachedJudgeDecision | undefined {
+  const stmt = db.prepare("SELECT verdict, provider_id, confidence, reason, updated_at FROM llm_judge_cache WHERE lookup_key = ?")
+  try {
+    stmt.bind([lookupKey])
+    if (!stmt.step()) return undefined
+    const row = stmt.getAsObject() as Record<string, unknown>
+    if (isExpired(Number(row.updated_at), config.cache.llmTtlMs)) {
+      db.run("DELETE FROM llm_judge_cache WHERE lookup_key = ?", [lookupKey])
+      scheduleSave()
+      return undefined
+    }
+    const verdict = String(row.verdict)
+    if (verdict !== "selected" && verdict !== "ambiguous" && verdict !== "none") return undefined
+    const candidateId = String(row.provider_id)
+    return {
+      verdict,
+      candidateId: candidateId === "" ? null : candidateId,
+      confidence: Number(row.confidence),
+      reason: String(row.reason ?? ""),
+    }
+  } finally {
+    stmt.free()
+  }
+}
+
+export function setCachedJudgeDecision(lookupKey: string, decision: CachedJudgeDecision): void {
+  db.run(
+    `INSERT INTO llm_judge_cache (lookup_key, verdict, provider_id, confidence, reason, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(lookup_key) DO UPDATE SET verdict = excluded.verdict, provider_id = excluded.provider_id,
+       confidence = excluded.confidence, reason = excluded.reason, updated_at = excluded.updated_at`,
+    [lookupKey, decision.verdict, decision.candidateId ?? "", decision.confidence, decision.reason, Date.now()],
+  )
+  scheduleSave()
+}
+
 /**
  * Test seam: drops the provider match/miss caches. Production never calls this — entries expire
  * through the normal TTL sweep — but a test that exercises the same ingredient under two different
@@ -453,6 +515,7 @@ export function __clearProviderCachesForTests(): void {
 export function clearLlmCache(): void {
   db.run("DELETE FROM llm_estimate_cache")
   db.run("DELETE FROM llm_rerank_cache")
+  db.run("DELETE FROM llm_judge_cache")
   db.run("DELETE FROM llm_nutrient_cache")
   scheduleSave()
 }
