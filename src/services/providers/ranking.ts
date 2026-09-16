@@ -469,8 +469,14 @@ function genericOilConflict(queryFoodName: string, candidateName: string): boole
   const queryTokens = tokenize(queryFoodName)
   if (queryTokens.some((t) => !GENERIC_OIL_WORDS.has(t) && !GENERIC_DESCRIPTOR_WORDS.has(t))) return false
 
+  // The candidate side has to recognise the German head too. tokenize() normalizes "Öl" to "oel",
+  // so checking only the English spellings meant a bare "Öl" query never triggered this rule
+  // against a GERMAN candidate name at all — which is how BLS's "Lachs in Öl, Konserve" (salmon)
+  // stayed a live candidate for plain oil. Harmless while it scored below acceptance; not harmless
+  // once candidates are shown to a reranker.
   const candidateTokens = tokenize(candidateName)
-  if (!candidateTokens.includes("oil") && !candidateTokens.includes("oils")) return false
+  const OIL_HEADS = ["oil", "oils", "oel", "oele"]
+  if (!candidateTokens.some((t) => OIL_HEADS.includes(t))) return false
   return !candidateTokens.every((t) => GENERIC_OIL_WORDS.has(t))
 }
 

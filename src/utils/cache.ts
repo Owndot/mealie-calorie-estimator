@@ -119,11 +119,23 @@ export async function initCache(): Promise<void> {
     updated_at INTEGER NOT NULL
   )`)
 
+  // One row per (ingredient identity + exact candidate set) rerank question. provider_id is the
+  // empty string for a NONE verdict, which is cached like any other answer: it is a real judgement
+  // about this candidate set, and re-asking would spend a call to be told the same thing.
+  db.run(`CREATE TABLE IF NOT EXISTS llm_rerank_cache (
+    lookup_key TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    reason TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
   const now = Date.now()
   db.run("DELETE FROM provider_match_cache WHERE updated_at < ?", [now - config.cache.matchTtlMs])
   db.run("DELETE FROM provider_miss_cache WHERE updated_at < ?", [now - config.cache.missTtlMs])
   db.run("DELETE FROM llm_estimate_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
   db.run("DELETE FROM llm_nutrient_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
+  db.run("DELETE FROM llm_rerank_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
 
   scheduleSave()
   isInitialized = true
@@ -337,8 +349,59 @@ export function setCachedLlmNutrients(foodName: string, nutrients: NutrientSet):
   scheduleSave()
 }
 
+export interface CachedRerank {
+  providerId: string | null
+  confidence: number
+  reason: string
+}
+
+/** undefined = not cached (ask the model); a value = a cached verdict, possibly NONE. */
+export function getCachedRerank(lookupKey: string): CachedRerank | undefined {
+  const stmt = db.prepare("SELECT provider_id, confidence, reason, updated_at FROM llm_rerank_cache WHERE lookup_key = ?")
+  try {
+    stmt.bind([lookupKey])
+    if (!stmt.step()) return undefined
+    const row = stmt.getAsObject() as Record<string, unknown>
+    if (isExpired(Number(row.updated_at), config.cache.llmTtlMs)) {
+      db.run("DELETE FROM llm_rerank_cache WHERE lookup_key = ?", [lookupKey])
+      scheduleSave()
+      return undefined
+    }
+    const providerId = String(row.provider_id)
+    return {
+      providerId: providerId === "" ? null : providerId,
+      confidence: Number(row.confidence),
+      reason: String(row.reason ?? ""),
+    }
+  } finally {
+    stmt.free()
+  }
+}
+
+export function setCachedRerank(lookupKey: string, decision: CachedRerank): void {
+  db.run(
+    `INSERT INTO llm_rerank_cache (lookup_key, provider_id, confidence, reason, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(lookup_key) DO UPDATE SET provider_id = excluded.provider_id,
+       confidence = excluded.confidence, reason = excluded.reason, updated_at = excluded.updated_at`,
+    [lookupKey, decision.providerId ?? "", decision.confidence, decision.reason, Date.now()],
+  )
+  scheduleSave()
+}
+
+/**
+ * Test seam: drops the provider match/miss caches. Production never calls this — entries expire
+ * through the normal TTL sweep — but a test that exercises the same ingredient under two different
+ * configurations would otherwise be served its own earlier answer.
+ */
+export function __clearProviderCachesForTests(): void {
+  db.run("DELETE FROM provider_match_cache")
+  db.run("DELETE FROM provider_miss_cache")
+  scheduleSave()
+}
+
 export function clearLlmCache(): void {
   db.run("DELETE FROM llm_estimate_cache")
+  db.run("DELETE FROM llm_rerank_cache")
   db.run("DELETE FROM llm_nutrient_cache")
   scheduleSave()
 }

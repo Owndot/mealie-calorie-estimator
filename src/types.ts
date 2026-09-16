@@ -240,8 +240,13 @@ export interface ProviderMatch {
   dataType?: string | null
   /** The matched candidate's own food type (BLS's group-letter-derived type, or USDA's foodCategory-derived type) — for provenance/debugging, not itself a query field. */
   foodType?: FoodType
-  /** Short, human-readable reason the match was accepted — e.g. "exact-name", "synonym", "state-compatible", "category-compatible", "fuzzy". */
+  /** Short, human-readable reason the match was accepted — e.g. "exact-name", "synonym", "state-compatible", "category-compatible", "fuzzy", "llm-reranked". */
   matchReason?: string
+  /** True when an LLM chose this record from the retrieved candidate set — see candidate-rerank.ts.
+   *  The nutrients below still come from `provider`; only the SELECTION was model-assisted. */
+  llmReranked?: boolean
+  /** The model's one-line justification, carried into provenance. */
+  rerankReason?: string | null
 }
 
 export interface IngredientMatch {
@@ -266,6 +271,10 @@ export interface IngredientMatch {
   foodType?: FoodType
   /** Short, human-readable reason the match was accepted — see ProviderMatch.matchReason. */
   matchReason?: string
+  /** True when an LLM chose this record from the retrieved candidate set — see candidate-rerank.ts.
+   *  The nutrients still come from `provider`; only the SELECTION was model-assisted. */
+  llmReranked?: boolean
+  rerankReason?: string | null
   /** @deprecated use fallbackStatus === "unresolved" ? gramsEstimated via LLM : false */
   llmEstimated?: boolean
 }

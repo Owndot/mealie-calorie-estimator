@@ -3,6 +3,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import initSqlJs from "sql.js"
 import { config } from "../../config.js"
+import { rerankCandidates } from "./candidate-rerank.js"
 import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType, FoodAttributes } from "../../types.js"
@@ -83,6 +84,8 @@ interface BlsFoodRecord {
    *  for all 7,140 records on every query made the fuzzy stage measurably slower. */
   attributes: FoodAttributes
   plantPart: PlantPart | null
+  /** name_de with qualifiers/numbers stripped — the record's bare identity, precomputed at load. */
+  identityTokens: string[]
 }
 
 interface BlsData {
@@ -124,6 +127,7 @@ async function loadBlsData(): Promise<BlsData | null> {
       const row = stmt.getAsObject() as Record<string, unknown>
       const nameDe = row.name_de as string
       const nameEn = (row.name_en as string | null) ?? null
+      const tokensDe = tokenizeBls(nameDe)
       records.push({
         blsCode: row.bls_code as string,
         nameDe,
@@ -147,11 +151,13 @@ async function loadBlsData(): Promise<BlsData | null> {
           sodiumPer100g: row.sodium_per_100g as number | null,
           cholesterolPer100g: row.cholesterol_per_100g as number | null,
         },
-        tokensDe: tokenizeBls(nameDe),
+        tokensDe,
         alternateTokensDe: blsNameAlternates(nameDe).map(tokenizeBls),
         tokensEn: tokenizeBls(nameEn ?? ""),
         attributes: inferAttributesFromName(nameDe),
         plantPart: standalonePlantPart(nameDe),
+        // Reuses tokensDe rather than re-tokenizing: this runs 7,140 times at startup.
+        identityTokens: identityTokens(tokensDe),
       })
     }
   } finally {
@@ -251,6 +257,7 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
     tokensEn: tokenizeBls(input.nameEn ?? ""),
     attributes: inferAttributesFromName(input.nameDe),
     plantPart: standalonePlantPart(input.nameDe),
+    identityTokens: identityTokens(tokenizeBls(input.nameDe)),
   }))
 
   const byNormalizedNameDe = new Map<string, BlsFoodRecord[]>()
@@ -364,9 +371,25 @@ export function blsNameAlternates(name: string): string[] {
   const base = slashParts.length > 1 ? slashParts : [withoutParens]
   // Each parenthesised synonym also stands in for the head noun it qualifies.
   const combined = parenthesised.flatMap((alt) => base.map((b) => b.replace(/^\s*\S+/, alt)))
-  // Parenthesised text is only a SYNONYM when it reads like a food name. BLS also parenthesises
-  // classification codes ("(S X)") and qualifiers, which are not alternate names.
-  const looksLikeName = (s: string) => /\p{L}{3,}/u.test(s)
+  // Parenthesised text is only a SYNONYM when it reads like a food NAME. BLS also parenthesises
+  // classification codes ("(S X)") and, crucially, qualifier PHRASES: "Pilzcremesuppe aus
+  // Instantpulver (mit Wasser zubereitet)". Accepting that phrase as an alternate name let the
+  // candidate be judged as "mit Wasser zubereitet" — a string containing no "suppe" — so the
+  // composite-dish category gate never fired and a mushroom soup stayed a live candidate for plain
+  // water. A real BLS synonym is one word ("(Cheddar)", "(Gewürzgurke)", "(Frischbackhefe)"),
+  // occasionally two; a phrase is not a name.
+  //
+  // A leading function word is the giveaway that the parentheses hold a QUALIFIER rather than a
+  // name — and inverting ones especially: "Gemüse-Meerrettich (ohne Salz)" is horseradish WITHOUT
+  // salt, yet as an alternate name "ohne Salz" made it a live candidate for plain salt, because the
+  // core-identity gate could see "Salz" in it.
+  const MAX_SYNONYM_WORDS = 2
+  const QUALIFIER_OPENERS = new Set(["mit", "ohne", "in", "im", "aus", "und", "von", "zum", "zur", "als", "auf", "je"])
+  const looksLikeName = (s: string) => {
+    const words = s.trim().split(/\s+/)
+    if (words.length > MAX_SYNONYM_WORDS || !/\p{L}{3,}/u.test(s)) return false
+    return !QUALIFIER_OPENERS.has(normalizeGermanText(words[0]).replace(/[^\p{L}]/gu, ""))
+  }
   return [...new Set([...base, ...parenthesised, ...combined].map((s) => s.trim()).filter((s) => s && looksLikeName(s)))]
 }
 
@@ -551,7 +574,7 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
  * The reverse direction matters just as much: when the query is silent, a record that introduces
  * an attribute is a guess, so an attribute-neutral record is preferred over a specific one.
  */
-function attributeFit(queryAttrs: FoodAttributes, record: BlsFoodRecord): number {
+function attributeFit(queryAttrs: FoodAttributes, record: { attributes: FoodAttributes }): number {
   const ca = record.attributes
   let fit = 0
   for (const axis of ["form", "preservation"] as const) {
@@ -607,8 +630,172 @@ function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minSco
   return inBand.find((c) => c.record.inferredState === "unknown") ?? null
 }
 
-function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean): ProviderMatch {
-  const confidence = isExact ? 0.92 : Math.min(0.85, scored.score / 100)
+/**
+ * Score band within which a rival counts as "close enough that the deterministic order is not
+ * decisive", and the relative energy gap that makes the choice between them actually matter.
+ */
+/**
+ * How far below the winner a rival may score and still count as ambiguity. Wide on purpose: it
+ * only ever applies to a rival with a DIFFERENT stripped identity, which is rare, and the scoring
+ * artefacts this project keeps hitting are exactly the reason a real alternative can sit well below
+ * the winner — BLS's "Erbse grün, roh" (88 kcal) trails "Erbse reif" (311) by 35 points purely
+ * because its colour word is scored as foreign content.
+ */
+const RERANK_BAND = 40
+const MATERIAL_KCAL_RATIO = 0.25
+/**
+ * ...and an absolute floor alongside it. A relative test alone calls 0 vs 25 kcal/100 g an infinite
+ * difference, which made every low-energy food look ambiguous: plain salt (0) against herb salt
+ * (25), plain yoghurt (67) against the low-fat one (39). At the quantities these are used in, a
+ * difference this small cannot move a recipe, and it is not worth an LLM call.
+ */
+const MATERIAL_KCAL_ABSOLUTE = 30
+/**
+ * Minimum deterministic score for a candidate to be worth showing the model. The floor for "has
+ * calories but shares nothing with the query" is 15, so anything at or below that is noise.
+ */
+const RERANK_MIN_CANDIDATE_SCORE = 20
+
+function materiallyDifferent(a: number | null, b: number | null): boolean {
+  if (a === null || b === null) return false
+  const delta = Math.abs(a - b)
+  if (delta < MATERIAL_KCAL_ABSOLUTE) return false
+  const larger = Math.max(Math.abs(a), Math.abs(b))
+  return larger > 0 && delta / larger > MATERIAL_KCAL_RATIO
+}
+
+/**
+ * The ONLY conditions under which an LLM call is made. Returns a short trigger label, or null to
+ * mean "the deterministic answer is good enough — do not spend a call".
+ *
+ * An exact normalized-name match never reaches here: it returns from the variant loop before the
+ * rerank hook, which is what keeps confident matches free of any LLM involvement.
+ */
+/**
+ * How decisively the deterministic rules ranked a candidate on evidence OTHER than its lexical
+ * score: does it answer the attributes the query asked for, and does its preparation state agree?
+ * A rival the rules already placed below the winner on this evidence is not ambiguity — the
+ * pipeline HAS an answer, and paying for an LLM call to re-litigate it is waste.
+ */
+function decisiveness(record: TriggerCandidate["record"], queryAttrs: FoodAttributes, queryState: FoodState): number {
+  let value = attributeFit(queryAttrs, record)
+  if (queryState !== "unknown" && record.inferredState !== "unknown") {
+    value += record.inferredState === queryState ? 1 : -1
+  }
+  return value
+}
+
+/**
+ * Exactly what rerankTrigger() reads — declared structurally so the decision can be tested against
+ * hand-built records without reaching for the full BLS row shape or a cast.
+ */
+export interface TriggerCandidate {
+  score: number
+  record: {
+    blsCode: string
+    nutrients: { kcalPer100g: number | null }
+    attributes: FoodAttributes
+    inferredState: FoodState
+    /** The record's name with qualifiers stripped — see identityTokens() in this file. */
+    identityTokens: string[]
+  }
+}
+
+export function rerankTrigger(
+  deterministic: TriggerCandidate | null,
+  survivors: Map<string, TriggerCandidate>,
+  queryAttrs: FoodAttributes = UNKNOWN_ATTRIBUTES,
+  queryState: FoodState = "unknown",
+): "no-acceptable-candidate" | "material-rival" | "unanswered-attribute" | null {
+  // (a) Retrieval found records that passed every gate, but none scored well enough to accept.
+  // Without a rerank this is simply a miss — which is correct far more often than not, but is
+  // exactly where "Petersilienblatt" and the canned-tuna records sit.
+  if (!deterministic) return survivors.size > 0 ? "no-acceptable-candidate" : null
+
+  // (b) Something else is within a hair of the winner, would change the answer materially, AND was
+  // not already placed below it on attribute or state evidence. All three are required: a close
+  // rival with the same energy is not worth a call, and neither is one the rules already decided
+  // against — which is what keeps confident everyday matches (Zwiebel, canned kidney beans) free of
+  // any LLM involvement.
+  const topDecisiveness = decisiveness(deterministic.record, queryAttrs, queryState)
+  const topIdentity = identityKey(deterministic.record.identityTokens)
+
+  // (c) The ingredient STATED an attribute — canned, dried, ground — and the record we are about to
+  // accept does not answer it, while one that survived the gates does. Score is irrelevant here:
+  // ignoring something the cook actually wrote is a defect regardless of how well the winner reads
+  // lexically. Found live: "Thunfisch a. d. Dose" accepted BLS's FROZEN tuna while the drained
+  // canned record sat 35 points below it.
+  const statesAttribute = queryAttrs.form !== "unknown" || queryAttrs.preservation !== "unknown"
+  if (statesAttribute) {
+    for (const rival of survivors.values()) {
+      if (rival.record.blsCode === deterministic.record.blsCode) continue
+      if (attributeFit(queryAttrs, rival.record) > attributeFit(queryAttrs, deterministic.record)) {
+        return "unanswered-attribute"
+      }
+    }
+  }
+
+  for (const rival of survivors.values()) {
+    if (rival.record.blsCode === deterministic.record.blsCode) continue
+    if (deterministic.score - rival.score > RERANK_BAND) continue
+    if (decisiveness(rival.record, queryAttrs, queryState) < topDecisiveness) continue
+    // BLS stores raw/cooked/baked/grilled/frozen variants of nearly every food at identical
+    // scores, and raw-vs-cooked really is a 2x energy difference — but that is a PREPARATION
+    // question the state rules already answer, not the variety question this reranker exists for.
+    // Treating it as ambiguity asked the model about "Nudeln", "Tomate", "Reis" and "Zwiebel" on
+    // every recipe. Only a rival whose stripped identity actually differs counts.
+    if (identityKey(rival.record.identityTokens) === topIdentity) continue
+    if (materiallyDifferent(deterministic.record.nutrients.kcalPer100g, rival.record.nutrients.kcalPer100g)) {
+      return "material-rival"
+    }
+  }
+  return null
+}
+
+function identityKey(tokens: string[]): string {
+  return [...tokens].sort().join(" ")
+}
+
+/**
+ * RECALL-only retrieval: records whose German name contains the query's core anywhere, including
+ * as a compound PREFIX. Deterministic scoring deliberately cannot do this (it is how "Salz" once
+ * matched "Salzstangen"), so these records are reachable only as rerank candidates, and only after
+ * the same hard gates every other candidate passes.
+ */
+function recallCandidates(query: ProviderQuery, data: BlsData, attrs: FoodAttributes): ScoredRecord[] {
+  const core = (query.coreFoodGerman ?? query.structuredName ?? "").trim()
+  const needle = normalizeGermanText(core).replace(/[^\p{L}\p{N}]/gu, "")
+  if (needle.length < MIN_RECALL_CORE_LENGTH) return []
+
+  const hits = data.records.filter((r) => r.nameDeNormalized.includes(needle))
+  if (hits.length === 0 || hits.length > MAX_RECALL_HITS) return []
+
+  return scoreCandidates(
+    core, hits, query.category, query.foodType, query.coreFoodGerman ?? null, attrs,
+    [query.structuredName, query.canonicalGerman, query.foodName].filter(Boolean).join(" "),
+    query.coreFoodGerman ?? null,
+  ).filter((c) => !c.mismatchReason)
+}
+
+/** Below this a core token is too short for substring recall to mean anything. */
+const MIN_RECALL_CORE_LENGTH = 4
+/** A core matching this many records is too generic for recall to be useful; skip rather than guess. */
+const MAX_RECALL_HITS = 120
+
+/**
+ * Ceiling on a reranked match's confidence. The record was chosen by a judge rather than earned by
+ * lexical score, so reporting the score would be doubly wrong: "Petersilienblatt" scores 15 because
+ * the scorer cannot see the query inside it at all, and calling that 0.15 confidence would flag a
+ * correct record as doubtful. Capped below an exact name match, which remains the strongest signal.
+ */
+const RERANK_MAX_CONFIDENCE = 0.8
+
+function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean, rerank?: { reason: string; confidence: number }): ProviderMatch {
+  const confidence = isExact
+    ? 0.92
+    : rerank
+      ? Math.min(RERANK_MAX_CONFIDENCE, rerank.confidence)
+      : Math.min(0.85, scored.score / 100)
   return {
     nutrients: scored.record.nutrients,
     canonicalName: query.foodName,
@@ -619,7 +806,10 @@ function buildMatch(query: ProviderQuery, scored: ScoredRecord, isExact: boolean
     productName: scored.matchedViaEnglish && scored.record.nameEn ? `${scored.record.nameDe} (${scored.record.nameEn})` : scored.record.nameDe,
     confidence,
     foodType: scored.record.foodType,
-    matchReason: isExact ? "exact-name" : "fuzzy",
+    matchReason: isExact ? "exact-name" : rerank ? "llm-reranked" : "fuzzy",
+    // Provenance: the RECORD was chosen with the model's help, but every nutrient above still
+    // comes from this BLS row. `provider` stays "bls" for exactly that reason.
+    ...(rerank ? { llmReranked: true as const, rerankReason: rerank.reason } : {}),
   }
 }
 
@@ -738,6 +928,9 @@ export class BlsProvider implements NutrientProvider {
     // So the specificity rule applies uniformly, and an ingredient BLS cannot answer without
     // guessing falls through to the next provider and then to an LLM estimate. A miss that the
     // fallback chain can answer honestly is worth more than a confident wrong record.
+    let deterministic: ScoredRecord | null = null
+    const survivors = new Map<string, ScoredRecord>()
+
     for (const { text, core } of queryVariants) {
       const normalized = normalizeKey(text)
       const exactCandidates = data.byNormalizedNameDe.get(normalized)
@@ -773,18 +966,120 @@ export class BlsProvider implements NutrientProvider {
       const pool = degraded ? data.preferredRecords : data.records
       const scored = scoreCandidates(text, pool, query.category, query.foodType, core, attrs, identityText, query.coreFoodGerman ?? null)
         .sort((a, b) => b.score - a.score)
-      const picked = pickBestCandidate(scored, query.state, FUZZY_MIN_SCORE, attrs)
-      if (picked) {
-        const match = buildMatch(query, picked, false)
-        setCachedProviderMatch(this.name, queryKey, match)
-        return match
+      // Everything that survived the hard gates, kept for a possible rerank. Accumulated across
+      // variants because a record unreachable under one spelling may be reachable under another.
+      for (const c of scored) {
+        if (c.mismatchReason) continue
+        const seen = survivors.get(c.record.blsCode)
+        if (!seen || c.score > seen.score) survivors.set(c.record.blsCode, c)
       }
+      const picked = pickBestCandidate(scored, query.state, FUZZY_MIN_SCORE, attrs)
+      if (picked && !deterministic) deterministic = picked
+    }
+
+    // The deterministic answer stands unless this is genuinely an ambiguous case — see
+    // shouldRerank(). When it is, the LLM judges between records RETRIEVAL already found and the
+    // GATES already approved; it cannot reach anything else, and NONE leaves this line's outcome
+    // exactly as it would have been.
+    const reranked = await this.maybeRerank(query, data, attrs, deterministic, survivors)
+    const chosen = reranked?.picked ?? deterministic
+
+    if (chosen) {
+      const match = buildMatch(query, chosen, false, reranked ?? undefined)
+      setCachedProviderMatch(this.name, queryKey, match)
+      return match
     }
 
     // Stage 1 and stage 2 both ran and found nothing: a genuine miss FOR THIS EVIDENCE PROFILE.
     // The profile is part of missKey, so this never suppresses a later lookup with better identity.
     markProviderMiss(this.name, missKey)
     return null
+  }
+
+  /**
+   * Decides whether this lookup is ambiguous enough to be worth an LLM call, and if so runs it.
+   *
+   * Returns the reranked record, or null meaning "nothing changes". Never throws: every failure
+   * inside rerankCandidates() already degrades to null.
+   */
+  private async maybeRerank(
+    query: ProviderQuery,
+    data: BlsData,
+    attrs: FoodAttributes,
+    deterministic: ScoredRecord | null,
+    survivors: Map<string, ScoredRecord>,
+  ): Promise<{ picked: ScoredRecord; reason: string; confidence: number } | null> {
+    if (!config.llm.enabled || !config.llm.apiKey || !config.llm.rerankEnabled) return null
+
+    // RECALL pool. Deterministic scoring is
+    // tuned for precision and cannot see the query's core inside a longer compound when the core
+    // is the PREFIX ("Petersilie" inside "Petersilienblatt") — the rule that would fix that is the
+    // one that historically matched "Salz" to "Salzstangen". Widening retrieval is safe HERE and
+    // only here: these records can never be accepted deterministically, only offered to a judge
+    // that is also free to answer NONE.
+    // A candidate scoring at or below the "has calories, shares no name" floor carries no identity
+    // evidence at all, and offering it is asking the model to pick out of noise — measured over the
+    // three validated recipes, that is what put salmon-in-oil in front of "Öl", cream liqueur in
+    // front of "Kochsahne" and peas in front of "grüne Chilischoten". Recall candidates are exempt:
+    // they earned their place by containing the query's core outright.
+    const byCode = new Map<string, ScoredRecord>()
+    for (const [code, c] of survivors) {
+      if (c.score >= RERANK_MIN_CANDIDATE_SCORE) byCode.set(code, c)
+    }
+    for (const c of recallCandidates(query, data, attrs)) {
+      if (!byCode.has(c.record.blsCode)) byCode.set(c.record.blsCode, c)
+    }
+
+    const reason = rerankTrigger(deterministic, byCode, attrs, query.state)
+    if (!reason) return null
+
+    const offered = [...byCode.values()]
+      // Best deterministic score first, then the least-qualified name — a short BLS name is a
+      // reliable proxy for "the plain version of this food".
+      .sort((a, b) => b.score - a.score || a.record.nameDe.length - b.record.nameDe.length)
+      .slice(0, config.llm.rerankMaxCandidates)
+    if (offered.length === 0) return null
+
+    const decision = await rerankCandidates(
+      {
+        provider: this.name,
+        structuredName: query.structuredName ?? query.foodName,
+        canonicalGerman: query.canonicalGerman ?? null,
+        canonicalEnglish: query.foodName,
+        coreFood: query.coreFoodGerman ?? null,
+        state: query.state,
+        attributes: attrs,
+      },
+      offered.map((c) => ({
+        providerId: c.record.blsCode,
+        productName: c.record.nameDe,
+        kcalPer100g: c.record.nutrients.kcalPer100g,
+        form: c.record.attributes.form,
+        preservation: c.record.attributes.preservation,
+        score: c.score,
+      })),
+    )
+
+    if (!decision || decision.providerId === null) {
+      logger.info(
+        { foodName: query.foodName, trigger: reason, verdict: decision ? "none" : "unavailable" },
+        "BLS: rerank did not select a candidate, deterministic outcome stands",
+      )
+      return null
+    }
+
+    const selected = offered.find((c) => c.record.blsCode === decision.providerId)
+    if (!selected) return null // parse already range-checks; belt and braces
+    if (deterministic && selected.record.blsCode === deterministic.record.blsCode) return null
+
+    logger.info(
+      {
+        foodName: query.foodName, trigger: reason, selected: selected.record.nameDe,
+        was: deterministic?.record.nameDe ?? null, confidence: decision.confidence, reason: decision.reason,
+      },
+      "BLS: rerank selected a different database record",
+    )
+    return { picked: selected, reason: decision.reason, confidence: decision.confidence }
   }
 }
 

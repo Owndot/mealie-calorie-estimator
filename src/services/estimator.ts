@@ -340,7 +340,12 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       dataType: resolved.match.dataType ?? null,
       foodType: resolved.match.foodType,
       matchReason: resolved.match.matchReason,
-      llmParticipated: (classification?.llmClassified ?? false) || resolved.fallbackStatus === "llm-nutrient",
+      llmReranked: resolved.match.llmReranked ?? false,
+      rerankReason: resolved.match.rerankReason ?? null,
+      // A reranked match DID involve the LLM, even though its nutrients came from a database.
+      llmParticipated: (classification?.llmClassified ?? false)
+        || resolved.fallbackStatus === "llm-nutrient"
+        || (resolved.match.llmReranked ?? false),
     })
   }
 
@@ -540,6 +545,9 @@ export function buildNutritionPatch(
     dataType: i.dataType ?? null,
     foodType: i.foodType ?? null,
     matchReason: i.matchReason ?? null,
+    // Records that the SELECTION was model-assisted while the nutrients stayed with `provider`.
+    llmReranked: i.llmReranked ?? false,
+    rerankReason: i.rerankReason ?? null,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,
     matched: i.matched,

@@ -23,6 +23,12 @@ export default defineConfig({
       LLM_RATE_LIMIT: "1000",
     },
     reporters: ["default", ["junit", { outputFile: "test-results.xml" }]],
+    // vitest's 5s default is too tight for the suites that drive the REAL bundled BLS database:
+    // whichever test touches it first pays a one-time load of a 2 MB SQLite file plus tokenizing
+    // 7,140 names. That fits locally and did not on a slower CI runner, which failed the build on
+    // timing rather than on any assertion. Raised rather than mocked — these tests are valuable
+    // precisely because they run against the real data.
+    testTimeout: 20000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

@@ -52,6 +52,16 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || "",
     model: process.env.LLM_MODEL || "mistral-small-latest",
     rateLimit: parseInt(process.env.LLM_RATE_LIMIT || "30", 10),
+    // Candidate reranking: the LLM as a semantic judge between DATABASE records that retrieval
+    // already found, never as a source of nutrition. Requires LLM_ENABLED + LLM_API_KEY as well;
+    // this flag only controls whether the reranking step is offered at all.
+    rerankEnabled: (process.env.LLM_RERANK_ENABLED || "true").toLowerCase() === "true",
+    /** Small on purpose: the whole point is that retrieval stays local and the prompt stays cheap. */
+    rerankMaxCandidates: Math.min(10, Math.max(1, parseInt(process.env.LLM_RERANK_MAX_CANDIDATES || "8", 10))),
+    /** Below this, the answer is discarded and the deterministic path continues unchanged. */
+    rerankMinConfidence: Math.min(1, Math.max(0, parseFloat(process.env.LLM_RERANK_MIN_CONFIDENCE || "0.6"))),
+    /** A hung rerank must never hold up a recipe — on timeout the deterministic result stands. */
+    rerankTimeoutMs: parseInt(process.env.LLM_RERANK_TIMEOUT_MS || "8000", 10),
   },
 
   // USDA FoodData Central — optional generic-route fallback provider. Only wired into the
