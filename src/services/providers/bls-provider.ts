@@ -127,6 +127,7 @@ async function loadBlsData(): Promise<BlsData | null> {
       const row = stmt.getAsObject() as Record<string, unknown>
       const nameDe = row.name_de as string
       const nameEn = (row.name_en as string | null) ?? null
+      const tokensDe = tokenizeBls(nameDe)
       records.push({
         blsCode: row.bls_code as string,
         nameDe,
@@ -150,12 +151,13 @@ async function loadBlsData(): Promise<BlsData | null> {
           sodiumPer100g: row.sodium_per_100g as number | null,
           cholesterolPer100g: row.cholesterol_per_100g as number | null,
         },
-        tokensDe: tokenizeBls(nameDe),
+        tokensDe,
         alternateTokensDe: blsNameAlternates(nameDe).map(tokenizeBls),
         tokensEn: tokenizeBls(nameEn ?? ""),
         attributes: inferAttributesFromName(nameDe),
         plantPart: standalonePlantPart(nameDe),
-        identityTokens: identityTokens(tokenizeBls(nameDe)),
+        // Reuses tokensDe rather than re-tokenizing: this runs 7,140 times at startup.
+        identityTokens: identityTokens(tokensDe),
       })
     }
   } finally {
