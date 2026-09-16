@@ -181,6 +181,45 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 
 Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
 
+### LLM-assisted candidate reranking
+
+When retrieval is genuinely ambiguous, an LLM acts as a **semantic judge between database records**
+— never as a source of nutrition. The pipeline is:
+
+```
+ingredient -> deterministic retrieval -> hard semantic gates -> candidate set
+           -> [rerank, only when ambiguous] -> selected database record -> database nutrients
+```
+
+The gates run first and are not advisory: a candidate carrying a food-type, attribute,
+core-identity, specificity or category conflict is removed *before* the model sees anything, so it
+can only reorder what survived, or decline. Retrieval stays local — the bundled 7,140-row table is
+never sent anywhere; the model sees at most `LLM_RERANK_MAX_CANDIDATES` (default 8) records.
+
+A rerank happens only when one of these holds, and never for an exact name match:
+
+| trigger | meaning |
+|---|---|
+| `no-acceptable-candidate` | records passed every gate but none scored high enough to accept |
+| `material-rival` | a near-tied candidate with a *different identity* would change the calories materially |
+| `unanswered-attribute` | the ingredient stated canned/dried/ground and the winner ignores it while another candidate does not |
+
+**NONE is a first-class answer.** So is every failure: a timeout, a non-2xx, malformed JSON, a
+candidate number that was never offered, or a confidence below `LLM_RERANK_MIN_CONFIDENCE` all
+resolve to "carry on deterministically" — with the LLM disabled the pipeline behaves exactly as it
+does without this feature. Decisions are cached per ingredient *and* candidate set, so any change to
+retrieval invalidates the stored judgement automatically.
+
+Provenance records `llmReranked` and the model's one-line reason; `provider` and `providerId` still
+name the database row the nutrients came from.
+
+| variable | default | purpose |
+|---|---|---|
+| `LLM_RERANK_ENABLED` | `true` | requires `LLM_ENABLED` + `LLM_API_KEY` as well |
+| `LLM_RERANK_MAX_CANDIDATES` | `8` | clamped to 1-10 |
+| `LLM_RERANK_MIN_CONFIDENCE` | `0.6` | below this the answer is discarded |
+| `LLM_RERANK_TIMEOUT_MS` | `8000` | a hung rerank never holds up a recipe |
+
 ### Broadening is not a fallback
 
 A lookup may accept a record that is *broader* than the query — Basmati rice resolves to the

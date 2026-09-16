@@ -1,6 +1,6 @@
 import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
-import { waitForRateLimit, RateLimitType } from "../utils/rate-limiter.js"
+import { callLlm, type CallOutcome } from "./llm-client.js"
 import type { FoodState, FoodType, FoodForm, FoodPreservation, IngredientClassification } from "../types.js"
 import { inferAttributesFromName } from "./providers/food-semantics.js"
 
@@ -313,81 +313,6 @@ Return ONLY a JSON array, one object per ingredient, in this exact shape, no exp
 }
 
 /**
- * Outcome of one LLM call, with the failure CLASS preserved rather than collapsed into null.
- * The live Linsensuppe incident could not be diagnosed from production logs because every one of
- * these classes logged the same (or, for a non-string content field, nothing at all) — so the
- * whole-recipe classification silently degraded to the deterministic fallback with no way to tell
- * a network blip from a schema violation. Diagnostics only: callers still treat every !ok the
- * same way they treated null.
- */
-type CallOutcome =
-  | { ok: true; content: string }
-  | { ok: false; phase: "request-network" | "request-status" | "response-body" | "response-shape" }
-
-async function callLlm(prompt: string, attempt: number): Promise<CallOutcome> {
-  let res: Response
-  try {
-    await waitForRateLimit(RateLimitType.Llm)
-
-    res = await fetch(`${config.llm.baseUrl}${config.llm.endpointUrl}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.llm.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.llm.model,
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.1,
-        max_tokens: 4000,
-      }),
-    })
-  } catch (err) {
-    // Name/message only — never the error object, which can carry request/response detail.
-    logger.warn(
-      { attempt, phase: "request-network", errName: (err as Error).name, errMessage: (err as Error).message },
-      "LLM batch normalization: network/request failure",
-    )
-    return { ok: false, phase: "request-network" }
-  }
-
-  if (!res.ok) {
-    logger.warn({ attempt, phase: "request-status", status: res.status }, "LLM batch normalization: HTTP error status")
-    return { ok: false, phase: "request-status" }
-  }
-
-  let data: any
-  try {
-    data = await res.json()
-  } catch (err) {
-    logger.warn(
-      { attempt, phase: "response-body", errName: (err as Error).name },
-      "LLM batch normalization: response body was not JSON",
-    )
-    return { ok: false, phase: "response-body" }
-  }
-
-  const content = data?.choices?.[0]?.message?.content
-  if (typeof content !== "string") {
-    // Previously returned null with NO log at all — a completely silent failure class.
-    logger.warn(
-      {
-        attempt,
-        phase: "response-shape",
-        hasChoices: Array.isArray(data?.choices),
-        choiceCount: Array.isArray(data?.choices) ? data.choices.length : 0,
-        contentType: content === undefined ? "undefined" : content === null ? "null" : typeof content,
-        finishReason: typeof data?.choices?.[0]?.finish_reason === "string" ? data.choices[0].finish_reason : null,
-      },
-      "LLM batch normalization: response envelope missing a string content field",
-    )
-    return { ok: false, phase: "response-shape" }
-  }
-
-  return { ok: true, content }
-}
-
-/**
  * ONE whole-recipe LLM classification request, per the skill's "one batch request, never one
  * per ingredient" rule. On any failure (disabled, no key, network error, malformed/invalid
  * JSON, even after one retry) this falls through to deterministic classification for every
@@ -405,7 +330,7 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
   const prompt = buildPrompt(inputs)
 
   const attemptOnce = async (p: string, attempt: number): Promise<{ items: RawItem[]; failures: ItemFailure[] }> => {
-    const call = await callLlm(p, attempt)
+    const call = await callLlm(p, { purpose: "batch-normalization", attempt })
     if (!call.ok) return { items: [], failures: [] } // already logged with its specific phase
 
     const outcome = parseAndValidate(call.content, inputs.length)
