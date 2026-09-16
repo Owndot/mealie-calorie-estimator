@@ -1,5 +1,6 @@
 import { getProviderChain } from "./providers/registry.js"
 import { sanityCheckNutrients } from "./sanity-check.js"
+import { statedModifierFamilies } from "./providers/food-semantics.js"
 import { logger } from "../utils/logger.js"
 import type { ProviderQuery } from "./providers/types.js"
 import type { FoodRoute, FallbackStatus, ProviderMatch } from "../types.js"
@@ -35,21 +36,47 @@ function toFallbackStatus(providerName: string): FallbackStatus {
  *
  *   "mageres Rinderhackfleisch" -> BLS "Rind Hackfleisch, roh", unmetAttributes ["reduced-fat"].
  *      Correct base food, explicit "mager" dropped, 224 kcal/100 g at 16.4% fat — and at 400 g that
- *      ingredient is ~35% of the recipe. Nothing in BLS or USDA is lean mince (USDA's family tops
- *      out fattier still, and BLS's lean record is Tatar, a different product), so what this buys
- *      is not a better record but the chance to ask for an estimate of the whole phrase instead.
+ *      ingredient is ~35% of the recipe.
  *   "Mayo Light" -> BLS "Salatmayonnaise", unmetAttributes ["reduced-fat"], while USDA holds an
  *      actual "Mayonnaise, light" record at 238 kcal against BLS's 490.
  *
  * In both, the system already KNEW the attribute was unmet and used the record anyway. So an
- * attribute shortfall no longer ends the search: the match is remembered and the chain continues,
- * and the first provider that satisfies the attribute wins outright. The recorded fallback is only
- * used when nothing else does.
+ * attribute shortfall no longer ends the search: the match is remembered and the chain continues.
+ *
+ * But continuing is not the same as replacing, and the first version of this conflated them. A
+ * later match displaces the remembered one ONLY IF it positively answers the claim — its own record
+ * name has to state it. Anything else keeps the database record, flagged. Production showed why the
+ * weaker rule was wrong: for "mageres Rinderhackfleisch" the chain reached an LLM estimate of 250
+ * kcal/100 g, MORE than the 224 kcal ordinary mince it displaced, and the resolver announced that
+ * it satisfied "reduced-fat" — on no evidence beyond the estimate having no name to check.
  *
  * Food identity remains the hard requirement throughout — nothing here can promote a candidate
  * that failed the semantic gates, because such a candidate never reaches this function. This
  * chooses between records that are all already the right food.
  */
+/**
+ * Which of the shortfall's unmet claims this candidate does NOT positively answer.
+ *
+ * `unmetAttributes` is computed from the candidate's own NAME (unmetModifierFamilies), so a
+ * provider that has no record name never computes it and reports nothing — indistinguishable, from
+ * the outside, from a provider that checked and found nothing wrong. Reading that silence as
+ * "satisfied" is what let a 250 kcal/100 g estimate displace a 224 kcal database record for
+ * "mageres Rinderhackfleisch": the estimate was MORE energy-dense than the ordinary mince it
+ * replaced, and the only thing that made it look leaner was that nobody had asked.
+ *
+ * So the question is asked the other way round. Displacing an identity-compatible record because
+ * of a claim requires the replacement to make that claim itself, in a form something can read. A
+ * record with no name states nothing and answers nothing.
+ *
+ * Numeric percentages deliberately play no part here: a stated percentage is a hard gate upstream
+ * (fatConflict), never a modifier family, so it can never appear in a shortfall's unmet list and
+ * there is nothing for it to answer.
+ */
+function unansweredBy(match: ProviderMatch, unmet: string[]): string[] {
+  const stated = statedModifierFamilies(match.productName ?? "")
+  return unmet.filter((family) => !stated.includes(family))
+}
+
 export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
   const chain = getProviderChain(route)
 
@@ -78,16 +105,29 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
     const resolved = { match, fallbackStatus: toFallbackStatus(provider.name) }
 
     if ((match.unmetAttributes?.length ?? 0) === 0) {
-      if (shortfall) {
+      // Nothing to displace: first acceptable match wins, exactly as before.
+      if (!shortfall) return resolved
+
+      const unanswered = unansweredBy(match, shortfall.match.unmetAttributes ?? [])
+      if (unanswered.length > 0) {
         logger.info(
           {
-            foodName: query.foodName, chosen: provider.name, chosenRecord: match.productName,
-            insteadOf: shortfall.fallbackStatus, insteadOfRecord: shortfall.match.productName,
-            satisfied: shortfall.match.unmetAttributes,
+            foodName: query.foodName, provider: provider.name, record: match.productName,
+            unanswered, keeping: shortfall.fallbackStatus, keepingRecord: shortfall.match.productName,
           },
-          "Attribute-aware routing: a later provider satisfies the stated nutritional attribute",
+          "Attribute-aware routing: candidate offers no evidence for the stated attribute, keeping the database fallback",
         )
+        continue
       }
+
+      logger.info(
+        {
+          foodName: query.foodName, chosen: provider.name, chosenRecord: match.productName,
+          insteadOf: shortfall.fallbackStatus, insteadOfRecord: shortfall.match.productName,
+          satisfied: shortfall.match.unmetAttributes,
+        },
+        "Attribute-aware routing: a later provider satisfies the stated nutritional attribute",
+      )
       return resolved
     }
 

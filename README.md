@@ -191,16 +191,22 @@ light. These claims are treated as first-class, separately from food identity:
   rejected — this only chooses between records that are already the right food. `lean ground beef`
   never becomes an unrelated low-fat meat just because it is lean.
 - **A shortfall no longer ends the search.** A record that matches the identity but drops a stated
-  claim is remembered and the chain continues; the first provider that *satisfies* the claim wins
-  outright. So `Mayo Light` passes BLS's full-fat records and takes USDA's `Mayonnaise, light`.
-- **A database match is not automatically better than an estimate.** When no provider satisfies the
-  claim, the estimate made from the whole phrase — `mager` included, rather than dropped — is used
-  in preference to a record that demonstrably fails it. Measured, nothing in BLS or USDA is lean
-  mince: BLS's is 224 kcal at 16.4% fat, USDA's family tops out *fattier* at 80/20, and BLS's one
-  genuinely lean record is `Tatar/Schabefleisch`, a different product. The estimate is an estimate —
-  it carries the 0.35 confidence floor and names no record, because nothing verified it. It is
-  preferred here only because the alternative is a number that is known to be wrong.
-  If the estimate is unavailable too, the flagged 224 kcal record is used, still flagged.
+  claim is remembered and the chain continues; a later provider that *satisfies* the claim wins
+  outright. So `Mayo Light` passes BLS's full-fat records for USDA's `Mayonnaise, light` — wherever
+  that record is reachable for the query.
+- **Replacing it takes positive evidence.** "Satisfies" means the replacement's own record name
+  states the claim (`light`, `mager`, `fettarm`, …). Absence of an objection is not evidence: an LLM
+  estimate has no record name, so the attribute check never runs on it and its empty
+  `unmetAttributes` means *never asked*, not *nothing wrong*. Production showed why this matters —
+  for `mageres Rinderhackfleisch` the chain reached an estimate of 250 kcal/100 g and was allowed to
+  prefer it over a 224 kcal record for being leaner. An estimate is still the normal last resort
+  when there is no database record to displace; it just cannot buy its way past one on a claim it
+  never demonstrated.
+- **So a claim can simply go unmet.** Measured, nothing in BLS or USDA is lean mince: BLS's is
+  224 kcal at 16.4% fat, USDA's family tops out *fattier* at 80/20, and BLS's one genuinely lean
+  record is `Tatar/Schabefleisch`, a different product. The 224 kcal record is then used **and
+  flagged** — `unmetAttributes` in provenance, confidence capped, and named as the recipe's reason
+  for doubt. An honest caveat beats an unverified number.
 - **Whatever is chosen says what it lacks.** `unmetAttributes` travels into provenance, caps
   confidence, and is what recipe-level match quality explains.
 

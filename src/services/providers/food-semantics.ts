@@ -116,6 +116,21 @@ export function unmetModifierFamilies(queryText: string, candidateName: string):
 }
 
 /**
+ * Families a record's own NAME asserts — the positive half of unmetModifierFamilies().
+ *
+ * unmetModifierFamilies() answers "what did the query ask for that this record does not say?",
+ * which is only meaningful for a record that HAS a name to read. This answers the narrower
+ * question the resolver actually needs: what does this record claim about itself? A record with no
+ * name claims nothing, and gets an empty list — which is the whole point. An empty unmet list and
+ * an empty stated list look identical from the outside and mean opposite things, so the two are
+ * kept as separate questions rather than inferred from one another.
+ */
+export function statedModifierFamilies(candidateName: string): string[] {
+  const offered = semanticTokens(candidateName)
+  return MODIFIER_FAMILIES.filter(([, words]) => markerHit(offered, words)).map(([family]) => family)
+}
+
+/**
  * A German compound whose PREFIX is an identity modifier ("Halbfett|butter", "Mager|quark").
  * German fuses modifiers onto the head noun, so a token-level check cannot see them — which is
  * exactly how "Halbfettbutter" passed as a plain "Butter".

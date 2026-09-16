@@ -5,6 +5,7 @@ import { recipe, runPipeline, row, formatRows, type E2EResult, type E2ERow } fro
 import { __resetRecipeIndexForTests } from "../src/services/providers/mealie-recipe-provider.js"
 import {
   KIDNEY_CURRY, TIKKA_PASTE, BUTTER_CHICKEN, BIG_MAC_SALAT, TIKKA_PASTE_RECIPE, replayProductionRerank,
+  BIG_MAC_DEPLOYED_PR8,
   type ProductionRecipe,
 } from "./helpers/production-fixtures.js"
 import type { MealieRecipe } from "../src/types.js"
@@ -176,50 +177,52 @@ describe("Butter Chicken (the homemade-ingredient consumer)", () => {
 })
 
 describe("Big-Mac-Salat", () => {
-  it("reproduces production's records, and moves exactly one ingredient", async () => {
+  /**
+   * This fixture drives the exact input the DEPLOYED PR #8 build received — production's own
+   * grams, canonicals, recorded rerank verdicts, recorded USDA pages, and the two estimates the
+   * live estimator actually returned (beef 250, mayo 50). On main 8a44799 it reproduces the
+   * deployed result exactly: 2604.616 kcal / 868 per serving. See BIG_MAC_DEPLOYED_PR8.
+   */
+  it("does not let a nameless estimate displace either flagged database record", async () => {
     const r = await run(BIG_MAC_SALAT)
     report("Big-Mac-Salat", r, BIG_MAC_SALAT.servings, BIG_MAC_SALAT.productionTotalKcal)
 
-    // Fifteen of sixteen ingredients are byte-identical to production, including the ones the
-    // no-regress list names: Senf stays mittelscharf, Gurkenwasser never becomes cucumber juice,
-    // Nudeln stays generic pasta, Knoblauchgewürz stays garlic powder.
-    expectReproducesProduction(r, BIG_MAC_SALAT, ["Mayo Light"])
+    // Every one of the sixteen rows is back on the record production recorded before PR #8.
+    expectReproducesProduction(r, BIG_MAC_SALAT)
 
-    // THE ONE MOVE. BLS's "Salatmayonnaise (Fertigprodukt)" is 490 kcal and does not satisfy the
-    // stated "light"; USDA holds a real "Mayonnaise, light" at 238. Identity is equally good in
-    // both records, so only the attribute separates them — which is the whole change.
-    const mayo = row(r, "Mayo Light")
-    expect(mayo.provider).toBe("usda")
-    expect(mayo.productName).toMatch(/light/i)
-    expect(mayo.unmetAttributes).toEqual([])
-    expect(mayo.confidence!).toBeGreaterThan(0.55)
+    for (const { name, grams, wasKcalPer100g, becameKcalPer100g } of BIG_MAC_DEPLOYED_PR8.displaced) {
+      const x = row(r, name)
+      expect(x.provider, name).toBe("bls")
+      expect(x.kcalPer100g, name).not.toBe(becameKcalPer100g)
+      expect(x.grams, name).toBe(grams)
+      // Still honestly flagged — the claim is unmet, which is exactly why it must not be traded
+      // for a number nothing checked.
+      expect(x.unmetAttributes, name).toEqual(["reduced-fat"])
+      expect(x.confidence!, name).toBeLessThanOrEqual(0.55)
+      void wasKcalPer100g
+    }
 
-    // The beef does NOT move, and that is the correct outcome for this data: BLS's mince is the
-    // right food but is not lean, USDA's ground-beef family is FATTIER still, and production
-    // recorded no LLM estimate to fall back on. Attribute-aware routing walked the whole chain,
-    // found nothing better, and kept the flagged record — visibly flagged, not silently used.
+    // The beef is the case that makes the point: the estimate that displaced it was MORE
+    // energy-dense than the record it was preferred to for being leaner.
     const beef = row(r, "mageres Rinderhackfleisch")
-    expect(beef.provider).toBe("bls")
-    expect(beef.unmetAttributes).toEqual(["reduced-fat"])
-    expect(beef.confidence!).toBeLessThanOrEqual(0.55)
+    expect(beef.kcalPer100g).toBe(224)
+    expect(beef.productName).toBe("Rind Hackfleisch, roh")
     // Never "fixed" by swapping in a different product that happens to be leaner.
-    expect(beef.productName ?? "").not.toMatch(/Tatar|Schabefleisch/)
+    expect(beef.productName).not.toMatch(/Tatar|Schabefleisch/)
     expect(r.matchQualityReason).toMatch(/mageres Rinderhackfleisch/)
     expect(r.matchQualityReason).toMatch(/does not satisfy the explicit reduced-fat attribute/)
   })
 
-  it("accounts for the whole difference from production in that one ingredient", async () => {
+  it("lands on production's own total, not the deployed build's", async () => {
     const r = await run(BIG_MAC_SALAT)
-    // Production recorded 12 g of BLS "Salatmayonnaise (Fertigprodukt)" at 490 kcal/100 g = 58.8.
-    // This branch resolves 12 g of USDA "Mayonnaise, light" at 238 kcal/100 g = 28.56.
-    // Every other row is identical, so the whole-recipe difference IS that one subtraction —
-    // which is the check that the total moved for the stated reason and not for some other one.
-    const mayo = row(r, "Mayo Light")
-    expect(mayo.kcalPer100g).toBe(238)
-    expect(mayo.kcalContribution).toBeCloseTo(28.56, 6)
-    expect(BIG_MAC_SALAT.productionTotalKcal - r.totalKcal).toBeCloseTo(58.8 - 28.56, 6)
-    // 851 -> 841 kcal/serving over 3 servings.
-    expect(r.perServingKcal).toBe(841)
+    // The deployed build reached 2604.616 / 868 from this input. Nothing here may reproduce it.
+    expect(r.totalKcal).not.toBeCloseTo(BIG_MAC_DEPLOYED_PR8.totalKcal, 2)
+    expect(r.perServingKcal).not.toBe(BIG_MAC_DEPLOYED_PR8.perServingKcal)
+
+    // What remains between this and production's 2553.416 is the ONE declared fixture deviation:
+    // BLS's other mayonnaise record, 750 against production's 490, over 12 g.
+    const mayoGap = (750 - 490) * 12 / 100
+    expect(r.totalKcal - BIG_MAC_SALAT.productionTotalKcal).toBeCloseTo(mayoGap, 6)
   })
 })
 
@@ -275,12 +278,13 @@ describe("none of the earlier production failures come back", () => {
     }],
     [BIG_MAC_SALAT, "Ketchup", (x) => expect(x.productName).toMatch(/[Kk]etchup/)],
     [BIG_MAC_SALAT, "Mayo Light", (x) => {
-      // Case B: the light claim is satisfied, not merely recorded as unmet.
-      expect(x.productName).toMatch(/light/i); expect(x.unmetAttributes).toEqual([])
+      // Production reaches no light record for this query (USDA topScore -127.5), so the claim
+      // stays unmet and visible rather than being cleared by an unevidenced estimate.
+      expect(x.provider).toBe("bls"); expect(x.unmetAttributes).toEqual(["reduced-fat"])
     }],
     [BIG_MAC_SALAT, "mageres Rinderhackfleisch", (x) => {
       // Case A: never silently generic-fat, and never "fixed" by substituting Tatar.
-      expect(x.unmetAttributes).toEqual(["reduced-fat"])
+      expect(x.provider).toBe("bls"); expect(x.unmetAttributes).toEqual(["reduced-fat"])
       expect(x.productName ?? "").not.toMatch(/Tatar|Schabefleisch/)
     }],
   ]
