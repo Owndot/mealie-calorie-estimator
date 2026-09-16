@@ -9,7 +9,7 @@ import type { NutrientSet, ProviderMatch, FoodRoute, FoodType, FoodState } from 
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import {
   rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey,
-  tokenize, GENERIC_DESCRIPTOR_WORDS, type RankableCandidate, type RankedCandidate,
+  tokenize, englishTokenSpellings, GENERIC_DESCRIPTOR_WORDS, type RankableCandidate, type RankedCandidate,
 } from "./ranking.js"
 import { FULL_EVIDENCE } from "../identity-evidence.js"
 import { attributesKey, inferAttributesFromName, unmetModifierFamilies } from "./food-semantics.js"
@@ -47,7 +47,7 @@ const PROVIDER_NAME = "usda-local"
  * re-importing a new USDA release also invalidates this provider's cached matches and cannot leave
  * a stale row pointing at an fdc_id that moved.
  */
-const USDA_LOCAL_MATCH_ALGORITHM_VERSION = "v1"
+const USDA_LOCAL_MATCH_ALGORITHM_VERSION = "v2"
 
 /** The importer's output contract. A database written by a different shape must not be read. */
 const SUPPORTED_SCHEMA_VERSION = "1"
@@ -251,10 +251,16 @@ type RankedUsda = RankedCandidate<RankableUsdaRecord> & { rerankConfidence?: num
  * usable token the whole pool is returned rather than nothing, so the gates decide, never this.
  */
 function retrieve(records: UsdaRecord[], queryText: string, core: string | null | undefined): UsdaRecord[] {
-  const wanted = new Set(
-    [...tokenize(queryText), ...tokenize(core ?? "")].filter((t) => t.length > 2 && !GENERIC_DESCRIPTOR_WORDS.has(t)),
-  )
-  if (wanted.size === 0) return records
+  const asked = [...tokenize(queryText), ...tokenize(core ?? "")]
+    .filter((t) => t.length > 2 && !GENERIC_DESCRIPTOR_WORDS.has(t))
+  if (asked.length === 0) return records
+  // Retrieval must be AT LEAST as tolerant as the identity gate it feeds, or it decides identity
+  // by spelling. Exact tokenSet membership was not: USDA files this family as "Beans, black,
+  // mature seeds, raw" while production's classifier said "black bean" / core "bean", so the
+  // plural token the record actually carries was never asked for. Expanding each asked token to
+  // the spellings englishTokenMatches() accepts keeps the O(1) index lookup and removes the
+  // singular/plural fork entirely — see englishTokenSpellings().
+  const wanted = new Set(asked.flatMap(englishTokenSpellings))
   const hits = records.filter((r) => {
     for (const t of wanted) if (r.tokenSet.has(t)) return true
     return false
@@ -271,18 +277,30 @@ export class UsdaLocalProvider implements NutrientProvider {
 
     const route: FoodRoute = query.route ?? "generic"
     const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
-    // The bundled data's schema version rides in the cache key alongside the algorithm version, so
-    // a re-import invalidates this provider's cached matches without touching anyone else's.
-    const queryKey = buildQueryKey(
-      `${USDA_LOCAL_MATCH_ALGORITHM_VERSION}/${data.version}:${query.foodName}|${query.state}|${route}|${attributesKey(attrs)}`,
-      query.brand,
-    )
 
     const evidence = query.evidence ?? FULL_EVIDENCE
     // USDA indexes ENGLISH descriptions. Unchanged from the API provider: with a validated English
     // identity this is the normal generic path; without one the raw structured name becomes the
     // core gate, which fails closed for a German-only ingredient.
     const strictCore = evidence.english ? query.coreFoodEnglish : (query.structuredName ?? query.foodName)
+
+    // The bundled data's schema version rides in the cache key alongside the algorithm version, so
+    // a re-import invalidates this provider's cached matches without touching anyone else's.
+    //
+    // The core food is part of the key HERE, and deliberately not in the network providers (see
+    // cachedMatchConflict()'s note on cache fragmentation). The trade-off is different for a local
+    // database: a miss costs an in-memory rank over 8,262 rows, not an API call, so there is no
+    // rate-limit pressure to trade correctness against. And correctness needed it — the core both
+    // gates the match AND sets its confidence (a null core is capped at 0.55, a present one earns
+    // 0.7/0.8), while cachedMatchConflict is deliberately permissive when the core is absent. A
+    // match found under core "cucumber water" was therefore reusable, at its stored 0.7, for a
+    // later lookup that had no core at all. Keying on the core makes those separate questions.
+    const queryKey = buildQueryKey(
+      `${USDA_LOCAL_MATCH_ALGORITHM_VERSION}/${data.version}:${query.foodName}|${query.state}|${route}` +
+      `|${attributesKey(attrs)}|core=${tokenize(strictCore ?? "").join(" ")}`,
+      query.brand,
+    )
+
     const ctx = {
       foodName: query.foodName, category: query.category, foodType: query.foodType,
       coreFood: strictCore, coreMatchMode: "token" as const, evidence, attributes: attrs,

@@ -8,7 +8,7 @@ import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType, FoodAttributes } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS, specificityConflict, unmetModifierPenalty, UNMET_MODIFIER_WEIGHT } from "./ranking.js"
+import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS, specificityConflict, sharesFullQueryIdentity, unmetModifierPenalty, UNMET_MODIFIER_WEIGHT } from "./ranking.js"
 import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches, germanStem, standalonePlantPart, unmetModifierFamilies, type PlantPart } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
@@ -488,7 +488,9 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
   // pay for the core gate's tokenization.
   const parts = new Set<PlantPart>()
   for (const r of records) {
-    if (r.plantPart && !parts.has(r.plantPart) && !coreIdentityConflict(queryCoreFood, r.nameDe)) parts.add(r.plantPart)
+    if (r.plantPart && !parts.has(r.plantPart)
+      && !coreIdentityConflict(queryCoreFood, r.nameDe)
+      && sharesFullQueryIdentity(identityText, r.nameDe)) parts.add(r.plantPart)
   }
   return records.map((record) => {
     // PRIMARY check first, before any lexical scoring: the official BLS Code letter (X/Y =

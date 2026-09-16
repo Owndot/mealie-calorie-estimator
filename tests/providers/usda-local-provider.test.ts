@@ -312,10 +312,10 @@ describe("cached provenance round-trips for usda-local", () => {
     expect(read!.matchReason === "llm-reranked").toBe(read!.llmReranked === true)
   })
 
-  it("keys cached matches by the bundled data version, so a re-import cannot serve stale rows", async () => {
+  it("keys cached matches by the bundled data version and the core food, so neither a re-import nor a different core classification can serve a stale row", async () => {
     // The provider folds usda_meta.schema_version into its cache key alongside its algorithm
-    // version. A fixture database declares the same version "1", so this asserts the shape rather
-    // than merely that some key exists.
+    // version, and the normalized core food alongside both. A fixture database declares the same
+    // version "1", so this asserts the shape rather than merely that some key exists.
     await useUsdaLocalFixture([{ fdcId: 111, description: "Versioncheck food", kcal: 100, protein: 5, carbs: 15, fat: 2 }])
     __clearProviderCachesForTests()
     const q = {
@@ -327,7 +327,14 @@ describe("cached provenance round-trips for usda-local", () => {
     const first = await usdaLocalProvider.lookup(q)
     expect(first?.providerId).toBe("111")
     expect(getCachedProviderMatch("usda-local",
-      buildQueryKey("v1/1:Versioncheck food|unknown|generic|unknown/unknown/-", null))?.providerId).toBe("111")
+      buildQueryKey("v2/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=versioncheck food", null))?.providerId).toBe("111")
+
+    // The same query text under a DIFFERENT core classification is a different question, and must
+    // not be answered from the row above. Reconciling a production discrepancy showed why: the
+    // core both gates the match and sets its confidence, so a match found under one core was
+    // being replayed, at its stored confidence, for a lookup whose core could not have produced it.
+    expect(getCachedProviderMatch("usda-local",
+      buildQueryKey("v2/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=", null))).toBeUndefined()
   })
 })
 

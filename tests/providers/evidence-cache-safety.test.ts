@@ -9,7 +9,7 @@ import { buildQueryKey, setCachedProviderMatch } from "../../src/utils/cache.js"
 
 /** Mirrors USDA_MATCH_ALGORITHM_VERSION; a bump here must be mirrored, which is the point. */
 // Mirrors usda-local-provider.ts: algorithm version + the bundled data's schema_version.
-const USDA_CACHE_VERSION = "v1/1"
+const USDA_CACHE_VERSION = "v2/1"
 import type { MealieRecipe, MealieIngredient } from "../../src/types.js"
 
 /**
@@ -125,8 +125,9 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
     // A record that would match under healthy evidence, so "was it replayed?" is observable.
     await useUsdaLocalFixture([{ fdcId: 173474, description: "Wild mint, fresh", kcal: 70, protein: 3.8, carbs: 14.9, fat: 0.9 }])
     // Mirrors the provider's key shape, including the attribute segment added with structured
-    // food state — a bump here must be mirrored, which is the point of asserting it.
-    const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic|unknown/unknown/-`, null)
+    // food state and the normalized core food — a bump here must be mirrored, which is the point
+    // of asserting it.
+    const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic|unknown/unknown/-|core=mint`, null)
     setCachedProviderMatch("usda-local", queryKey, {
       provider: "usda-local", providerId: "173474", productName: "Wild mint, fresh", brand: null,
       canonicalName: "Bergminze", state: "unknown", dataType: "SR Legacy",
@@ -147,7 +148,9 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
     expect(healthy?.productName).toBe("Wild mint, fresh") // the CACHED name, replayed as-is
 
     // Degraded evidence: the gate becomes the structured name "Bergminze", which is absent from
-    // "Peppermint, fresh" -> the cached entry is a true cache miss and a fresh lookup happens.
+    // "Wild mint, fresh". The entry is now unreachable at TWO layers — the core is part of the
+    // key, so a degraded lookup (core "Bergminze") does not even address the healthy row, and the
+    // revalidation below would reject it if it did.
     router({})
     const degraded = await provider.lookup({
       foodName: "Bergminze", structuredName: "Bergminze", brand: null, category: null, state: "unknown",
@@ -160,7 +163,32 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
     expect(degraded).toBeNull()
   })
 
-  it("a degraded structured-English match may be cached and later reused by a healthy lookup", async () => {
+  it("revalidation still rejects a cached match that the current query's context cannot accept", async () => {
+    // foodType and category are context, NOT part of any provider key (see cachedMatchConflict) —
+    // so they remain the case that only revalidation can catch, and adding the core to the
+    // usda-local key must not quietly retire that check.
+    await useUsdaLocalFixture([{ fdcId: 173474, description: "Wild mint, fresh", kcal: 70, protein: 3.8, carbs: 14.9, fat: 0.9 }])
+    const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic|unknown/unknown/-|core=mint`, null)
+    setCachedProviderMatch("usda-local", queryKey, {
+      provider: "usda-local", providerId: "999999", productName: "Mint chocolate chip ice cream", brand: null,
+      canonicalName: "Bergminze", state: "unknown", dataType: "SR Legacy",
+      confidence: 0.6, matchReason: "fuzzy", foodType: "composite_dish",
+      nutrients: { kcalPer100g: 216, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
+        saturatedFatPer100g: null, transFatPer100g: null, unsaturatedFatPer100g: null,
+        fiberPer100g: null, sugarPer100g: null, sodiumPer100g: null, cholesterolPer100g: null },
+    } as any)
+
+    router({})
+    const match = await usdaLocalProvider.lookup({
+      foodName: "Bergminze", structuredName: "Bergminze", brand: null, category: null, state: "unknown",
+      foodType: "simple", coreFoodGerman: null, coreFoodEnglish: "mint", route: "generic",
+      evidence: { german: true, english: true, core: true, brand: false },
+    } as any)
+    // Same key, same core — only the foodType differs, and that alone must stop the replay.
+    expect(match?.providerId).not.toBe("999999")
+  })
+
+  it("a cached usda-local match is replayed for the same core classification and never for another", async () => {
     // --- degraded first: structured English passes the strict structured-name gate
     await useUsdaLocalFixture([{ fdcId: 748608, description: "Olive oil", kcal: 884, fat: 100 }])
     config.llm.enabled = false
@@ -170,15 +198,24 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
     expect(r1!.matchedIngredients[0].provider).toBe("usda-local")
     expect(r1!.matchedIngredients[0].providerId).toBe("748608")
 
-    // --- healthy afterwards: same query text, still compatible -> served from cache.
-    // The database is swapped for an EMPTY one first, so a second answer of 748608 can only have
-    // come from the cache. With no network to count, this is the proof that replaces the old
-    // "zero USDA requests" assertion.
+    // --- the SAME question again -> served from cache. The database is swapped for an EMPTY one
+    // first, so a second answer of 748608 can only have come from the cache. With no network to
+    // count, this is the proof that replaces the old "zero USDA requests" assertion.
     await useEmptyUsdaLocal()
+    router({})
+    const r2 = await estimateRecipe(recipe("olive oil", "usda-deg-repeat"))
+    expect(r2!.matchedIngredients[0].providerId).toBe("748608")
+
+    // --- a healthy lookup classifies the core as "oil" rather than the whole structured name, and
+    // that is a different question: the core is part of the usda-local key, so the degraded row is
+    // not addressable from here. Reconciling a production discrepancy showed why this matters —
+    // the core both gates the match and sets its confidence, so replaying a row found under one
+    // core reports a confidence the current core never earned. The cost is fragmentation, which a
+    // bundled local database can afford: a miss re-ranks in memory and issues no request.
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
     router({ llm: [classified(0, "Olivenöl", "olive oil", "oil")] })
-    const r2 = await estimateRecipe(recipe("olive oil", "usda-deg-then-healthy"))
-    expect(r2!.matchedIngredients[0].providerId).toBe("748608")
+    const r3 = await estimateRecipe(recipe("olive oil", "usda-deg-then-healthy"))
+    expect(r3!.matchedIngredients[0].providerId).not.toBe("748608")
   })
 })

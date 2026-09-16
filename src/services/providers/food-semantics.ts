@@ -460,6 +460,67 @@ export function derivedProductConflict(queryText: string, _coreText: string | nu
   return ![...asked].some((a) => [...offered].some((o) => classesCompatible(a, o)))
 }
 
+/** Below this a prefix is too short to be reliable evidence of a source food by containment. */
+const MIN_SOURCE_TOKEN_LENGTH = 4
+
+/**
+ * The SOURCE food a derived-product name is made from, with the derivative word itself removed.
+ *
+ * English spells it as a separate word ("cucumber water" -> "cucumber"); German fuses it into a
+ * compound ("Gurkenwasser" -> "gurken"), so a compound whose head is the marker contributes its
+ * prefix, minus the linking element. A name consisting only of the marker ("Wasser", "juice")
+ * yields nothing at all, which is the correct answer: such a query IS the carrier.
+ */
+function sourceIdentityTokens(text: string, descriptorWords: ReadonlySet<string>): string[] {
+  const out: string[] = []
+  for (const token of semanticTokens(text)) {
+    const marker = DERIVED_PRODUCT_MARKERS.find((m) =>
+      ADJECTIVE_ENDINGS.some((e) => token === m + e) || (token.length > m.length && token.endsWith(m)))
+    if (!marker) {
+      out.push(token)
+      continue
+    }
+    if (token.length > marker.length) {
+      out.push(token.slice(0, token.length - marker.length).replace(/(en|s|n)$/, ""))
+    }
+  }
+  return out.filter((t) =>
+    t.length >= MIN_SOURCE_TOKEN_LENGTH && !/^\d/.test(t) && !descriptorWords.has(t))
+}
+
+/**
+ * CARRIER gate: a product derived FROM something must name that something.
+ *
+ * derivedProductConflict() checks the query's derivative CLASS against the candidate's, and it is
+ * satisfied as soon as both sides are the same class. That leaves the source unchecked, and the
+ * source is the whole identity. Measured in production: "Gurkenwasser" (pickle brine) classified
+ * as canonicalEnglish "cucumber water" with core "cucumber water" resolved to USDA's "Water,
+ * bottled, generic" at confidence 0.7 — both sides are the brine class, the core gate was
+ * satisfied by the shared word "water", and nothing anywhere asked where the cucumber went. The
+ * ingredient became 0 kcal plain water.
+ *
+ * So: when the query names a derived product AND names a source, a candidate that names none of
+ * that source is the carrier, not the food. Deliberately independent of coreFoodEnglish — the
+ * production failure happened because the classifier folded the marker INTO the core, and a rule
+ * that stops working when the upstream classification is less precise is the wrong rule.
+ *
+ * Generalises past the case that found it: "Apfelsaft"/"apple juice", "Vanilleextrakt"/"vanilla
+ * extract", "Hühnerbrühe"/"chicken broth" are all refused a record that names only the liquid.
+ * Queries whose source IS the derivative ("Wasser", "Essig", "Brühe") never trigger it.
+ */
+export function carrierConflict(
+  queryText: string,
+  candidateName: string,
+  descriptorWords: ReadonlySet<string>,
+): boolean {
+  if (!namesDerivedProduct(queryText)) return false
+  const source = sourceIdentityTokens(queryText, descriptorWords)
+  if (source.length === 0) return false
+  const candidateTokens = semanticTokens(candidateName)
+    .filter((t) => t.length >= MIN_SOURCE_TOKEN_LENGTH)
+  return !source.some((s) => candidateTokens.some((t) => t.includes(s) || s.includes(t)))
+}
+
 /**
  * Plant-part words, as SEPARATE tokens only. A fused compound ("Sesam|samen",
  * "Sonnenblumen|kerne") names the food itself; a standalone part word narrows a food to one of its
