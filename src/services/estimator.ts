@@ -201,9 +201,11 @@ export function classifyMatchQuality(
   // at nutrition totals a user should not trust, so it weighs all three.
   const risky = (i: IngredientMatch): string | null => {
     if (!i.matched) return null
-    if ((i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD) return "low-confidence match"
-    if ((i.unmetAttributes?.length ?? 0) > 0) return `does not satisfy: ${i.unmetAttributes!.join(", ")}`
-    if (i.gramsEstimated && i.fallbackStatus !== "unresolved") return "weight was estimated"
+    // Most specific cause first. An unmet claim CAPS confidence, so checking confidence first would
+    // always answer "low-confidence" and bury the one explanation a user can act on.
+    if ((i.unmetAttributes?.length ?? 0) > 0) return `the selected record does not satisfy the explicit ${i.unmetAttributes!.join("/")} attribute`
+    if ((i.confidence ?? 0) < LOW_CONFIDENCE_THRESHOLD) return "the match is low-confidence"
+    if (i.gramsEstimated && i.fallbackStatus !== "unresolved") return "its weight was estimated"
     return null
   }
   const lowConfidence = matched.filter((i) => risky(i) !== null).map((i) => i.name)
@@ -229,7 +231,7 @@ export function classifyMatchQuality(
     const share = Math.round((dominantDoubt.kcal / totalKcal) * 100)
     return {
       matchQuality: weighted < LOW_QUALITY_MEAN ? "low" : "mixed",
-      reason: `"${dominantDoubt.i.name}" contributes ${share}% of the calories and ${risky(dominantDoubt.i)} (${dominantDoubt.i.productName ?? "no record"})`,
+      reason: `"${dominantDoubt.i.name}" contributes ${share}% of the calories, but ${risky(dominantDoubt.i)} (${dominantDoubt.i.productName ?? "no record"})`,
       lowConfidence,
     }
   }
@@ -356,6 +358,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       llmReranked: resolved.match.llmReranked ?? false,
       rerankReason: resolved.match.rerankReason ?? null,
       unmetAttributes: resolved.match.unmetAttributes ?? [],
+      requestedFatPercent: classification?.attributes?.fatPercent ?? null,
       sourceRecipeSlug: resolved.match.sourceRecipeSlug ?? null,
       sourceRecipeFingerprint: resolved.match.sourceRecipeFingerprint ?? null,
       // A reranked match DID involve the LLM, even though its nutrients came from a database.
@@ -577,6 +580,7 @@ export function buildNutritionPatch(
     llmReranked: i.llmReranked ?? false,
     rerankReason: i.rerankReason ?? null,
     unmetAttributes: i.unmetAttributes ?? [],
+    requestedFatPercent: i.requestedFatPercent ?? null,
     sourceRecipeSlug: i.sourceRecipeSlug ?? null,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,

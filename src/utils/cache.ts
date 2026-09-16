@@ -199,7 +199,11 @@ function parseProvenance(raw: unknown): Partial<ProviderMatch> {
 
 export function getCachedProviderMatch(provider: string, queryKey: string): ProviderMatch | undefined {
   const stmt = db.prepare(
-    "SELECT canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason FROM provider_match_cache WHERE provider = ? AND query_key = ?",
+    // `provenance` MUST stay in this list. It was added to the table, the write, the row type and
+    // the read-back call — but not here, so row.provenance was always undefined and every cached
+    // match came back claiming it had never been reranked. Visible in production as
+    // matchReason "llm-reranked" alongside llmReranked false.
+    "SELECT canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason, provenance FROM provider_match_cache WHERE provider = ? AND query_key = ?",
   )
   stmt.bind([provider, queryKey])
   try {

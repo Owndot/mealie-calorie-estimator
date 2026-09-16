@@ -6,7 +6,7 @@ import type { OffNutriments, OffProduct, OffSearchResult, NutrientSet, ProviderM
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
 import { FULL_EVIDENCE, mayQueryOff } from "../identity-evidence.js"
-import { attributesKey } from "./food-semantics.js"
+import { attributesKey, unmetModifierFamilies } from "./food-semantics.js"
 import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 
 const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
@@ -279,6 +279,9 @@ export class OffProvider implements NutrientProvider {
       return null
     }
 
+    const unmet = unmetModifierFamilies(query.structuredName ?? query.foodName,
+      typeof product.product_name === "string" ? product.product_name : "")
+
     const match: ProviderMatch = {
       nutrients: extractNutrients(product.nutriments),
       canonicalName: query.foodName,
@@ -287,6 +290,7 @@ export class OffProvider implements NutrientProvider {
       provider: this.name,
       providerId: typeof product.product_name === "string" ? product.product_name : null,
       productName: typeof product.product_name === "string" ? product.product_name : null,
+      ...(unmet.length > 0 ? { unmetAttributes: unmet } : {}),
       confidence: Math.min(0.95, top.score / 100),
       foodType: offFoodType(product.categories_tags),
       matchReason: query.foodName.trim().toLowerCase() === (typeof product.product_name === "string" ? product.product_name.trim().toLowerCase() : "") ? "exact-name" : "fuzzy",

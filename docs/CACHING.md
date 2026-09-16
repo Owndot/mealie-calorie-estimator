@@ -107,3 +107,12 @@ consumer records `calorie_estimator_recipe_sources` (slug → fingerprint of the
 nutrition/servings/yield). At the consumer's next run, a changed fingerprint forces re-estimation
 even though its own ingredient hash is unchanged. This is checked at the dependent rather than
 cascaded from the source, so nothing can storm.
+
+## Provenance round-trip
+
+`provider_match_cache` carries a `provenance` JSON column holding `llmReranked`, `rerankReason` and
+`unmetAttributes`. It must stay in the SELECT list: it was added to the table, the write, the row
+type and the read-back call but omitted from the SELECT, so `row.provenance` was always undefined
+and every cache HIT came back claiming it had never been reranked — visible in production as
+`matchReason: "llm-reranked"` next to `llmReranked: false`. A regression test now round-trips all
+four fields.

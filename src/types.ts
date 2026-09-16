@@ -288,6 +288,9 @@ export interface IngredientMatch {
   rerankReason?: string | null
   /** See ProviderMatch.unmetAttributes. */
   unmetAttributes?: string[]
+  /** The fat percentage the INGREDIENT stated ("Kochsahne 15%"), carried through so the number
+   *  survives normalization and is visible in provenance whatever the outcome. */
+  requestedFatPercent?: number | null
   /** See ProviderMatch.sourceRecipeSlug. */
   sourceRecipeSlug?: string | null
   sourceRecipeFingerprint?: string | null

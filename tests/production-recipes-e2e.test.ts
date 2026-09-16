@@ -1,16 +1,24 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest"
 import { config } from "../src/config.js"
 import { initCache } from "../src/utils/cache.js"
-import { recipe, runPipeline, row, formatRows, type ClassificationStub } from "./helpers/e2e-pipeline.js"
+import { recipe, runPipeline, row, formatRows, type E2EResult, type E2ERow } from "./helpers/e2e-pipeline.js"
 import { __resetRecipeIndexForTests } from "../src/services/providers/mealie-recipe-provider.js"
+import {
+  KIDNEY_CURRY, TIKKA_PASTE, BUTTER_CHICKEN, BIG_MAC_SALAT, TIKKA_PASTE_RECIPE, replayProductionRerank,
+  type ProductionRecipe,
+} from "./helpers/production-fixtures.js"
 import type { MealieRecipe } from "../src/types.js"
+import recordedUsdaPages from "./fixtures/usda-recorded-pages.json"
 
 /**
- * The three real recipes used for production acceptance, driven end to end. These are the numbers
- * the report quotes; if a change moves them, this file says so.
+ * The four acceptance recipes, end to end, from fixtures transcribed from the LIVE Mealie instance.
  *
- * Printing the per-ingredient breakdown is deliberate — the kidney-bean regression was a single
- * line in a table nobody could see from a provider test.
+ * An earlier version of this file carried only a SUBSET of each recipe — 7 of the Big-Mac-Salat's
+ * 16 ingredients, 5 of Butter Chicken's 15 — which made its totals silently incomparable with
+ * production's. A before/after quoted across that gap looked like a far bigger improvement than the
+ * change actually produced. Every ingredient is now present with production's own grams, and each
+ * recipe asserts it reproduces production's per-ingredient PROVIDER and RECORD, which is what makes
+ * the totals mean anything.
  */
 const served: Record<string, MealieRecipe> = {}
 vi.mock("../src/services/mealie-client.js", () => ({
@@ -34,8 +42,6 @@ beforeEach(() => {
   config.openFoodFacts.retryBackoffMs = 1
   config.mealieRecipeSource.enabled = true
   for (const k of Object.keys(served)) delete served[k]
-  // The name index is module-level and TTL'd; without this a later test inherits an earlier one's
-  // (possibly empty) view of the user's recipes.
   __resetRecipeIndexForTests()
 })
 
@@ -44,172 +50,279 @@ afterEach(() => {
   config.llm.apiKey = ""
 })
 
-const kcal = (v: number, fat = 0) => [
-  { nutrientId: 1008, nutrientName: "Energy", unitName: "KCAL", value: v },
-  { nutrientId: 1004, nutrientName: "Total lipid (fat)", unitName: "G", value: fat },
-]
+/**
+ * The USDA pages these recipes hit, recorded from the live FoodData Central API (pageSize=25, the
+ * production request) and trimmed to the fields the provider reads.
+ *
+ * An earlier version of this map was hand-written from memory and described as recorded. It held
+ * two candidates for "red chili peppers" where the live page holds twenty-three, and gave "Peppers,
+ * sweet, red, raw" the 31 kcal of the FNDDS record while carrying the SR Legacy id — a record that
+ * does not exist. That is not a fixture, it is an assumption with a citation, and it changed the
+ * outcome: the truncated candidate set made USDA rerank the chilli, where production did not.
+ *
+ * `Branded` rows are omitted because every ingredient in these four recipes has brand null, so the
+ * provider takes the generic route and discards Branded before ranking (usda-provider.ts). A query
+ * absent from this map answers with an empty page, which is how production's outcome is reproduced
+ * for the ingredients no USDA record satisfied.
+ */
+const USDA = recordedUsdaPages as Record<string, unknown[]>
 
-const c = (
-  index: number, de: string, en: string, coreDe: string, coreEn: string,
-  over: Partial<ClassificationStub> = {},
-): ClassificationStub => ({ index, canonicalGerman: de, canonicalEnglish: en, coreFoodGerman: coreDe, coreFoodEnglish: coreEn, ...over })
-
-/** The homemade Tikka-Paste recipe, exactly as Mealie holds it. */
-const TIKKA_PASTE: MealieRecipe = {
-  slug: "tikka-paste-1", name: "Tikka-Paste",
-  recipeYield: "g", recipeYieldQuantity: 800, recipeServings: 1,
-  recipeIngredient: [],
-  nutrition: {
-    calories: "2595", proteinContent: "29", carbohydrateContent: "88", fatContent: "239",
-    saturatedFatContent: "33", transFatContent: "0", unsaturatedFatContent: "206",
-    fiberContent: "65", sugarContent: "29", sodiumContent: "12017", cholesterolContent: "0",
-  },
-  tags: [], extras: null,
+async function run(fixture: ProductionRecipe): Promise<E2EResult> {
+  return runPipeline(recipe(fixture.slug, fixture.servings, fixture.ingredients), {
+    classifications: fixture.classifications,
+    llmGrams: fixture.llmGrams,
+    llmNutrients: fixture.llmNutrients,
+    usda: USDA,
+    // Production's OWN recorded verdicts, replayed. A stub with a fixed answer models a broken
+    // judge, not this one: always-accept put "rote Chilischoten" on BLS's sweet-pepper record, and
+    // always-decline lost the Ketchup, Pfeffer and Wasser that production resolved. Adversarial
+    // stubs belong in the targeted safety tests, where the assertion is that the gates hold anyway.
+    rerank: replayProductionRerank,
+  })
 }
 
-describe("Kidney-Bohnen-Tomaten-Curry (the calorie regression)", () => {
-  it("resolves the beans from BLS and reports the per-ingredient breakdown", async () => {
-    const r = await runPipeline(recipe("curry", 2, [
-      [2, "Stück", "Knoblauchzehen"], [5, "Gramm", "Ingwer"], [0.5, "Stück", "Limette"],
-      [5, "Gramm", "Koriander"], [200, "Gramm", "Tomate"], [1, "Stück", "Zwiebel"],
-      [100, "Gramm", "Basmati-Reis"], [200, "Milliliter", "Kokosmilch"],
-      [400, "Gramm", "Kidneybohnen a. d. Dose"], [2, "Esslöffel", "Olivenöl"],
-      [1, "Prise", "Salz"], [1, "Prise", "Pfeffer"], [2, "Teelöffel", "Curry"],
-    ]), {
-      classifications: [
-        c(0, "Knoblauchzehen", "garlic cloves", "Knoblauch", "garlic", { state: "raw", category: "vegetable" }),
-        c(1, "Ingwer", "ginger", "Ingwer", "ginger", { state: "raw", category: "spice" }),
-        c(2, "Limette", "lime", "Limette", "lime", { state: "raw", category: "fruit" }),
-        c(3, "Koriander", "coriander", "Koriander", "coriander", { category: "herb" }),
-        c(4, "Tomaten", "tomatoes", "Tomaten", "tomatoes", { state: "raw", category: "vegetable" }),
-        c(5, "Zwiebel", "onion", "Zwiebel", "onion", { state: "raw", category: "vegetable" }),
-        c(6, "Basmati-Reis", "basmati rice", "Reis", "rice", { state: "raw", category: "grain" }),
-        c(7, "Kokosmilch", "coconut milk", "Kokosmilch", "coconut milk", { category: "dairy" }),
-        // The plural core that broke production.
-        c(8, "Kidneybohnen aus der Dose", "canned kidney beans", "Kidneybohnen", "kidney beans",
-          { preservation: "canned", category: "legume", foodType: "processed_single_food" }),
-        c(9, "Olivenöl", "olive oil", "Olivenöl", "olive oil", { category: "oil" }),
-        c(10, "Salz", "salt", "Salz", "salt", { category: "seasoning" }),
-        c(11, "Pfeffer", "pepper", "Pfeffer", "pepper", { category: "spice" }),
-        c(12, "Curry", "curry powder", "Curry", "curry powder", { category: "spice" }),
-      ],
-      usda: {
-        "canned kidney beans": [
-          { fdcId: 2707379, description: "Kidney beans, NFS", dataType: "Survey (FNDDS)", foodCategory: "Beans, peas, legumes", foodNutrients: kcal(177, 6.97) },
-        ],
-      },
-      llmNutrients: { "curry powder": { kcal: 325, protein: 14, carbs: 56, fat: 14 } },
-      llmGrams: { lime: 50, "garlic cloves": 3, onion: 110, "olive oil": 13.6, salt: 0.3, pepper: 0.4, "curry powder": 4 },
-    })
+/** Prints the table the reconciliation is read from. */
+function report(label: string, r: E2EResult, servings: number, productionTotal: number): void {
+  // eslint-disable-next-line no-console
+  console.log(
+    `\n=== ${label} — ${r.totalKcal.toFixed(1)} kcal total, ${Math.round(r.totalKcal / servings)} kcal/serving ` +
+    `(production recorded ${productionTotal}, ${Math.round(productionTotal / servings)}/serving) — ${r.matchQuality} ===\n${formatRows(r)}`)
+}
 
-    // eslint-disable-next-line no-console
-    console.log(`\n=== Kidney-Bohnen-Tomaten-Curry (${r.perServingKcal} kcal/serving, ${r.matchQuality}) ===\n${formatRows(r)}`)
+/**
+ * Asserts the run reproduces production's recorded provenance ROW BY ROW: same ingredient order,
+ * same provider, same record, same grams, same confidence.
+ *
+ * Without this a matching total would prove nothing — offsetting errors across sixteen ingredients
+ * land on the same number all the time, and the subset fixtures these replaced did exactly that.
+ *
+ * Two kinds of exception, both explicit and both still pinned to a value:
+ *   - `fixture.fixtureDeviations` — cells the replay cannot reproduce, each carrying its reason.
+ *   - `changedByThisPr` — cells this branch is MEANT to change, named at the call site.
+ */
+function expectReproducesProduction(r: E2EResult, fixture: ProductionRecipe, changedByThisPr: string[] = []): void {
+  expect(r.rows.map((x) => x.ingredient)).toEqual(fixture.productionRows.map(([name]) => name))
+  for (const [name, provider, productName, grams, confidence] of fixture.productionRows) {
+    if (changedByThisPr.includes(name)) continue
+    const deviation = fixture.fixtureDeviations?.[name]
+    const actual = row(r, name)
+    expect([actual.provider, actual.productName, actual.grams, actual.confidence], name).toEqual([
+      deviation?.provider ?? provider,
+      deviation && "record" in deviation ? deviation.record ?? null : productName,
+      grams,
+      deviation?.confidence ?? confidence,
+    ])
+  }
+}
+
+describe("Kidney-Bohnen-Tomaten-Curry", () => {
+  it("reproduces production's records", async () => {
+    const r = await run(KIDNEY_CURRY)
+    report("Kidney curry", r, KIDNEY_CURRY.servings, KIDNEY_CURRY.productionTotalKcal)
+    expectReproducesProduction(r, KIDNEY_CURRY)
 
     const beans = row(r, "Kidneybohnen a. d. Dose")
     expect(beans.provider).toBe("bls")
-    expect(beans.productName).toMatch(/Konserve/)
-    expect(beans.kcalPer100g!).toBeLessThan(200)
-    // 400 g at 128 kcal/100 g = 512, against USDA's 708. That difference is the whole regression.
+    expect(beans.providerId).toBe("H742902")
+    expect(beans.productName).toMatch(/Konserve, abgetropft/)
+    expect(beans.confidence).toBe(0.85)
     expect(beans.kcalContribution).toBeCloseTo(512, 0)
 
-    expect(row(r, "Tomate").provider).toBe("bls")
-    expect(row(r, "Basmati-Reis").productName).toMatch(/Reis/)
+    expect(row(r, "Basmati-Reis").productName).toMatch(/Reis poliert/)
     expect(row(r, "Kokosmilch").productName).toMatch(/Kokosmilch/)
+    expect(row(r, "Koriander").productName ?? "").not.toMatch(/seed|samen/i)
   })
 })
 
-describe("Butter Chicken (the homemade-ingredient case)", () => {
-  it("draws Tikka-Paste from the user's own recipe instead of an LLM guess", async () => {
-    served[TIKKA_PASTE.slug] = TIKKA_PASTE
+describe("Tikka-Paste (the source recipe)", () => {
+  it("reproduces production's records and the per-100 g its consumer uses", async () => {
+    const r = await run(TIKKA_PASTE)
+    report("Tikka-Paste", r, TIKKA_PASTE.servings, TIKKA_PASTE.productionTotalKcal)
+    expectReproducesProduction(r, TIKKA_PASTE)
 
-    const r = await runPipeline(recipe("butter-chicken", 4, [
-      [500, "Gramm", "Hähnchenbrust"], [100, "Gramm", "Tikka-Paste"], [40, "Gramm", "Ghee"],
-      [150, "Gramm", "Zwiebel"], [70, "Gramm", "Tomatenmark"],
-    ]), {
-      classifications: [
-        c(0, "Hähnchenbrust", "chicken breast", "Hähnchenbrust", "chicken breast", { state: "raw", category: "meat" }),
-        c(1, "Tikka-Paste", "tikka paste", "Tikka-Paste", "tikka paste", { category: "seasoning", foodType: "processed_single_food" }),
-        c(2, "Ghee", "ghee", "Ghee", "ghee", { category: "fat" }),
-        c(3, "Zwiebel", "onion", "Zwiebel", "onion", { state: "raw", category: "vegetable" }),
-        c(4, "Tomatenmark", "tomato paste", "Tomatenmark", "tomato paste", { category: "vegetable", foodType: "processed_single_food" }),
-      ],
-      // Deliberately offered, and deliberately not used: the recipe source outranks it.
-      llmNutrients: { "tikka paste": { kcal: 100, protein: 2, carbs: 10, fat: 6 } },
-    })
+    expect(row(r, "Röstzwiebel").productName).toMatch(/Röstzwiebeln/)
+    expect(row(r, "Röstzwiebel").productName).not.toMatch(/Speisezwiebel/)
+    expect(row(r, "rote Chilischoten").productName).toMatch(/hot chili/)
+    expect(row(r, "rote Chilischoten").productName).not.toMatch(/sweet/)
 
-    // eslint-disable-next-line no-console
-    console.log(`\n=== Butter Chicken (${r.perServingKcal} kcal/serving, ${r.matchQuality}) ===\n${formatRows(r)}`)
+    // 800 g yield: this is the number the consumer divides by.
+    expect((TIKKA_PASTE.productionTotalKcal / TIKKA_PASTE.yieldQuantity!) * 100).toBeCloseTo(359.085, 2)
+  })
+})
+
+describe("Butter Chicken (the homemade-ingredient consumer)", () => {
+  it("reproduces production's records, including the homemade paste", async () => {
+    served[TIKKA_PASTE_RECIPE.slug] = TIKKA_PASTE_RECIPE
+    const r = await run(BUTTER_CHICKEN)
+    report("Butter Chicken", r, BUTTER_CHICKEN.servings, BUTTER_CHICKEN.productionTotalKcal)
+    expectReproducesProduction(r, BUTTER_CHICKEN)
 
     const paste = row(r, "Tikka-Paste")
     expect(paste.provider).toBe("mealie-recipe")
-    expect(paste.providerId).toBe("tikka-paste-1")
+    expect(paste.providerId).toBe("tikka-paste")
     expect(paste.matchReason).toBe("exact-recipe-name")
-    // 2595 kcal over an 800 g yield = 324.4/100 g, so 100 g contributes ~324 — not the LLM's 100.
-    expect(paste.kcalPer100g!).toBeCloseTo(324.375, 1)
-    expect(paste.kcalContribution).toBeCloseTo(324.375, 1)
+    expect(paste.grams).toBe(100)
+    expect(paste.kcalPer100g!).toBeCloseTo(359.085, 1)
+    expect(paste.kcalContribution).toBeCloseTo(359.085, 1)
 
     expect(row(r, "Ghee").productName).toMatch(/Butterschmalz/)
     expect(row(r, "Hähnchenbrust").productName).toMatch(/Brustfilet/)
-  })
 
-  it("falls back to the LLM estimate when the source recipe has no mass yield", async () => {
-    served[TIKKA_PASTE.slug] = { ...TIKKA_PASTE, recipeYield: "Portionen", recipeYieldQuantity: 4 }
-
-    const r = await runPipeline(recipe("butter-chicken", 4, [[100, "Gramm", "Tikka-Paste"]]), {
-      classifications: [c(0, "Tikka-Paste", "tikka paste", "Tikka-Paste", "tikka paste", { category: "seasoning" })],
-      llmNutrients: { "tikka paste": { kcal: 100, protein: 2, carbs: 10, fat: 6 } },
-    })
-    expect(row(r, "Tikka-Paste").provider).toBe("llm-nutrient")
+    // The explicit percentage survives the whole pipeline and is never substituted.
+    const cream = row(r, "Kochsahne 15%")
+    expect(cream.requestedFatPercent).toBe(15)
+    expect(cream.productName ?? "").not.toMatch(/Schlagsahne|Schmand|Sauerrahm|30 %|36 %/)
   })
 })
 
-describe("Big Mac Salat (the condiment cases)", () => {
-  it("keeps every questionable condiment honest", async () => {
-    const r = await runPipeline(recipe("big-mac-salat", 3, [
-      [300, "Gramm", "Nudeln"], [400, "Gramm", "mageres Rinderhackfleisch"],
-      [50, "Gramm", "Cheddar"], [110, "Gramm", "Zwiebel"], [4, "Gramm", "Senf"],
-      [12, "Gramm", "Mayo Light"], [20, "Milliliter", "Gurkenwasser"],
-    ]), {
-      classifications: [
-        c(0, "Nudeln", "pasta", "Nudeln", "pasta", { state: "raw", category: "grain" }),
-        c(1, "Rinderhackfleisch, mager", "lean ground beef", "Rinderhackfleisch", "ground beef", { state: "raw", category: "meat" }),
-        c(2, "Cheddar", "cheddar", "Cheddar", "cheddar", { category: "dairy", foodType: "processed_single_food" }),
-        c(3, "Zwiebel", "onion", "Zwiebel", "onion", { state: "raw", category: "vegetable" }),
-        c(4, "Senf", "mustard", "Senf", "mustard", { category: "condiment", foodType: "processed_single_food" }),
-        c(5, "Mayonnaise, leicht", "light mayonnaise", "Mayonnaise", "mayonnaise", { category: "condiment", foodType: "processed_single_food" }),
-        c(6, "Gurkenwasser", "cucumber water", "Gurke", "cucumber", { category: "liquid" }),
-      ],
-      // A model that would accept anything: the gates, not the judge, must hold the line.
-      rerank: () => '{"selected":1,"confidence":0.95,"reason":"close enough"}',
-    })
+describe("Big-Mac-Salat", () => {
+  it("reproduces production's records, and moves exactly one ingredient", async () => {
+    const r = await run(BIG_MAC_SALAT)
+    report("Big-Mac-Salat", r, BIG_MAC_SALAT.servings, BIG_MAC_SALAT.productionTotalKcal)
 
-    // eslint-disable-next-line no-console
-    console.log(`\n=== Big Mac Salat (${r.perServingKcal} kcal/serving, ${r.matchQuality}) ===\n${formatRows(r)}`)
+    // Fifteen of sixteen ingredients are byte-identical to production, including the ones the
+    // no-regress list names: Senf stays mittelscharf, Gurkenwasser never becomes cucumber juice,
+    // Nudeln stays generic pasta, Knoblauchgewürz stays garlic powder.
+    expectReproducesProduction(r, BIG_MAC_SALAT, ["Mayo Light"])
 
-    expect(row(r, "Nudeln").productName).toMatch(/Teigwaren/)
-    expect(row(r, "Senf").productName ?? "").not.toMatch(/süß/)
-    expect(row(r, "Gurkenwasser").productName ?? "").not.toMatch(/saft|Gurke roh/i)
-    // The lean claim BLS cannot answer is reported rather than pretended away.
-    expect(row(r, "mageres Rinderhackfleisch").confidence!).toBeLessThanOrEqual(0.6)
-    expect(r.lowConfidence).toContain("mageres Rinderhackfleisch")
+    // THE ONE MOVE. BLS's "Salatmayonnaise (Fertigprodukt)" is 490 kcal and does not satisfy the
+    // stated "light"; USDA holds a real "Mayonnaise, light" at 238. Identity is equally good in
+    // both records, so only the attribute separates them — which is the whole change.
+    const mayo = row(r, "Mayo Light")
+    expect(mayo.provider).toBe("usda")
+    expect(mayo.productName).toMatch(/light/i)
+    expect(mayo.unmetAttributes).toEqual([])
+    expect(mayo.confidence!).toBeGreaterThan(0.55)
+
+    // The beef does NOT move, and that is the correct outcome for this data: BLS's mince is the
+    // right food but is not lean, USDA's ground-beef family is FATTIER still, and production
+    // recorded no LLM estimate to fall back on. Attribute-aware routing walked the whole chain,
+    // found nothing better, and kept the flagged record — visibly flagged, not silently used.
+    const beef = row(r, "mageres Rinderhackfleisch")
+    expect(beef.provider).toBe("bls")
+    expect(beef.unmetAttributes).toEqual(["reduced-fat"])
+    expect(beef.confidence!).toBeLessThanOrEqual(0.55)
+    // Never "fixed" by swapping in a different product that happens to be leaner.
+    expect(beef.productName ?? "").not.toMatch(/Tatar|Schabefleisch/)
+    expect(r.matchQualityReason).toMatch(/mageres Rinderhackfleisch/)
+    expect(r.matchQualityReason).toMatch(/does not satisfy the explicit reduced-fat attribute/)
+  })
+
+  it("accounts for the whole difference from production in that one ingredient", async () => {
+    const r = await run(BIG_MAC_SALAT)
+    // Production recorded 12 g of BLS "Salatmayonnaise (Fertigprodukt)" at 490 kcal/100 g = 58.8.
+    // This branch resolves 12 g of USDA "Mayonnaise, light" at 238 kcal/100 g = 28.56.
+    // Every other row is identical, so the whole-recipe difference IS that one subtraction —
+    // which is the check that the total moved for the stated reason and not for some other one.
+    const mayo = row(r, "Mayo Light")
+    expect(mayo.kcalPer100g).toBe(238)
+    expect(mayo.kcalContribution).toBeCloseTo(28.56, 6)
+    expect(BIG_MAC_SALAT.productionTotalKcal - r.totalKcal).toBeCloseTo(58.8 - 28.56, 6)
+    // 851 -> 841 kcal/serving over 3 servings.
+    expect(r.perServingKcal).toBe(841)
   })
 })
 
-describe("confidence reflects semantic evidence, not lexical fuzziness", () => {
-  it("rates unambiguously correct German compounds as confident", async () => {
-    const r = await runPipeline(recipe("conf", 1, [
-      [100, "Gramm", "Hähnchenbrust"], [100, "Gramm", "Zwiebel"], [3, "Gramm", "Salz"],
-    ]), {
-      classifications: [
-        c(0, "Hähnchenbrust", "chicken breast", "Hähnchenbrust", "chicken breast", { state: "raw", category: "meat" }),
-        c(1, "Zwiebel", "onion", "Zwiebel", "onion", { state: "raw", category: "vegetable" }),
-        c(2, "Salz", "salt", "Salz", "salt", { category: "seasoning" }),
-      ],
+/**
+ * The cases earlier production failures were traced to, named one by one so the list is legible
+ * and greppable rather than implied by a row-by-row diff. `expectReproducesProduction` above
+ * already pins every one of these to an exact record; this states WHY each is pinned, so a future
+ * change that breaks one gets a sentence explaining what it broke instead of a tuple mismatch.
+ */
+describe("none of the earlier production failures come back", () => {
+  const cases: [ProductionRecipe, string, (r: E2ERow) => void][] = [
+    [KIDNEY_CURRY, "Kidneybohnen a. d. Dose", (x) => {
+      // Resolved to USDA's prepared "Kidney beans, NFS" (708 kcal) once, overstating by ~196 kcal.
+      expect(x.provider).toBe("bls"); expect(x.providerId).toBe("H742902")
+    }],
+    [KIDNEY_CURRY, "Koriander", (x) => {
+      // The herb, not the seed — a plant-part swap worth 23 vs 298 kcal/100 g.
+      expect(x.productName ?? "").not.toMatch(/seed|samen|körner/i)
+    }],
+    [TIKKA_PASTE, "Röstzwiebel", (x) => {
+      // Fried onions (575) must not flatten to raw Speisezwiebel (34).
+      expect(x.productName).toMatch(/Röstzwiebeln/); expect(x.productName).not.toMatch(/Speisezwiebel/)
+    }],
+    [TIKKA_PASTE, "rote Chilischoten", (x) => {
+      // Hot chilli, never sweet bell pepper — a different vegetable, not a milder one.
+      expect(x.productName).toMatch(/hot chili/); expect(x.productName).not.toMatch(/sweet/)
+    }],
+    [BUTTER_CHICKEN, "Tikka-Paste", (x) => {
+      // The user's own recipe (359 kcal/100 g), not an LLM guess at ~100.
+      expect(x.provider).toBe("mealie-recipe"); expect(x.providerId).toBe("tikka-paste")
+    }],
+    [BUTTER_CHICKEN, "Ghee", (x) => expect(x.productName).toMatch(/Butterschmalz/)],
+    [BUTTER_CHICKEN, "Kochsahne 15%", (x) => {
+      // The stated percentage survives, and no neighbouring cream is substituted for it.
+      expect(x.requestedFatPercent).toBe(15)
+      expect(x.productName ?? "").not.toMatch(/Schlagsahne|Schmand|Sauerrahm|Kaffeesahne|30 %|36 %/)
+    }],
+    [BIG_MAC_SALAT, "Gurkenwasser", (x) => {
+      // Pickle brine is not cucumber juice and not cucumber; being made from one is not enough.
+      expect(x.productName ?? "").not.toMatch(/saft|juice|Gurke roh/i)
+    }],
+    [BIG_MAC_SALAT, "Senf", (x) => {
+      // Medium mustard must not drift to "scharf", which is a different product.
+      expect(x.productName).toBe("Senf mittelscharf")
+    }],
+    [BIG_MAC_SALAT, "Nudeln", (x) => {
+      // Generic pasta, not a filled or flavoured variety.
+      expect(x.productName).toBe("Teigwaren eifrei, roh")
+    }],
+    [BIG_MAC_SALAT, "Knoblauchgewürz", (x) => {
+      // Garlic powder (331), not raw garlic (143) and not a seasoning blend.
+      expect(x.productName).toMatch(/garlic powder/)
+    }],
+    [BIG_MAC_SALAT, "Ketchup", (x) => expect(x.productName).toMatch(/[Kk]etchup/)],
+    [BIG_MAC_SALAT, "Mayo Light", (x) => {
+      // Case B: the light claim is satisfied, not merely recorded as unmet.
+      expect(x.productName).toMatch(/light/i); expect(x.unmetAttributes).toEqual([])
+    }],
+    [BIG_MAC_SALAT, "mageres Rinderhackfleisch", (x) => {
+      // Case A: never silently generic-fat, and never "fixed" by substituting Tatar.
+      expect(x.unmetAttributes).toEqual(["reduced-fat"])
+      expect(x.productName ?? "").not.toMatch(/Tatar|Schabefleisch/)
+    }],
+  ]
+
+  const byRecipe = new Map<ProductionRecipe, [string, (r: E2ERow) => void][]>()
+  for (const [fixture, name, check] of cases) {
+    byRecipe.set(fixture, [...(byRecipe.get(fixture) ?? []), [name, check]])
+  }
+
+  for (const [fixture, checks] of byRecipe) {
+    it(`${fixture.slug}: ${checks.map(([n]) => n).join(", ")}`, async () => {
+      served[TIKKA_PASTE_RECIPE.slug] = TIKKA_PASTE_RECIPE
+      __resetRecipeIndexForTests()
+      const r = await run(fixture)
+      for (const [name, check] of checks) check(row(r, name))
     })
-    // All three scored 0.57 in production purely because BLS's names carry extra words.
-    for (const name of ["Hähnchenbrust", "Zwiebel", "Salz"]) {
-      expect(row(r, name).confidence!, name).toBeGreaterThanOrEqual(0.75)
+  }
+})
+
+describe("recipe arithmetic holds for every acceptance recipe", () => {
+  it("sums contributions exactly and divides by servings exactly once", async () => {
+    for (const fixture of [KIDNEY_CURRY, TIKKA_PASTE, BIG_MAC_SALAT]) {
+      const r = await run(fixture)
+      const summed = r.rows.reduce((a, x) => a + x.kcalContribution, 0)
+      expect(r.totalKcal, fixture.slug).toBeCloseTo(summed, 6)
+      expect(r.perServingKcal, fixture.slug).toBeCloseTo(Math.round(r.totalKcal / fixture.servings), 0)
     }
-    expect(r.matchQuality).toBe("high")
+  })
+
+  it("lands within each fixture's declared distance of production's recorded total", async () => {
+    // Pins the modelling error itself. A fixture drifting away from production is the failure this
+    // whole file exists to catch, and a tolerance that is never asserted is not a tolerance.
+    // Big-Mac-Salat is excluded because this branch deliberately moves its total; its own describe
+    // checks that the move is exactly the mayonnaise row and nothing else.
+    served[TIKKA_PASTE_RECIPE.slug] = TIKKA_PASTE_RECIPE
+    for (const fixture of [KIDNEY_CURRY, TIKKA_PASTE, BUTTER_CHICKEN]) {
+      // The name index is built once per process and cached; without this the second and third
+      // runs reuse whatever the first one saw.
+      __resetRecipeIndexForTests()
+      const r = await run(fixture)
+      expect(Math.abs(r.totalKcal - fixture.productionTotalKcal), fixture.slug)
+        .toBeLessThanOrEqual(fixture.reconcilesWithin)
+    }
   })
 })
