@@ -270,7 +270,23 @@ export interface IngredientMatch {
   llmEstimated?: boolean
 }
 
+/**
+ * COVERAGE only: what fraction of the recipe's known weight resolved to nutrition data at all.
+ * Says nothing about whether the records that were found are the right ones — see MatchQuality.
+ */
 export type Completeness = "complete" | "partial" | "withheld"
+
+/**
+ * MATCH QUALITY: how much to trust the records that WERE found. A deliberately separate axis from
+ * Completeness, because the two are independent and conflating them is misleading — all three
+ * real recipes in the validation round reported `complete` while resolving generic pasta to rice
+ * noodles, plain mustard to sweet mustard and canned kidney beans to a prepared survey entry.
+ * Every ingredient matched, so coverage genuinely was complete; the answer still wasn't.
+ *
+ * Calorie-weighted, not ingredient-counted: a shaky match on a pinch of pepper barely matters,
+ * while a shaky match on 400 g of beans dominates the result.
+ */
+export type MatchQuality = "high" | "mixed" | "low"
 
 export interface EstimateResult {
   slug: string
@@ -283,6 +299,10 @@ export interface EstimateResult {
   matchedIngredients: IngredientMatch[]
   completeness: Completeness
   completenessReason: string | null
+  matchQuality: MatchQuality
+  matchQualityReason: string | null
+  /** Matched ingredients whose record is not trustworthy enough to present without caveat. */
+  lowConfidenceIngredients: string[]
 }
 
 export interface NutritionPatch {

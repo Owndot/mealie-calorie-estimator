@@ -156,7 +156,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v16"
+const OFF_MATCH_ALGORITHM_VERSION = "v17"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -190,6 +190,7 @@ export class OffProvider implements NutrientProvider {
     const ctx = {
       foodName: query.foodName, category: query.category, foodType: query.foodType, coreFood: query.coreFoodEnglish, coreMatchMode: "token" as const,
       evidence,
+      attributes: attrs,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 

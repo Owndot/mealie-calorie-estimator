@@ -153,6 +153,9 @@ describe("buildNutritionPatch", () => {
       matchedIngredients: [],
       completeness: "complete",
       completenessReason: null,
+      matchQuality: "high",
+      matchQualityReason: null,
+      lowConfidenceIngredients: [],
     }
 
     const patch = buildNutritionPatch(result, "abc123", "4 servings")
@@ -182,6 +185,9 @@ describe("buildNutritionPatch", () => {
       matchedIngredients: [],
       completeness: "complete",
       completenessReason: null,
+      matchQuality: "high",
+      matchQualityReason: null,
+      lowConfidenceIngredients: [],
     }
 
     const patch = buildNutritionPatch(result, "def456", null)
@@ -203,6 +209,9 @@ describe("buildNutritionPatch", () => {
       matchedIngredients: [],
       completeness: "partial",
       completenessReason: "3 ingredient(s) unresolved but weight share is minor",
+      matchQuality: "high",
+      matchQualityReason: null,
+      lowConfidenceIngredients: [],
     }
 
     const patch = buildNutritionPatch(result, "ghi789", "4 servings")
@@ -226,6 +235,9 @@ describe("buildNutritionPatch", () => {
       matchedIngredients: [],
       completeness: "complete",
       completenessReason: null,
+      matchQuality: "high",
+      matchQualityReason: null,
+      lowConfidenceIngredients: [],
     }
 
     const patch = buildNutritionPatch(result, "mg-test", "4 servings")
@@ -246,6 +258,9 @@ describe("buildNutritionPatch", () => {
       matchedIngredients: [],
       completeness: "withheld",
       completenessReason: "60% of known ingredient weight is unresolved — nutrition withheld to avoid a misleading result",
+      matchQuality: "high",
+      matchQualityReason: null,
+      lowConfidenceIngredients: [],
     }
 
     const patch = buildNutritionPatch(result, "withheld-hash", "4 servings")
@@ -276,6 +291,9 @@ describe("buildNutritionPatch", () => {
       ],
       completeness: "complete",
       completenessReason: null,
+      matchQuality: "high",
+      matchQualityReason: null,
+      lowConfidenceIngredients: [],
     }
 
     const patch = buildNutritionPatch(result, "prov-hash", "2 servings")
