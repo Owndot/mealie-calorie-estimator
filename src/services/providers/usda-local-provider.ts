@@ -210,6 +210,32 @@ export function __resetUsdaLocalForTests(): void {
   loadPromise = null
 }
 
+/**
+ * True when a multi-word core is only partly present in the candidate name.
+ *
+ * "chili pepper" against "Peppers, sweet, red, raw" matches the generic head and loses the word
+ * that carried the identity — which is how a chili became a sweet bell pepper in production, right
+ * after BLS's own reranker had declined its chili candidates. A single-word core is excluded: the
+ * core gate already requires it outright, and demanding more would fire on every ordinary match.
+ *
+ * This is a question, not a verdict: it only asks the judge to look. "bell pepper" against
+ * "Peppers, sweet, raw" is the same shape and IS correct, which is precisely why the decision
+ * belongs to a semantic judge rather than another lexical rule.
+ */
+function answersOnlyPartOfCore(core: string | null | undefined, candidateName: string): boolean {
+  const coreTokens = tokenize(core ?? "").filter((t) => t.length >= 3 && !GENERIC_DESCRIPTOR_WORDS.has(t))
+  if (coreTokens.length < 2) return false
+  const candidate = tokenize(candidateName)
+  const matched = coreTokens.filter((c) => candidate.some((t) => t === c || t === `${c}s` || c === `${t}s`))
+  return matched.length > 0 && matched.length < coreTokens.length
+}
+
+/** English identity of a candidate name: the words that actually name a food. */
+function identityTokensOf(name: string): string[] {
+  const kept = tokenize(name).filter((t) => t.length >= 3 && !/^\d/.test(t) && !GENERIC_DESCRIPTOR_WORDS.has(t))
+  return kept.length > 0 ? kept : tokenize(name)
+}
+
 interface RankableUsdaRecord extends RankableCandidate {
   record: UsdaRecord
 }
@@ -375,7 +401,7 @@ export class UsdaLocalProvider implements NutrientProvider {
         nutrients: { kcalPer100g: r.candidate.record.nutrients.kcalPer100g },
         attributes: r.candidate.record.attributes,
         inferredState: r.candidate.record.state,
-        identityTokens: r.candidate.record.tokens,
+        identityTokens: identityTokensOf(r.candidate.record.description),
       },
     })
 
@@ -385,6 +411,7 @@ export class UsdaLocalProvider implements NutrientProvider {
 
     const accepted = ranked[0] && !ranked[0].mismatchReason && ranked[0].score >= MIN_ACCEPTABLE_SCORE ? ranked[0] : null
     const reason = rerankTrigger(accepted ? asTrigger(accepted) : null, pool, attrs, query.state)
+      ?? (accepted && answersOnlyPartOfCore(core, accepted.candidate.record.description) ? "partial-core" : null)
     if (!reason) return null
 
     const offered = eligible.slice(0, config.llm.rerankMaxCandidates)

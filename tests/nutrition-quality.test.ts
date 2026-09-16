@@ -18,10 +18,8 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  config.usda.apiKey = "fixture-key"
   // Both backoffs, not just USDA's: the OFF default is 500 ms exponential over 3 retries, so every
   // deliberately-unresolved fixture ingredient slept 3.5 s against a stub that answers instantly.
-  config.usda.retryBackoffMs = 1
   config.openFoodFacts.retryBackoffMs = 1
   config.llm.enabled = false
   config.llm.apiKey = ""

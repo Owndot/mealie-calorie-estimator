@@ -45,12 +45,12 @@ Unit conversion prioritizes Mealie's own structured conversion metadata (mass un
 
 Ingredients are routed as **generic** or **branded** based on evidence-based classification (a brand is only used when the structured food name explicitly contains it):
 
-- **Generic route:** cache → **BLS 4.0** (bundled, see below) → USDA FoodData Central (only if `USDA_API_KEY` is set) → Open Food Facts as an optional final database fallback → LLM (if enabled) as the absolute last resort. OFF is never queried for a generic ingredient BLS or USDA already resolved — only when both fail to produce an acceptable match.
-- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → BLS → the same USDA fallback → LLM last.
+- **Generic route:** cache → **BLS 4.0** (bundled) → **USDA FoodData Central** (bundled, generic datasets only) → Open Food Facts as a final database fallback → LLM (if enabled) as the absolute last resort. USDA precedes OFF because it is a generic-food database answering a generic question, while OFF is branded product-label data; OFF is only reached when both bundled databases fail.
+- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → BLS → the same bundled USDA database → LLM last.
 
 Direct LLM nutrient estimation is the **absolute last resort** on both routes — every real database (BLS, USDA, OFF) is tried first, and a database result is never accepted just because it exists: every candidate goes through identity/state/category/completeness/sanity checks before acceptance (see "Provider result acceptance" below). A database match is not automatically preferred over falling through to the next provider if it's clearly the wrong food.
 
-There is intentionally **no hand-authored local nutrition dataset** anywhere in this chain — a small built-in table of kcal/macro values would not be a trustworthy, reproducible nutrition source. A local dataset may still carry deterministic **unit/density/piece-weight metadata** (see `src/services/food-density.ts`) — e.g. "1 EL olive oil ≈ 13.6g" or "1 Stück egg ≈ 53g" are culinary/physical constants, not nutrition facts, and are fine to hand-author and document. That is separate from, and must never substitute for, an actual nutrition provider. If BLS/USDA/OFF are unconfigured/unavailable/no-match and the LLM is disabled, a generic ingredient honestly resolves to nothing rather than a fabricated number.
+There is intentionally **no hand-authored local nutrition dataset** anywhere in this chain — a small built-in table of kcal/macro values would not be a trustworthy, reproducible nutrition source. A local dataset may still carry deterministic **unit/density/piece-weight metadata** (see `src/services/food-density.ts`) — e.g. "1 EL olive oil ≈ 13.6g" or "1 Stück egg ≈ 53g" are culinary/physical constants, not nutrition facts, and are fine to hand-author and document. That is separate from, and must never substitute for, an actual nutrition provider. If BLS/USDA/OFF are unavailable or produce no match and the LLM is disabled, a generic ingredient honestly resolves to nothing rather than a fabricated number.
 
 #### Provider result acceptance
 
@@ -59,9 +59,31 @@ Every candidate from every provider goes through the same conceptual pipeline be
 - **State conflict** — a candidate's known preparation state (raw/cooked/dried) conflicting with the query's known state is rejected outright (e.g. a "raw" query never accepts a "boiled"/"cooked" candidate). USDA's state is inferred at lookup time from its English description text (`inferStateFromName`); BLS's is inferred once at import time from its German names.
 - **Category conflict** (`categoryConflict`) — a strict raw-ingredient category (spice, herb, vegetable, egg, dairy, grain, ...) rejects a candidate whose name reads as a composite/manufactured product (sausage, soup, snack, baked good, beverage) — generalizing several real failure cases found in testing (a spice matching a sausage containing it, salt matching pretzel sticks, an herb matching a soup containing it, ginger matching ginger ale) under one mechanism instead of one-off exceptions.
 
-#### USDA FoodData Central
+#### USDA FoodData Central (bundled, offline)
 
-An optional generic-route provider (and branded-route fallback), enabled by setting `USDA_API_KEY`. **Never trusts `foods[0]`** — verified live that a plain "banana" search returns a *Branded* product literally named "BANANA" as the top full-text search hit, ahead of any genuine raw-banana entry, so every search fetches a real page of candidates (`pageSize=25`) and ranks them itself. On the generic route, `Branded`-dataType results are excluded entirely before ranking even runs, regardless of how well they score textually; the remaining tiers are preferred `Foundation` > `SR Legacy` > `Survey (FNDDS)` as a ranking signal, not a hard filter — a `Foundation` result with the wrong food identity is still rejected on state/category/mismatch grounds. On the branded route a `Branded` result may be accepted when brand evidence is compatible (OFF still has priority there). Nutrients are mapped by USDA's stable nutrient IDs (never array position or unit guessing) — energy is always read from ID 1008 (kcal), never 1062 (kJ), even when both are present for the same food.
+USDA generic foods are a **bundled local SQLite database** at `resources/usda/usda-generic.sqlite`, built by `scripts/import_usda.py`. **There is no API key, no network call and no live FoodData Central search** — that path was removed, because its result window rather than its data was the problem:
+
+> A live `pageSize=25` search for `ground beef` returned **25 Branded rows out of 25**, leaving the generic route nothing at all after its Branded filter. `lean ground beef` returned 20 Branded and five generic rows, every one of them 70/30, 75/25 or 80/20 — the fattiest grades — while SR Legacy holds 97/3, 95/5, 93/7 and 90/10 raw the whole time.
+
+Locally there is no window: every generic record is a candidate on every lookup, and Branded crowding is **structurally impossible** because no Branded row is imported.
+
+| | |
+|---|---|
+| **Included** | Foundation Foods **2026-04-30** (469 records) · SR Legacy **2018-04** (7,793 records) — **8,262 total**, 2.34 MB |
+| **Excluded** | **Branded Foods** (428 MB of label data — the crowding source) and **FNDDS/Survey** (measured: +2 benchmark concepts for +5,432 rows, 2,710 of them prepared dishes, and ~65% larger candidate sets) |
+| **Licence** | Public domain / CC0 1.0 — see `resources/usda/NOTICE` |
+| **Provenance** | `provider: "usda-local"`, `providerId` = FDC id, `dataType` = `SR Legacy` or `Foundation` |
+
+Ranking, gating and reranking are unchanged from the former API provider — only retrieval moved. Nutrients are mapped by USDA's stable nutrient IDs, never array position: energy uses **1008 → 2047 (Atwater General) → 2048 (Atwater Specific)** in that order and never averages or sums them, with the id that supplied each value stored in `energy_nutrient_id` (SR Legacy is uniformly 1008; Foundation genuinely mixes 1008 and 2047, and they are not interchangeable). Sodium and cholesterol are converted mg → g at import so units match every other provider.
+
+**Known limitation — qualitative lean/mager against numeric grades.** `Rinderhackfleisch mager` says *lean*; it does not say 97/3, 95/5, 93/7, 90/10, 80/20, 75/25 or 70/30, and USDA holds all seven as separate raw records. The current ranker scores every one of them identically and all below the acceptance threshold, so USDA returns no candidate and BLS's identity-compatible record stands with its `reduced-fat` claim honestly unmet. Picking the leanest, the lowest-kcal, or a hardcoded "mager = 90/10" would invent a precision the cook never supplied, so resolving qualitative claims against numeric grades is deferred to a separate ranking-design change.
+
+**Updating to a newer Foundation release** (Foundation ships twice a year; SR Legacy is final and will not change):
+
+1. Download the new `FoodData_Central_foundation_food_csv_<date>.zip` from the [official downloads page](https://fdc.nal.usda.gov/download-datasets/).
+2. Update the expected row count in `DATASETS` in `scripts/import_usda.py` — the importer **fails loudly** on a mismatch rather than quietly importing a different corpus.
+3. Re-run the importer (see `resources/usda/NOTICE`); it rewrites both the database and `SOURCES.json` with fresh SHA-256 digests.
+4. Update `EXPECTED` in `tests/providers/usda-local-provider.test.ts` and re-run the suite. Bump `USDA_LOCAL_MATCH_ALGORITHM_VERSION` only if retrieval or ranking changed — the bundled `schema_version` already participates in the cache key, so a re-import invalidates cached USDA matches on its own.
 
 #### BLS 4.0 (Bundeslebensmittelschlüssel)
 
@@ -140,9 +162,7 @@ It's recommended to install it next to your Mealie instance using docker-compose
 | `OFF_SEARCH_BASE_URL` | `https://search.openfoodfacts.org` | Open Food Facts search API base URL |
 | `OFF_MAX_RETRIES` | `3` | Retries for transient OFF search errors (429/5xx) |
 | `OFF_RETRY_BACKOFF_MS` | `500` | Base backoff between retries (doubles each attempt) |
-| `USDA_API_KEY` | — | Optional. Enables the USDA FoodData Central generic-route fallback provider; omitted entirely from the provider chain when unset (no dummy placeholder) |
-| `USDA_BASE_URL` | `https://api.nal.usda.gov/fdc/v1` | USDA FoodData Central base URL |
-| `USDA_RATE_LIMIT` | `10` | USDA requests per minute |
+| `USDA_LOCAL_DB_PATH` | — | Overrides the bundled USDA generic database path (`resources/usda/usda-generic.sqlite` when unset). **No USDA API key exists** — USDA is offline |
 | `BLS_LOCAL_IMPORT_PATH` | — | Overrides the bundled BLS 4.0 database path (`resources/bls/bls-4.0.sqlite` when unset) |
 | `LLM_ENABLED` | `false` | Enable the LLM: one whole-recipe batch normalization request, plus narrowly-scoped per-ingredient gram/nutrient fallback |
 | `LLM_API_KEY` | — | API key for OpenAI-compatible endpoint |

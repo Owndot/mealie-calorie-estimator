@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, beforeAll, vi } from "vitest"
 import { estimateRecipe, computeIngredientHash } from "../src/services/estimator.js"
 import { config } from "../src/config.js"
 import { initCache } from "../src/utils/cache.js"
 import { __buildTestBlsData, __resetBlsDataForTests } from "../src/services/providers/bls-provider.js"
 import { mockUsdaProvider } from "./helpers/mock-usda.js"
+import { resetUsdaLocalFixture } from "./helpers/usda-local-fixture.js"
 import type { MealieRecipe, MealieIngredient } from "../src/types.js"
 
 function ing(overrides: Partial<MealieIngredient> = {}): MealieIngredient {
@@ -41,7 +42,6 @@ beforeAll(async () => {
 beforeEach(() => {
   config.llm.enabled = false
   config.llm.apiKey = ""
-  config.usda.apiKey = ""
   vi.restoreAllMocks()
   // This file exercises the USDA path specifically (its describe title says so) — BLS is now
   // unconditionally ahead of USDA in the real generic chain and would otherwise intercept common
@@ -49,10 +49,13 @@ beforeEach(() => {
   __resetBlsDataForTests(Promise.resolve(__buildTestBlsData([])))
 })
 
-describe("estimateRecipe — end to end via the real USDA provider (mocked network), LLM disabled", () => {
+afterEach(() => {
+  resetUsdaLocalFixture()
+})
+
+describe("estimateRecipe — end to end via the real local USDA provider, LLM disabled", () => {
   it("resolves a fully-known recipe as 'complete' and divides by recipeServings exactly once", async () => {
-    config.usda.apiKey = "test-key"
-    mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } })
+    await mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } })
 
     const r = recipe({
       recipeServings: 4,
@@ -62,7 +65,7 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
     const result = await estimateRecipe(r)
 
     expect(result.completeness).toBe("complete")
-    expect(result.matchedIngredients[0].provider).toBe("usda")
+    expect(result.matchedIngredients[0].provider).toBe("usda-local")
     // 400g flour @ 364 kcal/100g = 1456 total kcal; /4 servings = 364/serving
     expect(result.totalNutrients.kcalPer100g).toBeCloseTo(1456, 0)
     expect(result.perServingNutrients.kcalPer100g).toBeCloseTo(364, 0)
@@ -78,8 +81,7 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("never uses recipeYield for the servings divisor, even when it disagrees with recipeServings", async () => {
-    config.usda.apiKey = "test-key"
-    mockUsdaProvider({ Zucker: { kcal: 387, protein: 0, carbs: 100, fat: 0 } })
+    await mockUsdaProvider({ Zucker: { kcal: 387, protein: 0, carbs: 100, fat: 0 } })
 
     const r = recipe({
       recipeServings: 2,
@@ -95,8 +97,7 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("does not multiply or divide individual ingredient grams by servings", async () => {
-    config.usda.apiKey = "test-key"
-    mockUsdaProvider({ Reis: { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3 } })
+    await mockUsdaProvider({ Reis: { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3 } })
 
     const r4 = recipe({ recipeServings: 4, recipeIngredient: [ing({ quantity: 300, food: { id: "1", name: "Reis", pluralName: null, aliases: [] } })] })
     const r8 = recipe({ recipeServings: 8, recipeIngredient: [ing({ quantity: 300, food: { id: "1", name: "Reis", pluralName: null, aliases: [] } })] })
@@ -110,8 +111,7 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("does not use recipeServings as a gram quantity", async () => {
-    config.usda.apiKey = "test-key"
-    mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } })
+    await mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } })
 
     const r = recipe({
       recipeServings: 400, // suspiciously matches the intended gram quantity of an ingredient
@@ -123,8 +123,7 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("a minor unresolved seasoning does not crash the recipe and is classified 'partial', not 'withheld'", async () => {
-    config.usda.apiKey = "test-key"
-    mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } }) // "seltene-gewuerzmischung-xyz" deliberately absent -> unresolved
+    await mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } }) // "seltene-gewuerzmischung-xyz" deliberately absent -> unresolved
 
     const r = recipe({
       recipeServings: 4,
@@ -141,8 +140,7 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("a significant unresolved calorie-dense ingredient withholds nutrition rather than reporting a misleadingly complete result", async () => {
-    config.usda.apiKey = "test-key"
-    mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } }) // the 400g main ingredient deliberately has no USDA match
+    await mockUsdaProvider({ Mehl: { kcal: 364, protein: 10, carbs: 76, fat: 1 } }) // the 400g main ingredient deliberately has no USDA match
 
     const r = recipe({
       recipeServings: 4,
@@ -216,11 +214,11 @@ describe("estimateRecipe — end to end via the real USDA provider (mocked netwo
   })
 
   it("originalText never influences the hash or the estimate, even when it contradicts structured data", async () => {
-    // BLS is emptied (see beforeEach) and USDA is unconfigured (default apiKey "" in this file's
-    // beforeEach) — OFF is still unconditionally in the generic chain as a last-resort DB
+    // BLS is emptied (see beforeEach) and USDA is given an empty local database — OFF is still
+    // unconditionally in the generic chain as a last-resort DB
     // fallback, so it must be given a controlled empty response rather than hitting the real
     // network in a test.
-    mockUsdaProvider({})
+    await mockUsdaProvider({})
 
     const withSuspiciousOriginalText = recipe({
       recipeServings: 4,

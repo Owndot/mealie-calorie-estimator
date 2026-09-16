@@ -208,9 +208,9 @@ export const TIKKA_PASTE: ProductionRecipe = {
   // 884 -> 885.05, or garam masala 379 -> 437) to hit a total, which is fitting, not fidelity.
   reconcilesWithin: 2.4,
   productionRows: [
-    ["Korianderkörner", "usda", "Spices, coriander seed", 40, 0.7],
-    ["Kreuzkümmelsamen", "usda", "Spices, cumin seed", 40, 0.7],
-    ["rote Chilischoten", "usda", "Peppers, hot chili, red, raw", 50, 0.7],
+    ["Korianderkörner", "usda-local", "Spices, coriander seed", 40, 0.7],
+    ["Kreuzkümmelsamen", "usda-local", "Spices, cumin seed", 40, 0.7],
+    ["rote Chilischoten", "usda-local", "Peppers, hot chili, red, raw", 50, 0.7],
     ["rosa Pfefferkorn", "llm-nutrient", null, 4, 0.35],
     ["Koriander", "llm-nutrient", null, 50, 0.35],
     ["Knoblauchzehen", "bls", "Knoblauch roh", 100, 0.85],
@@ -221,11 +221,19 @@ export const TIKKA_PASTE: ProductionRecipe = {
     ["Salz", "bls", "Speisesalz/Siedesalz/Tafelsalz", 30, 0.75],
     ["Röstzwiebel", "bls", "Röstzwiebeln (Fertigprodukt)", 50, 0.85],
     ["Tomatenmark", "bls", "Tomatenmark", 140, 0.92],
-    ["Kurkuma", "usda", "Spices, turmeric, ground", 4, 0.8],
+    ["Kurkuma", "usda-local", "Spices, turmeric, ground", 4, 0.8],
     ["Chilipulver", "llm-nutrient", null, 4, 0.35],
     ["Garam Masala", "llm-nutrient", null, 4, 0.35],
   ],
   fixtureDeviations: {
+    // IMPROVEMENT from the local USDA database. Production reached the live API and got nothing
+    // usable, so an LLM estimate answered; SR Legacy holds "Spices, chili powder" (171319) and the
+    // local corpus exposes it. Same 282 kcal either way, so the recipe total does not move — what
+    // changes is that the figure is now a cited database record instead of an estimate.
+    Chilipulver: {
+      provider: "usda-local", record: "Spices, chili powder", confidence: 0.8,
+      why: "USDA 171319 is reachable locally; the live API result window never surfaced it",
+    },
     // Same RECORD as production ("Peppers, hot chili, red, raw"), reached differently. Production
     // accepted it deterministically (matchReason "fuzzy", confidence 0.7). Against the USDA page
     // recorded here, the deterministic ranker puts "Peppers, sweet, red, raw" FIRST (score 62) and
@@ -284,9 +292,12 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
     "cooking cream 15%": { kcal: 150, protein: 3, carbs: 4, fat: 15 },
   },
   // 1430.975 from the database + recipe rows + 782.620 from these four = 2213.595 against
-  // production's 2215.155. Same 0.07% residual, same reason: the cream would have to be 150.312
-  // rather than 150 to close it.
-  reconcilesWithin: 1.6,
+  // production's 2215.155 — a 0.07% modelling residual (the cream would have to be 150.312 rather
+  // than 150 to close it). The tolerance is wider than that because THIS BRANCH deliberately
+  // changes one row: grüne Chilischoten moves from a 40 kcal estimate to USDA's 21 kcal canned
+  // record over 20 g, costing a further 3.8 kcal. See fixtureDeviations for why that is recorded
+  // as questionable rather than welcomed.
+  reconcilesWithin: 5.5,
   productionRows: [
     ["Hähnchenbrust", "bls", "Hähnchen Brustfilet, roh", 500, 0.75],
     ["Tikka-Paste", "mealie-recipe", "Tikka-Paste", 100, 0.85],
@@ -297,13 +308,30 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
     ["Knoblauch", "bls", "Knoblauch roh", 15, 0.85],
     ["grüne Chilischoten", "llm-nutrient", null, 20, 0.35],
     ["Salz", "bls", "Speisesalz/Siedesalz/Tafelsalz", 6, 0.75],
-    ["Kreuzkümmel gemahlen", "usda", "Spices, cumin seed", 8, 0.7],
+    ["Kreuzkümmel gemahlen", "usda-local", "Spices, cumin seed", 8, 0.7],
     ["Getrockneter Koriander", "llm-nutrient", null, 8, 0.35],
-    ["Kurkuma", "usda", "Spices, turmeric, ground", 2, 0.8],
+    ["Kurkuma", "usda-local", "Spices, turmeric, ground", 2, 0.8],
     ["Wasser", "bls", "Trinkwasser", 100, 0.8],
     ["Tomatenmark", "bls", "Tomatenmark", 70, 0.92],
     ["Kochsahne 15%", "llm-nutrient", null, 500, 0.35],
   ],
+  fixtureDeviations: {
+    // QUESTIONABLE, and recorded as such rather than accepted quietly. Production answered this
+    // with an LLM estimate (40 kcal). The local corpus makes USDA's chilli family reachable and
+    // ranking picks "Peppers, chili, green, canned" (168577, 21 kcal) over the record that is
+    // actually right — "Peppers, hot chili, green, raw" (170497, 40 kcal) — because the extra
+    // qualifier "hot" is penalised as an unexplained word while "canned" is not, and the
+    // ingredient states no preservation for the preservation gate to catch.
+    //
+    // This is the same pre-existing ranking weakness that puts sweet pepper ahead of hot chilli,
+    // surfacing on a new food now that the record is reachable at all. It is NOT fixed here:
+    // ranking is out of scope for this PR and belongs to the deferred ranking-design follow-up.
+    // Cost: Butter Chicken 2215.155 -> 2209.795 kcal, 554 -> 552 per serving (-0.24%).
+    "grüne Chilischoten": {
+      provider: "usda-local", record: "Peppers, chili, green, canned", confidence: 0.7,
+      why: "reachable locally, but ranking prefers the canned record over the raw one",
+    },
+  },
 }
 
 /**
@@ -415,7 +443,7 @@ export const BIG_MAC_SALAT: ProductionRecipe = {
     ["Salz", "bls", "Speisesalz/Siedesalz/Tafelsalz", 0.3, 0.75],
     ["Pfeffer", "bls", "Pfeffer schwarz, getrocknet", 0.4, 0.8],
     ["Paprikapulver", "llm-nutrient", null, 4, 0.35],
-    ["Knoblauchgewürz", "usda", "Spices, garlic powder", 4, 0.7],
+    ["Knoblauchgewürz", "usda-local", "Spices, garlic powder", 4, 0.7],
   ],
   fixtureDeviations: {
     // Production's BLS pick for this row was the 490 kcal "Salatmayonnaise (Fertigprodukt)",

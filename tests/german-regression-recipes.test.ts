@@ -52,13 +52,11 @@ beforeEach(() => {
   patchCalls.length = 0
   config.llm.enabled = false
   config.llm.apiKey = ""
-  config.usda.apiKey = ""
   vi.restoreAllMocks()
 })
 
 describe("realistic German recipes — end to end through the full pipeline", () => {
   it("Kartoffelsuppe (potato soup): resolves all generic ingredients, divides by recipeServings only, writes only nutrition/extras/tags", async () => {
-    config.usda.apiKey = "test-key"
     mockUsdaProvider({
       Kartoffel: { kcal: 77, protein: 2, carbs: 17, fat: 0.1 },
       Zwiebel: { kcal: 40, protein: 1.1, carbs: 9.3, fat: 0.1 },
@@ -120,7 +118,6 @@ describe("realistic German recipes — end to end through the full pipeline", ()
   })
 
   it("Hähnchen mit Reis: sodium is written to Mealie in milligrams, not raw internal grams", async () => {
-    config.usda.apiKey = "test-key"
     mockUsdaProvider({
       Hähnchenbrust: { kcal: 165, protein: 31, carbs: 0, fat: 3.6, sodiumMg: 74 },
       Reis: { kcal: 130, protein: 2.7, carbs: 28, fat: 0.3, sodiumMg: 1 },
@@ -146,7 +143,6 @@ describe("realistic German recipes — end to end through the full pipeline", ()
   })
 
   it("Salzkartoffeln with an unresolvable exotic main ingredient: nutrition is withheld, not silently reported as complete", async () => {
-    config.usda.apiKey = "test-key"
     // "vollkommen-unbekannte-zutat-xyz" deliberately has no USDA match — Kartoffel does, and
     // legitimately resolves, so the withholding is driven by the unresolved 600g, not by
     // everything failing to resolve.

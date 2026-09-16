@@ -39,7 +39,6 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
-  config.usda.retryBackoffMs = 1
   config.openFoodFacts.retryBackoffMs = 1
   config.mealieRecipeSource.enabled = true
   for (const k of Object.keys(served)) delete served[k]
@@ -73,7 +72,6 @@ async function run(fixture: ProductionRecipe): Promise<E2EResult> {
     classifications: fixture.classifications,
     llmGrams: fixture.llmGrams,
     llmNutrients: fixture.llmNutrients,
-    usda: USDA,
     // Production's OWN recorded verdicts, replayed. A stub with a fixed answer models a broken
     // judge, not this one: always-accept put "rote Chilischoten" on BLS's sweet-pepper record, and
     // always-decline lost the Ketchup, Pfeffer and Wasser that production resolved. Adversarial

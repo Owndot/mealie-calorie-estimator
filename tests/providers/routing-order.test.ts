@@ -4,8 +4,8 @@ import type { ProviderQuery } from "../../src/services/providers/types.js"
 
 /**
  * Full-chain routing-order tests: proves the exact sequencing required by the architecture —
- *   generic:  cache -> BLS -> OFF -> USDA (optional) -> LLM last
- *   branded:  cache -> OFF -> BLS -> USDA (optional) -> LLM last
+ *   generic:  cache -> BLS -> USDA local -> OFF -> LLM last
+ *   branded:  cache -> OFF -> BLS -> USDA local -> LLM last
  * — and specifically that a provider earlier in the chain producing an acceptable match means
  * every later provider is never even called (no wasted network calls / rate-limit spend).
  */
@@ -40,7 +40,7 @@ function fakeMatch(provider: string, overrides: Record<string, unknown> = {}) {
 /** Sets up fresh module mocks for all four providers, returning their lookup spies. */
 async function setupChainMocks(opts: {
   bls?: ReturnType<typeof vi.fn>
-  usda?: ReturnType<typeof vi.fn> | null // null = USDA_API_KEY unconfigured (factory returns null)
+  usda?: ReturnType<typeof vi.fn>
   off?: ReturnType<typeof vi.fn>
   llm?: ReturnType<typeof vi.fn>
   llmEnabled?: boolean
@@ -61,16 +61,12 @@ async function setupChainMocks(opts: {
     llmNutrientProvider: { name: "llm-nutrient", lookup: llmLookup },
   }))
 
-  if (opts.usda === null) {
-    vi.doMock("../../src/services/providers/usda-provider.js", () => ({
-      createUsdaProviderIfConfigured: () => null,
-    }))
-  } else {
-    const usdaLookup = opts.usda ?? vi.fn().mockResolvedValue(null)
-    vi.doMock("../../src/services/providers/usda-provider.js", () => ({
-      createUsdaProviderIfConfigured: () => ({ name: "usda", lookup: usdaLookup }),
-    }))
-  }
+  // USDA is now an always-present bundled database rather than a keyed optional service, so
+  // there is no "unconfigured" branch to model.
+  const usdaLookup = opts.usda ?? vi.fn().mockResolvedValue(null)
+  vi.doMock("../../src/services/providers/usda-local-provider.js", () => ({
+    usdaLocalProvider: { name: "usda-local", lookup: usdaLookup },
+  }))
 
   const { config } = await import("../../src/config.js")
   config.llm.enabled = opts.llmEnabled ?? false
@@ -83,7 +79,7 @@ async function setupChainMocks(opts: {
 describe("generic route — exact provider sequencing", () => {
   it("BLS accepted -> OFF and USDA are never called", async () => {
     const blsLookup = vi.fn().mockResolvedValue(fakeMatch("bls"))
-    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
+    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda-local"))
     const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
     const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup })
 
@@ -94,9 +90,23 @@ describe("generic route — exact provider sequencing", () => {
     expect(offLookup).not.toHaveBeenCalled()
   })
 
-  it("BLS miss -> OFF accepted -> USDA and LLM nutrient fallback are never called", async () => {
+  it("BLS miss -> USDA local accepted -> OFF and the LLM nutrient fallback are never called", async () => {
     const blsLookup = vi.fn().mockResolvedValue(null)
-    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
+    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda-local"))
+    const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
+    const llmLookup = vi.fn().mockResolvedValue(fakeMatch("llm-nutrient"))
+    const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup, llm: llmLookup, llmEnabled: true })
+
+    const result = await resolveNutrients(query(), "generic")
+
+    expect(result?.fallbackStatus).toBe("usda-local")
+    expect(offLookup).not.toHaveBeenCalled()
+    expect(llmLookup).not.toHaveBeenCalled()
+  })
+
+  it("BLS miss, USDA local miss -> OFF is tried and can be accepted", async () => {
+    const blsLookup = vi.fn().mockResolvedValue(null)
+    const usdaLookup = vi.fn().mockResolvedValue(null)
     const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
     const llmLookup = vi.fn().mockResolvedValue(fakeMatch("llm-nutrient"))
     const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup, llm: llmLookup, llmEnabled: true })
@@ -104,25 +114,12 @@ describe("generic route — exact provider sequencing", () => {
     const result = await resolveNutrients(query(), "generic")
 
     expect(result?.fallbackStatus).toBe("off")
-    expect(usdaLookup).not.toHaveBeenCalled()
-    expect(llmLookup).not.toHaveBeenCalled()
-  })
-
-  it("BLS miss, OFF miss -> USDA is tried and can be accepted", async () => {
-    const blsLookup = vi.fn().mockResolvedValue(null)
-    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
-    const offLookup = vi.fn().mockResolvedValue(null)
-    const llmLookup = vi.fn().mockResolvedValue(fakeMatch("llm-nutrient"))
-    const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup, llm: llmLookup, llmEnabled: true })
-
-    const result = await resolveNutrients(query(), "generic")
-
-    expect(result?.fallbackStatus).toBe("usda")
     expect(usdaLookup).toHaveBeenCalledTimes(1)
+    expect(offLookup).toHaveBeenCalledTimes(1)
     expect(llmLookup).not.toHaveBeenCalled()
   })
 
-  it("BLS, OFF, and USDA all miss -> the LLM nutrient fallback runs as the absolute last resort", async () => {
+  it("BLS, USDA local and OFF all miss -> the LLM nutrient fallback runs as the absolute last resort", async () => {
     const blsLookup = vi.fn().mockResolvedValue(null)
     const usdaLookup = vi.fn().mockResolvedValue(null)
     const offLookup = vi.fn().mockResolvedValue(null)
@@ -154,7 +151,7 @@ describe("generic route — exact provider sequencing", () => {
 describe("branded route — exact provider sequencing", () => {
   it("OFF accepted -> BLS, USDA, and the LLM nutrient fallback are never called", async () => {
     const blsLookup = vi.fn().mockResolvedValue(fakeMatch("bls"))
-    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
+    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda-local"))
     const offLookup = vi.fn().mockResolvedValue(fakeMatch("off"))
     const llmLookup = vi.fn().mockResolvedValue(fakeMatch("llm-nutrient"))
     const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup, llm: llmLookup, llmEnabled: true })
@@ -169,7 +166,7 @@ describe("branded route — exact provider sequencing", () => {
 
   it("OFF miss -> BLS -> USDA only if BLS also misses -> LLM only if all three fail", async () => {
     const blsLookup = vi.fn().mockResolvedValue(null)
-    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda"))
+    const usdaLookup = vi.fn().mockResolvedValue(fakeMatch("usda-local"))
     const offLookup = vi.fn().mockResolvedValue(null)
     const llmLookup = vi.fn().mockResolvedValue(fakeMatch("llm-nutrient"))
     const { resolveNutrients } = await setupChainMocks({ bls: blsLookup, usda: usdaLookup, off: offLookup, llm: llmLookup, llmEnabled: true })
@@ -178,7 +175,7 @@ describe("branded route — exact provider sequencing", () => {
 
     expect(offLookup).toHaveBeenCalledTimes(1)
     expect(blsLookup).toHaveBeenCalledTimes(1)
-    expect(result?.fallbackStatus).toBe("usda")
+    expect(result?.fallbackStatus).toBe("usda-local")
     expect(llmLookup).not.toHaveBeenCalled()
   })
 

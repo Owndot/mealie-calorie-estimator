@@ -1,13 +1,15 @@
-import { describe, it, expect, beforeEach, beforeAll, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, beforeAll, vi } from "vitest"
 import { estimateRecipe } from "../../src/services/estimator.js"
 import { config } from "../../src/config.js"
 import { initCache } from "../../src/utils/cache.js"
 import { __resetBlsDataForTests, __buildTestBlsData } from "../../src/services/providers/bls-provider.js"
-import { createUsdaProviderIfConfigured } from "../../src/services/providers/usda-provider.js"
+import { usdaLocalProvider } from "../../src/services/providers/usda-local-provider.js"
+import { useUsdaLocalFixture, useEmptyUsdaLocal, resetUsdaLocalFixture } from "../helpers/usda-local-fixture.js"
 import { buildQueryKey, setCachedProviderMatch } from "../../src/utils/cache.js"
 
 /** Mirrors USDA_MATCH_ALGORITHM_VERSION; a bump here must be mirrored, which is the point. */
-const USDA_CACHE_VERSION = "v18"
+// Mirrors usda-local-provider.ts: algorithm version + the bundled data's schema_version.
+const USDA_CACHE_VERSION = "v1/1"
 import type { MealieRecipe, MealieIngredient } from "../../src/types.js"
 
 /**
@@ -27,9 +29,10 @@ function recipe(name: string, slug: string): MealieRecipe {
 
 const kcalNutrients = (v: number) => [{ nutrientId: 1008, nutrientName: "Energy", unitName: "KCAL", value: v }]
 
-/** Routes one shared global fetch to whichever upstream the URL belongs to, and counts the calls. */
-function router(opts: { llm?: unknown[]; off?: unknown[]; usda?: unknown[] }) {
-  const calls = { llm: 0, off: 0, usda: 0 }
+/** Routes one shared global fetch to whichever upstream the URL belongs to, and counts the calls.
+ *  USDA is absent by design — it is a bundled file now, so there is no USDA request to route. */
+function router(opts: { llm?: unknown[]; off?: unknown[] }) {
+  const calls = { llm: 0, off: 0 }
   const fetchMock = vi.fn(async (url: any) => {
     const u = String(url)
     if (u.startsWith(config.llm.baseUrl)) {
@@ -39,10 +42,6 @@ function router(opts: { llm?: unknown[]; off?: unknown[]; usda?: unknown[] }) {
     if (u.startsWith(config.openFoodFacts.searchBaseUrl)) {
       calls.off++
       return new Response(JSON.stringify({ hits: opts.off ?? [] }), { status: 200, headers: { "content-type": "application/json" } })
-    }
-    if (u.startsWith(config.usda.baseUrl)) {
-      calls.usda++
-      return new Response(JSON.stringify({ foods: opts.usda ?? [] }), { status: 200, headers: { "content-type": "application/json" } })
     }
     return new Response("{}", { status: 200 })
   })
@@ -56,9 +55,12 @@ const classified = (index: number, de: string, en: string, core: string) => ({
 })
 
 beforeAll(async () => { await initCache() })
-beforeEach(() => {
-  config.usda.apiKey = "test-key"
-  config.usda.retryBackoffMs = 1
+afterEach(() => { resetUsdaLocalFixture() })
+beforeEach(async () => {
+  // USDA local is emptied for the same reason BLS is: it now sits ahead of OFF in the generic
+  // chain, so a real record would answer before OFF and these tests are about OFF. Tests that
+  // need a USDA record install their own fixture, which overrides this.
+  await useEmptyUsdaLocal()
   // BLS is emptied so it never answers first and mask the OFF/USDA behaviour under test.
   __resetBlsDataForTests(Promise.resolve(__buildTestBlsData([])))
   vi.restoreAllMocks()
@@ -119,12 +121,14 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
   // directly through the real cache API and calling the real provider, rather than by contriving a
   // recipe that cannot exist.
   it("a USDA candidate cached under validated English is rejected before reuse under German-only evidence", async () => {
-    const provider = createUsdaProviderIfConfigured()!
+    const provider = usdaLocalProvider
+    // A record that would match under healthy evidence, so "was it replayed?" is observable.
+    await useUsdaLocalFixture([{ fdcId: 173474, description: "Wild mint, fresh", kcal: 70, protein: 3.8, carbs: 14.9, fat: 0.9 }])
     // Mirrors the provider's key shape, including the attribute segment added with structured
     // food state — a bump here must be mirrored, which is the point of asserting it.
     const queryKey = buildQueryKey(`${USDA_CACHE_VERSION}:Bergminze|unknown|generic|unknown/unknown/-`, null)
-    setCachedProviderMatch("usda", queryKey, {
-      provider: "usda", providerId: "173474", productName: "Wild mint, fresh", brand: null,
+    setCachedProviderMatch("usda-local", queryKey, {
+      provider: "usda-local", providerId: "173474", productName: "Wild mint, fresh", brand: null,
       canonicalName: "Bergminze", state: "unknown", dataType: "SR Legacy",
       confidence: 0.6, matchReason: "fuzzy", foodType: "simple",
       nutrients: { kcalPer100g: 70, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
@@ -133,45 +137,48 @@ describe("cached USDA cannot bypass the stricter degraded identity gate", () => 
     } as any)
 
     // Healthy evidence: the validated core "mint" IS present in the cached name (whole token) -> reused as-is.
-    const healthyCalls = router({ usda: [] })
+    router({})
     const healthy = await provider.lookup({
       foodName: "Bergminze", structuredName: "Bergminze", brand: null, category: null, state: "unknown",
       foodType: "unknown", coreFoodGerman: null, coreFoodEnglish: "mint", route: "generic",
       evidence: { german: true, english: true, core: true, brand: false },
     } as any)
     expect(healthy?.providerId).toBe("173474")
-    expect(healthyCalls.usda).toBe(0) // served from cache
+    expect(healthy?.productName).toBe("Wild mint, fresh") // the CACHED name, replayed as-is
 
     // Degraded evidence: the gate becomes the structured name "Bergminze", which is absent from
     // "Peppermint, fresh" -> the cached entry is a true cache miss and a fresh lookup happens.
-    const degradedCalls = router({ usda: [] })
+    router({})
     const degraded = await provider.lookup({
       foodName: "Bergminze", structuredName: "Bergminze", brand: null, category: null, state: "unknown",
       foodType: "unknown", coreFoodGerman: null, coreFoodEnglish: null, route: "generic",
       evidence: { german: true, english: false, core: false, brand: false },
     } as any)
-    expect(degraded).toBeNull()              // cached candidate NOT replayed
-    expect(degradedCalls.usda).toBeGreaterThan(0) // it re-queried instead
+    // The cached candidate is NOT replayed; the provider re-ranks and finds nothing acceptable
+    // under the narrower degraded gate. With no network left, "it re-queried" is observable as
+    // "it did not return the cached row".
+    expect(degraded).toBeNull()
   })
 
   it("a degraded structured-English match may be cached and later reused by a healthy lookup", async () => {
-    const USDA_HIT = [{ fdcId: 748608, description: "Olive oil", dataType: "SR Legacy", foodNutrients: kcalNutrients(884) }]
-
     // --- degraded first: structured English passes the strict structured-name gate
+    await useUsdaLocalFixture([{ fdcId: 748608, description: "Olive oil", kcal: 884, fat: 100 }])
     config.llm.enabled = false
     config.llm.apiKey = ""
-    const first = router({ usda: USDA_HIT })
+    router({})
     const r1 = await estimateRecipe(recipe("olive oil", "usda-deg-first"))
-    expect(first.usda).toBeGreaterThan(0)
-    expect(r1!.matchedIngredients[0].provider).toBe("usda")
+    expect(r1!.matchedIngredients[0].provider).toBe("usda-local")
     expect(r1!.matchedIngredients[0].providerId).toBe("748608")
 
-    // --- healthy afterwards: same query text, still compatible -> served from cache, no new call
+    // --- healthy afterwards: same query text, still compatible -> served from cache.
+    // The database is swapped for an EMPTY one first, so a second answer of 748608 can only have
+    // come from the cache. With no network to count, this is the proof that replaces the old
+    // "zero USDA requests" assertion.
+    await useEmptyUsdaLocal()
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
-    const second = router({ llm: [classified(0, "Olivenöl", "olive oil", "oil")], usda: USDA_HIT })
+    router({ llm: [classified(0, "Olivenöl", "olive oil", "oil")] })
     const r2 = await estimateRecipe(recipe("olive oil", "usda-deg-then-healthy"))
     expect(r2!.matchedIngredients[0].providerId).toBe("748608")
-    expect(second.usda).toBe(0)                       // reused, no redundant lookup
   })
 })

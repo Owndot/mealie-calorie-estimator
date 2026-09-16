@@ -4,53 +4,39 @@ import { config } from "../../src/config.js"
 
 describe("getProviderChain — routing-aware, not a single global chain", () => {
   beforeEach(() => {
-    config.usda.apiKey = ""
     config.llm.enabled = false
     config.llm.apiKey = ""
   })
 
-  it("generic route is BLS, then OFF, then USDA last among structured databases", () => {
-    // Explicit routing spec: generic = cache -> BLS -> OFF -> USDA -> LLM. OFF precedes USDA on
-    // this route deliberately (not the other way round) — it is only skipped when BLS already
-    // produced an acceptable match.
-    config.usda.apiKey = "some-key"
+  it("generic route is BLS, then the local USDA database, then OFF", () => {
+    // USDA precedes OFF here: it is a generic-food database answering a generic question, while
+    // OFF is branded product-label data. Both are always present — USDA used to be conditional on
+    // an API key, and there is no key any more.
     const chain = getProviderChain("generic").map((p) => p.name)
-    expect(chain).toEqual(["mealie-recipe", "bls", "off", "usda"])
+    expect(chain).toEqual(["mealie-recipe", "bls", "usda-local", "off"])
   })
 
-  it("generic route is [bls, off] when USDA is unconfigured — BLS is bundled, OFF is the final DB fallback", () => {
-    const chain = getProviderChain("generic")
-    expect(chain.map((p) => p.name)).toEqual(["mealie-recipe", "bls", "off"])
-  })
-
-  it("branded route starts with OFF, then falls back to BLS, then USDA when configured", () => {
-    config.usda.apiKey = "some-key"
+  it("branded route starts with OFF, then BLS, then the local USDA database", () => {
     const chain = getProviderChain("branded")
-    expect(chain.map((p) => p.name)).toEqual(["mealie-recipe", "off", "bls", "usda"])
+    expect(chain.map((p) => p.name)).toEqual(["mealie-recipe", "off", "bls", "usda-local"])
   })
 
-  it("branded route is [off, bls] when USDA is unconfigured — no filler provider for USDA specifically", () => {
-    config.usda.apiKey = ""
-    const chain = getProviderChain("branded")
-    expect(chain.map((p) => p.name)).toEqual(["mealie-recipe", "off", "bls"])
+  it("never contains the removed live FoodData Central provider", () => {
+    // The API path is gone, not disabled. A chain entry named "usda" would mean it came back.
+    for (const route of ["generic", "branded"] as const) {
+      expect(getProviderChain(route).map((p) => p.name)).not.toContain("usda")
+    }
   })
 
-  it("does not include a USDA entry — dummy or real — when USDA_API_KEY is unset", () => {
-    config.usda.apiKey = ""
-    const generic = getProviderChain("generic")
-    const branded = getProviderChain("branded")
-    expect(generic.map((p) => p.name)).not.toContain("usda")
-    expect(branded.map((p) => p.name)).not.toContain("usda")
-  })
-
-  it("includes a real USDA provider, after BLS and OFF, only once USDA_API_KEY is configured", () => {
-    config.usda.apiKey = "some-key"
-    const generic = getProviderChain("generic")
-    expect(generic.map((p) => p.name)).toEqual(["mealie-recipe", "bls", "off", "usda"])
+  it("includes USDA unconditionally — it is a bundled file, not a keyed network service", () => {
+    // The old chain silently lost USDA whenever USDA_API_KEY was unset, which is how a
+    // misconfigured deployment quietly ran with one fewer database.
+    for (const route of ["generic", "branded"] as const) {
+      expect(getProviderChain(route).map((p) => p.name)).toContain("usda-local")
+    }
   })
 
   it("never includes a local hand-authored nutrition dataset (BLS is real bundled data, not hand-authored)", () => {
-    config.usda.apiKey = "some-key"
     const generic = getProviderChain("generic")
     const branded = getProviderChain("branded")
     expect(generic.map((p) => p.name)).not.toContain("local-generic")
@@ -70,7 +56,6 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
   })
 
   it("appends the LLM provider last on both routes when LLM is enabled and configured", () => {
-    config.usda.apiKey = "some-key"
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
     const generic = getProviderChain("generic")
@@ -79,11 +64,11 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     expect(branded[branded.length - 1].name).toBe("llm-nutrient")
   })
 
-  it("BLS, then OFF, then LLM on the generic route when USDA is unconfigured but LLM is enabled", () => {
-    config.usda.apiKey = ""
+  it("appends the LLM last on the generic route when it is enabled", () => {
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
-    expect(getProviderChain("generic").map((p) => p.name)).toEqual(["mealie-recipe", "bls", "off", "llm-nutrient"])
+    expect(getProviderChain("generic").map((p) => p.name))
+      .toEqual(["mealie-recipe", "bls", "usda-local", "off", "llm-nutrient"])
   })
 
   it("does not include the LLM provider when enabled but no API key is set", () => {

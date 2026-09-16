@@ -6,10 +6,6 @@ describe("rate-limiter", () => {
     await expect(waitForRateLimit(RateLimitType.Search)).resolves.toBeUndefined()
   })
 
-  it("handles the USDA rate limit type", async () => {
-    await expect(waitForRateLimit(RateLimitType.Usda)).resolves.toBeUndefined()
-  })
-
   it("allows multiple requests sequentially", async () => {
     for (let i = 0; i < 3; i++) {
       await expect(waitForRateLimit(RateLimitType.Search)).resolves.toBeUndefined()
