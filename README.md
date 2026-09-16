@@ -194,9 +194,13 @@ light. These claims are treated as first-class, separately from food identity:
   claim is remembered and the chain continues; the first provider that *satisfies* the claim wins
   outright. So `Mayo Light` passes BLS's full-fat records and takes USDA's `Mayonnaise, light`.
 - **A database match is not automatically better than an estimate.** When no provider satisfies the
-  claim, the estimate made from the whole phrase is used in preference to a record that
-  demonstrably fails it — measured, nothing in BLS or USDA is lean mince, so `mageres
-  Rinderhackfleisch` is better served at ~176 kcal/100 g than by a 224 kcal record.
+  claim, the estimate made from the whole phrase — `mager` included, rather than dropped — is used
+  in preference to a record that demonstrably fails it. Measured, nothing in BLS or USDA is lean
+  mince: BLS's is 224 kcal at 16.4% fat, USDA's family tops out *fattier* at 80/20, and BLS's one
+  genuinely lean record is `Tatar/Schabefleisch`, a different product. The estimate is an estimate —
+  it carries the 0.35 confidence floor and names no record, because nothing verified it. It is
+  preferred here only because the alternative is a number that is known to be wrong.
+  If the estimate is unavailable too, the flagged 224 kcal record is used, still flagged.
 - **Whatever is chosen says what it lacks.** `unmetAttributes` travels into provenance, caps
   confidence, and is what recipe-level match quality explains.
 

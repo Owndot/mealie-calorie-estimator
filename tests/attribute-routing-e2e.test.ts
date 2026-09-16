@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vite
 import { config } from "../src/config.js"
 import { initCache, setCachedProviderMatch, getCachedProviderMatch, buildQueryKey, __clearProviderCachesForTests } from "../src/utils/cache.js"
 import { recipe, runPipeline, row, type ClassificationStub, type E2EOptions } from "./helpers/e2e-pipeline.js"
-import type { ProviderMatch, NutrientSet } from "../src/types.js"
+import { MealieRecipeProvider, __resetRecipeIndexForTests } from "../src/services/providers/mealie-recipe-provider.js"
+import { UNKNOWN_ATTRIBUTES, type ProviderMatch, type NutrientSet } from "../src/types.js"
 
 /**
  * MATERIAL NUTRITIONAL ATTRIBUTES must steer provider selection, not merely annotate it.
@@ -12,6 +13,25 @@ import type { ProviderMatch, NutrientSet } from "../src/types.js"
  * record anyway, because the chain stopped at the first provider that returned anything. At 400 g
  * the beef is ~35% of its recipe, so that is a calorie error, not a labelling one.
  */
+/**
+ * Mealie is mocked for the whole file. The recipe provider sits first in the chain and was
+ * reaching for a real host on every single lookup, so each test logged an ENOTFOUND and paid a DNS
+ * timeout for it. `served` starts empty, which is the same answer ("no such recipe") without the
+ * network.
+ */
+const served: Record<string, unknown> = {}
+vi.mock("../src/services/mealie-client.js", () => ({
+  listRecipeNames: vi.fn(async () => Object.entries(served).map(([slug, r]) => ({ slug, name: (r as { name: string }).name }))),
+  getRecipe: vi.fn(async (slug: string) => {
+    if (!served[slug]) throw new Error(`404 ${slug}`)
+    return served[slug]
+  }),
+  getRecipeHouseholdId: vi.fn(() => null),
+  patchRecipe: vi.fn(async () => {}),
+  getOrCreateTags: vi.fn(async () => []),
+  getAllRecipes: vi.fn(async () => Object.keys(served)),
+}))
+
 beforeAll(async () => {
   await initCache()
 })
@@ -66,10 +86,19 @@ describe("a stated nutritional attribute steers which provider is used", () => {
       category: "condiment", foodType: "processed_single_food",
     }, { usda: USDA })
 
-    expect(r.provider).toBe("usda")
-    expect(r.productName).toMatch(/light/i)
-    expect(r.kcalPer100g!).toBeLessThan(300)
-    expect(r.unmetAttributes ?? []).toEqual([])
+    // The complete provenance row. `unmetAttributes` empty is the load-bearing field: BLS's record
+    // was kept as a shortfall carrying ["reduced-fat"], and the accepted USDA record must not
+    // inherit it — a caveat that outlives the thing it was about is worse than none.
+    expect({
+      provider: r.provider, productName: r.productName, kcalPer100g: r.kcalPer100g,
+      grams: r.grams, confidence: r.confidence, matchReason: r.matchReason,
+      llmReranked: r.llmReranked, unmetAttributes: r.unmetAttributes,
+      requestedFatPercent: r.requestedFatPercent,
+    }).toEqual({
+      provider: "usda", productName: "Mayonnaise, light", kcalPer100g: 238,
+      grams: 12, confidence: 0.8, matchReason: "fuzzy",
+      llmReranked: false, unmetAttributes: [], requestedFatPercent: null,
+    })
     // A satisfied attribute means no caveat and no confidence cap.
     expect(r.confidence!).toBeGreaterThan(0.6)
   })
@@ -79,14 +108,35 @@ describe("a stated nutritional attribute steers which provider is used", () => {
     // FATTIER than BLS. BLS's genuinely lean record is filed as "Tatar/Schabefleisch" (115 kcal,
     // 3% fat), a different product, and is deliberately not substituted. So nothing in either
     // database is lean mince, and the estimate made from the whole phrase is the better answer.
+    //
+    // 176 IS THIS STUB'S OWN NUMBER. It is what the line below tells the fake LLM to say, chosen as
+    // a plausible figure for lean mince; no database was consulted for it and nothing in the system
+    // verifies it. What the test asserts is the ROUTING — that the whole phrase including "mager"
+    // reaches the estimator and its answer is used — not that lean mince is 176 kcal. The recorded
+    // confidence says the same thing: 0.35, the floor for an estimate, against 0.85 for a database
+    // record. Read any quoted 176 as "whatever the model answers here", never as a measurement.
     const { r } = await one("mageres Rinderhackfleisch", 400, "Gramm", {
       canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef",
       coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef",
       state: "raw", category: "meat",
     }, { usda: USDA, llmNutrients: { "lean ground beef": { kcal: 176, protein: 20, carbs: 0, fat: 10 } } })
 
-    expect(r.provider).toBe("llm-nutrient")
-    expect(r.kcalPer100g).toBe(176)
+    // The complete provenance row, pinned field by field.
+    expect({
+      provider: r.provider, productName: r.productName, providerId: r.providerId,
+      kcalPer100g: r.kcalPer100g, grams: r.grams, confidence: r.confidence,
+      matchReason: r.matchReason, llmReranked: r.llmReranked, rerankReason: r.rerankReason,
+      unmetAttributes: r.unmetAttributes, requestedFatPercent: r.requestedFatPercent,
+    }).toEqual({
+      provider: "llm-nutrient",
+      // No record, because there is no record: an estimate names no database row, and saying so is
+      // the point. Unknown is not zero and not a citation.
+      productName: null, providerId: null,
+      kcalPer100g: 176, grams: 400, confidence: 0.35,
+      matchReason: null, llmReranked: false, rerankReason: null,
+      // Empty because the estimate was made FROM the claim — there is nothing left unmet.
+      unmetAttributes: [], requestedFatPercent: null,
+    })
     expect(r.productName ?? "").not.toMatch(/Tatar|Schabefleisch/)
   })
 
@@ -216,5 +266,60 @@ describe("cached provenance round-trips exactly", () => {
     expect(read.matchReason).toBe("fuzzy")
     expect(read.llmReranked).toBeUndefined()
     expect(read.unmetAttributes).toBeUndefined()
+  })
+
+  it("keeps a homemade-ingredient match out of the provider cache entirely", async () => {
+    // `sourceRecipeSlug`/`sourceRecipeFingerprint` are NOT part of the cached provenance blob, and
+    // must not need to be: the recipe provider reads the source recipe on every lookup and never
+    // writes to provider_match_cache, so the fingerprint that invalidates a dependent recipe is
+    // recomputed rather than remembered. This pins that, because caching such a match without
+    // extending serializeProvenance would silently freeze a dependent recipe's nutrition at
+    // whatever the source said the first time.
+    __clearProviderCachesForTests()
+    served["tikka-paste"] = {
+      slug: "tikka-paste", name: "Tikka-Paste", recipeYield: "g", recipeYieldQuantity: 800,
+      recipeServings: 1, recipeIngredient: [], tags: [], extras: null,
+      nutrition: { calories: "2872.68" },
+    }
+    __resetRecipeIndexForTests()
+
+    const match = await new MealieRecipeProvider().lookup({
+      foodName: "tikka paste", structuredName: "Tikka-Paste", canonicalGerman: "Tikka-Paste",
+      brand: null, state: "unknown", foodType: "simple", attributes: UNKNOWN_ATTRIBUTES,
+    } as never)
+
+    expect(match?.sourceRecipeSlug).toBe("tikka-paste")
+    expect(match?.sourceRecipeFingerprint).toEqual(expect.any(String))
+    expect(getCachedProviderMatch("mealie-recipe", buildQueryKey("tikka paste", null))).toBeUndefined()
+
+    delete served["tikka-paste"]
+    __resetRecipeIndexForTests()
+  })
+})
+
+describe("the provenance written back to Mealie carries every attribute field", () => {
+  // The provider cache is one hop; the extras blob on the recipe is the one a user (and the next
+  // run) actually reads. requestedFatPercent and sourceRecipeSlug live only here — neither is a
+  // ProviderMatch field — so this is the only place their survival can be asserted.
+  it("emits matchReason, llmReranked, rerankReason, unmetAttributes, requestedFatPercent and sourceRecipeSlug", async () => {
+    const result = await runPipeline(recipe("provenance-writeback", 2, [
+      [400, "Gramm", "mageres Rinderhackfleisch"], [500, "Gramm", "Kochsahne 15%"],
+    ]), {
+      classifications: [
+        { index: 0, canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef", coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef", state: "raw", category: "meat" },
+        { index: 1, canonicalGerman: "Kochsahne 15 % Fett", canonicalEnglish: "cooking cream 15% fat", coreFoodGerman: "Sahne", coreFoodEnglish: "cream", fatPercent: 15, category: "dairy", foodType: "processed_single_food" },
+      ],
+      usda: USDA,
+      llmNutrients: { "cooking cream 15% fat": { kcal: 150, protein: 3, carbs: 4, fat: 15 } },
+    })
+
+    const beef = row(result, "mageres Rinderhackfleisch")
+    expect(beef.unmetAttributes).toEqual(["reduced-fat"])
+    expect(beef.matchReason).toBeTruthy()
+
+    const cream = row(result, "Kochsahne 15%")
+    expect(cream.requestedFatPercent).toBe(15)
+    // An ingredient that states no percentage must report null, not 0 — "unknown" is not "zero".
+    expect(beef.requestedFatPercent).toBeNull()
   })
 })

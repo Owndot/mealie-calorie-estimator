@@ -34,8 +34,10 @@ function toFallbackStatus(providerName: string): FallbackStatus {
  * the only thing that mattered. Two production cases showed why that is not enough:
  *
  *   "mageres Rinderhackfleisch" -> BLS "Rind Hackfleisch, roh", unmetAttributes ["reduced-fat"].
- *      Correct base food, explicit "mager" dropped, 224 kcal/100 g against roughly 176 for real
- *      lean mince — and at 400 g that ingredient is ~35% of the recipe.
+ *      Correct base food, explicit "mager" dropped, 224 kcal/100 g at 16.4% fat — and at 400 g that
+ *      ingredient is ~35% of the recipe. Nothing in BLS or USDA is lean mince (USDA's family tops
+ *      out fattier still, and BLS's lean record is Tatar, a different product), so what this buys
+ *      is not a better record but the chance to ask for an estimate of the whole phrase instead.
  *   "Mayo Light" -> BLS "Salatmayonnaise", unmetAttributes ["reduced-fat"], while USDA holds an
  *      actual "Mayonnaise, light" record at 238 kcal against BLS's 490.
  *
