@@ -660,6 +660,27 @@ export function sharesFullQueryIdentity(
   return identity.every((t) => !coreIdentityConflict(t, candidateName, mode))
 }
 
+/**
+ * True when a multi-word core is only partly present in the candidate name.
+ *
+ * "chili pepper" against "Peppers, sweet, red, raw" matches the generic head and loses the word
+ * that carried the identity — which is how a chili became a sweet bell pepper in production, right
+ * after BLS's own reranker had declined its chili candidates. A single-word core is excluded: the
+ * core gate already requires it outright, and demanding more would fire on every ordinary match.
+ *
+ * This is a question, not a verdict: it only asks a semantic judge to look. "bell pepper" against
+ * "Peppers, sweet, raw" is the same shape and IS correct, which is precisely why the decision
+ * belongs to a judge rather than another lexical rule. Lives here, rather than inside one
+ * provider, because it is now also the judge's suspicion signal — see judge/judge-need.ts.
+ */
+export function answersOnlyPartOfCore(core: string | null | undefined, candidateName: string): boolean {
+  const coreTokens = tokenize(core ?? "").filter((t) => t.length >= 3 && !GENERIC_DESCRIPTOR_WORDS.has(t))
+  if (coreTokens.length < 2) return false
+  const candidate = tokenize(candidateName)
+  const matched = coreTokens.filter((c) => candidate.some((t) => t === c || t === `${c}s` || c === `${t}s`))
+  return matched.length > 0 && matched.length < coreTokens.length
+}
+
 /** The distinct plant parts a candidate set offers — the ambiguity evidence specificityConflict() needs. */
 export function availablePlantParts(candidateNames: Iterable<string>): Set<PlantPart> {
   const parts = new Set<PlantPart>()

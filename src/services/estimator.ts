@@ -8,6 +8,7 @@ import { convertToGrams } from "./unit-converter.js"
 import { evidenceFor } from "./identity-evidence.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
+import { judgeNeed } from "./providers/judge/judge-need.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
 import { estimateGrams } from "./llm-estimator.js"
 import { computeNutritionFingerprint } from "./nutrition-format.js"
@@ -324,12 +325,28 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       route,
     )
 
+    // Judge ELIGIBILITY, computed for every resolution attempt whether or not the judge is
+    // enabled. It is a pure, local function of the classification and the outcome — no request,
+    // no pool construction — so recording it costs nothing and lets the trigger be validated
+    // against real recipes before any behaviour depends on it. See judge/judge-need.ts.
+    const need = judgeNeed({
+      structuredName: ing.foodName,
+      canonicalEnglish,
+      coreFoodEnglish,
+      attributes: classification?.attributes ?? UNKNOWN_ATTRIBUTES,
+      foodType,
+      match: resolved?.match ?? null,
+      fallbackStatus: resolved?.fallbackStatus ?? "unresolved",
+    })
+    const judgeTrigger = need ? need.reasons.join(",") : null
+
     if (!resolved) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
         name: ing.foodName, canonicalName: canonicalEnglish, brand, route, grams, gramsEstimated,
         matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
+        judgeTrigger,
       })
       continue
     }
@@ -361,6 +378,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       requestedFatPercent: classification?.attributes?.fatPercent ?? null,
       sourceRecipeSlug: resolved.match.sourceRecipeSlug ?? null,
       sourceRecipeFingerprint: resolved.match.sourceRecipeFingerprint ?? null,
+      judgeTrigger,
       // A reranked match DID involve the LLM, even though its nutrients came from a database.
       llmParticipated: (classification?.llmClassified ?? false)
         || resolved.fallbackStatus === "llm-nutrient"
@@ -582,6 +600,15 @@ export function buildNutritionPatch(
     unmetAttributes: i.unmetAttributes ?? [],
     requestedFatPercent: i.requestedFatPercent ?? null,
     sourceRecipeSlug: i.sourceRecipeSlug ?? null,
+    // Judge observability. judgeTrigger is present whenever something about this ingredient is
+    // semantically unresolved; the rest stay null until the judge is enabled and actually runs.
+    judgeTrigger: i.judgeTrigger ?? null,
+    judgeVerdict: i.judgeVerdict ?? null,
+    judgeReason: i.judgeReason ?? null,
+    judgeCandidates: i.judgeCandidates ?? null,
+    judgePoolFingerprint: i.judgePoolFingerprint ?? null,
+    judgeModel: i.judgeModel ?? null,
+    judgePromptVersion: i.judgePromptVersion ?? null,
     grams: i.grams,
     gramsEstimated: i.gramsEstimated,
     matched: i.matched,
