@@ -60,6 +60,8 @@ export interface E2ERow {
   llmReranked: boolean
   rerankReason: string | null
   matchReason: string | null
+  unmetAttributes: string[]
+  requestedFatPercent: number | null
 }
 
 export interface E2EResult {
@@ -183,6 +185,8 @@ export async function runPipeline(r: MealieRecipe, options: E2EOptions = {}): Pr
     llmReranked: i.llmReranked ?? false,
     rerankReason: i.rerankReason ?? null,
     matchReason: i.matchReason ?? null,
+    unmetAttributes: i.unmetAttributes ?? [],
+    requestedFatPercent: i.requestedFatPercent ?? null,
   }))
 
   return {

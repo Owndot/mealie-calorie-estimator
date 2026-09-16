@@ -181,6 +181,31 @@ See [`.env.example`](./.env.example) for the full list, including rate-limit and
 
 Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
 
+### Material nutritional attributes steer provider selection
+
+A candidate can be the right *food* and still be the wrong *product*. `mageres Rinderhackfleisch`
+is ground beef; a 16% fat record is not lean. `Mayo Light` is mayonnaise; a 750 kcal record is not
+light. These claims are treated as first-class, separately from food identity:
+
+- **Identity is the hard requirement.** Nothing here can promote a candidate the semantic gates
+  rejected — this only chooses between records that are already the right food. `lean ground beef`
+  never becomes an unrelated low-fat meat just because it is lean.
+- **A shortfall no longer ends the search.** A record that matches the identity but drops a stated
+  claim is remembered and the chain continues; the first provider that *satisfies* the claim wins
+  outright. So `Mayo Light` passes BLS's full-fat records and takes USDA's `Mayonnaise, light`.
+- **A database match is not automatically better than an estimate.** When no provider satisfies the
+  claim, the estimate made from the whole phrase is used in preference to a record that
+  demonstrably fails it — measured, nothing in BLS or USDA is lean mince, so `mageres
+  Rinderhackfleisch` is better served at ~176 kcal/100 g than by a 224 kcal record.
+- **Whatever is chosen says what it lacks.** `unmetAttributes` travels into provenance, caps
+  confidence, and is what recipe-level match quality explains.
+
+Explicit percentages (`Kochsahne 15%`, `Joghurt 1,5%`) survive from the raw Mealie text into
+provenance as `requestedFatPercent`, and a mismatched percentage is a hard conflict — a 15% cream
+never becomes a 30% one. Values are **never interpolated** between neighbouring records: BLS's
+nearest creams are a 10% coffee cream and a 20% *soured* Schmand, which are not the same product
+family, and false precision is worse than an honest estimate.
+
 ### Your own recipes as an ingredient source
 
 A recipe that is itself an ingredient — a curry paste, a spice mix, a stock — is the one food a
@@ -282,6 +307,8 @@ its existing values and meaning, so these are purely additive:
 | `calorie_estimator_match_quality` | `high`, `mixed`, or `low` — confidence in the chosen records, weighted by each ingredient's share of the recipe's calories rather than by ingredient count |
 | `calorie_estimator_match_quality_reason` | present when the grade is not `high`; names the ingredient or the weighted figure responsible |
 | `calorie_estimator_low_confidence` | JSON array of matched ingredients that need a caveat — a low-confidence record, a dropped nutritional claim, or an estimated weight |
+| `calorie_estimator_provenance[].unmetAttributes` | nutritional claims the ingredient made that the chosen record does not answer |
+| `calorie_estimator_provenance[].requestedFatPercent` | the fat percentage the ingredient stated, if any |
 | `calorie_estimator_recipe_sources` | JSON map of source recipe slug → nutrition fingerprint, for ingredients drawn from your own recipes |
 
 Confidence is based on **semantic evidence**, not lexical similarity: a record that passed every

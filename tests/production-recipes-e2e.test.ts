@@ -181,6 +181,17 @@ describe("Big Mac Salat (the condiment cases)", () => {
       ],
       // A model that would accept anything: the gates, not the judge, must hold the line.
       rerank: () => '{"selected":1,"confidence":0.95,"reason":"close enough"}',
+      // The real USDA pages for the two ingredients that carry an explicit reduced-fat claim.
+      usda: {
+        "lean ground beef": [
+          { fdcId: 2514744, description: "Beef, ground", dataType: "Survey (FNDDS)", foodCategory: "Meat, Poultry, Fish", foodNutrients: kcal(261, 16.82) },
+          { fdcId: 174032, description: "Beef, ground, 80% lean meat / 20% fat, raw", dataType: "SR Legacy", foodCategory: "Beef Products", foodNutrients: kcal(254, 20) },
+        ],
+        "light mayonnaise": [
+          { fdcId: 2345678, description: "Mayonnaise, light", dataType: "Survey (FNDDS)", foodCategory: "Fats and Oils", foodNutrients: kcal(238, 22.22) },
+        ],
+      },
+      llmNutrients: { "lean ground beef": { kcal: 176, protein: 20, carbs: 0, fat: 10 } },
     })
 
     // eslint-disable-next-line no-console
@@ -189,9 +200,18 @@ describe("Big Mac Salat (the condiment cases)", () => {
     expect(row(r, "Nudeln").productName).toMatch(/Teigwaren/)
     expect(row(r, "Senf").productName ?? "").not.toMatch(/süß/)
     expect(row(r, "Gurkenwasser").productName ?? "").not.toMatch(/saft|Gurke roh/i)
-    // The lean claim BLS cannot answer is reported rather than pretended away.
-    expect(row(r, "mageres Rinderhackfleisch").confidence!).toBeLessThanOrEqual(0.6)
-    expect(r.lowConfidence).toContain("mageres Rinderhackfleisch")
+    // USDA holds a real light mayonnaise where BLS holds only full-fat ones, so the explicit claim
+    // now decides which provider is used.
+    const mayo = row(r, "Mayo Light")
+    expect(mayo.provider).toBe("usda")
+    expect(mayo.productName).toMatch(/light/i)
+    expect(mayo.unmetAttributes).toEqual([])
+
+    // Nothing in either database is lean mince — BLS's is 16.4% fat, USDA's family tops out at
+    // 20% — so the estimate made from the whole phrase is used instead of quietly dropping "mager".
+    const beef = row(r, "mageres Rinderhackfleisch")
+    expect(beef.provider).toBe("llm-nutrient")
+    expect(beef.kcalPer100g).toBe(176)
   })
 })
 

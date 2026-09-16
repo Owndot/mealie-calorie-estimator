@@ -351,6 +351,11 @@ export class UsdaProvider implements NutrientProvider {
       return null
     }
 
+    // The same attribute shortfall BLS reports. Without it a USDA record looked fully compatible
+    // and ended the chain, which is how "Beef, ground" (261 kcal, no lean claim) would have been
+    // accepted for "lean ground beef".
+    const unmet = unmetModifierFamilies(query.structuredName ?? query.foodName, food.description)
+
     const match: ProviderMatch = {
       nutrients,
       canonicalName: query.foodName,
@@ -372,6 +377,7 @@ export class UsdaProvider implements NutrientProvider {
         ? "llm-reranked"
         : query.foodName.trim().toLowerCase() === food.description.trim().toLowerCase() ? "exact-name" : "fuzzy",
       ...(top.rerankConfidence !== undefined ? { llmReranked: true as const, rerankReason: top.rerankReason ?? null } : {}),
+      ...(unmet.length > 0 ? { unmetAttributes: unmet } : {}),
     }
 
     setCachedProviderMatch(this.name, queryKey, match)
