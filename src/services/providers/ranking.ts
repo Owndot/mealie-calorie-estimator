@@ -4,7 +4,7 @@ import { evidenceKey, type IdentityEvidence } from "../identity-evidence.js"
 import {
   GERMAN_DESCRIPTOR_WORDS, compoundSpecifier, compoundMatchesTokens, absenceMarkerStem, germanStem, germanTokenMatches,
   formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, inferAttributesFromName, compoundSegments,
-  derivedProductConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, unmetModifierFamilies, type PlantPart,
+  derivedProductConflict, carrierConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, unmetModifierFamilies, type PlantPart,
 } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
@@ -252,11 +252,29 @@ export type CoreMatchMode = "compound" | "token"
  * "peppermints", "rice" vs "liquorice" — in each of those the candidate is a DIFFERENT word that
  * merely ends with the core, which no plural rule can turn into a match.
  */
-function englishTokenMatches(core: string, token: string): boolean {
+export function englishTokenMatches(core: string, token: string): boolean {
   if (core === token) return true
   if (token === `${core}s` || core === `${token}s`) return true
   if (token === `${core}es` || core === `${token}es`) return true
   return false
+}
+
+/**
+ * Every spelling englishTokenMatches() would accept for `token`, so a caller working from a token
+ * INDEX (rather than comparing pairs) can be exactly as tolerant as this gate.
+ *
+ * Retrieval needed this. USDA's local retrieval asked `tokenSet.has(t)` — exact membership — while
+ * the identity gate it feeds has always understood singular/plural. Measured in production: the
+ * classifier returned canonicalEnglish "black bean" and coreFoodEnglish "bean" (both singular),
+ * so the token "beans" never entered the wanted set, and the retrieved pool differed from the
+ * plural spelling's by 209 records. That is retrieval deciding identity, which is precisely what
+ * retrieval must never do.
+ */
+export function englishTokenSpellings(token: string): string[] {
+  const out = [token, `${token}s`, `${token}es`]
+  if (token.endsWith("es")) out.push(token.slice(0, -2))
+  if (token.endsWith("s")) out.push(token.slice(0, -1))
+  return out
 }
 
 export function coreIdentityConflict(
@@ -590,6 +608,12 @@ export function specificityConflict(
     return `derived-product conflict: "${queryFoodName}" names a seasoning/liquid/concentrate the candidate is not ("${candidateName}")`
   }
 
+  // Same family of failure, the other half of the identity: the candidate is the right KIND of
+  // derived product but names nothing of what it was derived FROM. See carrierConflict().
+  if (carrierConflict(queryFoodName, candidateName, GENERIC_DESCRIPTOR_WORDS)) {
+    return `carrier conflict: "${queryFoodName}" is derived from a source the candidate never names ("${candidateName}")`
+  }
+
   const part = standalonePlantPart(candidateName)
   if (part && availableParts.size > 1 && (queryAttributes?.form ?? "unknown") === "unknown") {
     // The query named no part but is one of several — never invent which one.
@@ -599,6 +623,41 @@ export function specificityConflict(
     }
   }
   return null
+}
+
+/**
+ * True when the candidate name accounts for EVERY substantive word of the query's identity, not
+ * merely one core token.
+ *
+ * Only ever used to decide which candidates may act as AMBIGUITY EVIDENCE for the plant-part rule
+ * in specificityConflict(). The core gate alone proved too coarse for that job. Measured in
+ * production: for "black bean" (core "bean") the retrieved pool contained exactly one leaf record —
+ * "Winged bean leaves, raw" — which passes the core gate on the shared word "bean". That single
+ * unrelated record made availablePlantParts() report seed AND leaf, the plant-part rule then
+ * hard-rejected every "…mature seeds…" record including the correct "Beans, black, mature seeds,
+ * raw", the survivors topped out at score 10, and 400 g of black beans fell through to a
+ * fabricated 132 kcal/100 g estimate. The plural spelling of the same ingredient retrieved a pool
+ * with no leaf record at all and resolved correctly, so a single letter decided a hard gate.
+ *
+ * A record may only testify that a food is ambiguous if it is a plausible answer to the WHOLE
+ * question. "Winged bean leaves" never names the black in "black bean"; "Coriander (cilantro)
+ * leaves, raw" does name the coriander in "coriander", which is why bare coriander stays ambiguous.
+ *
+ * Empty query identity (everything was a descriptor) admits every candidate, exactly as before —
+ * absent evidence must not silently disable the rule.
+ */
+export function sharesFullQueryIdentity(
+  queryText: string,
+  candidateName: string,
+  mode: CoreMatchMode = "compound",
+): boolean {
+  const identity = tokenize(queryText).filter((t) =>
+    t.length >= CORE_TOKEN_MIN_LENGTH && !/^\d/.test(t)
+    && !GENERIC_DESCRIPTOR_WORDS.has(t) && !GERMAN_DESCRIPTOR_WORDS.has(t))
+  if (identity.length === 0) return true
+  // Reuses the core gate per token, so "shares this word" means exactly what it means everywhere
+  // else — plural tolerance in English, containment/compound/stem in German.
+  return identity.every((t) => !coreIdentityConflict(t, candidateName, mode))
 }
 
 /** The distinct plant parts a candidate set offers — the ambiguity evidence specificityConflict() needs. */
@@ -787,10 +846,12 @@ export function rankCandidates<T extends RankableCandidate>(
 ): RankedCandidate<T>[] {
   // Ambiguity evidence is a property of the candidate SET, so it is computed once, over the
   // candidates that actually name the queried food — a "Coriander chutney" that fails the core
-  // gate must not count as evidence that coriander comes in several parts.
+  // gate must not count as evidence that coriander comes in several parts, and neither may a
+  // record that shares only ONE of the query's identity words (see sharesFullQueryIdentity()).
   const parts = availablePlantParts(
     candidates
-      .filter((c) => !coreIdentityConflict(options.queryCoreFood, c.name, options.coreMatchMode))
+      .filter((c) => !coreIdentityConflict(options.queryCoreFood, c.name, options.coreMatchMode)
+        && sharesFullQueryIdentity(queryFoodName, c.name, options.coreMatchMode))
       .map((c) => c.name),
   )
 
@@ -998,6 +1059,9 @@ export function cachedMatchConflict(
   // served to a query with different form/preservation/fat in the first place.
   if (derivedProductConflict(ctx.foodName, ctx.coreFood, candidateName)) {
     return `derived-product conflict on cached match: "${ctx.foodName}" names a seasoning/liquid/concentrate that "${candidateName}" is not`
+  }
+  if (carrierConflict(ctx.foodName, candidateName, GENERIC_DESCRIPTOR_WORDS)) {
+    return `carrier conflict on cached match: "${ctx.foodName}" is derived from a source that "${candidateName}" never names`
   }
   const mismatch = findMismatch(ctx.foodName, candidateName)
   if (mismatch) return `obvious mismatch on cached match: ${mismatch} ("${candidateName}")`

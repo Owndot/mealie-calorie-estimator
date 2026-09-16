@@ -372,7 +372,13 @@ export const BIG_MAC_SALAT: ProductionRecipe = {
     c(8, "Senf", "mustard", "Senf", "mustard", { category: "condiment", foodType: "processed_single_food" }),
     c(9, "Ketchup", "ketchup", "Ketchup", "ketchup", { category: "condiment", foodType: "processed_single_food" }),
     c(10, "Joghurt", "yogurt", "Joghurt", "yogurt", { category: "dairy", foodType: "processed_single_food" }),
-    c(11, "Gurkenwasser", "cucumber water", "Gurke", "cucumber", { category: "liquid" }),
+    // coreFoodEnglish is "cucumber water", not "cucumber", and that is recoverable rather than
+    // guessed: a later production run resolved this row to USDA's "Water, bottled, generic" at
+    // confidence 0.7, and the provider's confidence ladder caps a null core at 0.55 — so the
+    // classifier's core was non-empty and contained the word "water". With "cucumber" the USDA
+    // lookup rejects every candidate on the core gate and the carrier rule is never even reached,
+    // which would make this row pass for the wrong reason.
+    c(11, "Gurkenwasser", "cucumber water", "Gurke", "cucumber water", { category: "liquid" }),
     c(12, "Salz", "salt", "Salz", "salt", { category: "seasoning" }),
     c(13, "Pfeffer", "pepper", "Pfeffer", "pepper", { category: "spice" }),
     c(14, "Paprikapulver", "paprika powder", "Paprika", "paprika", { form: "powder", category: "spice" }),
