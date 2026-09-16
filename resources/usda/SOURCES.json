@@ -1,0 +1,36 @@
+{
+  "source": "USDA FoodData Central",
+  "url": "https://fdc.nal.usda.gov/download-datasets/",
+  "license": "CC0 1.0 Universal (public domain)",
+  "attribution": "U.S. Department of Agriculture, Agricultural Research Service, Beltsville Human Nutrition Research Center. FoodData Central. Available from https://fdc.nal.usda.gov/. Public domain (CC0 1.0 Universal).",
+  "schema_version": "1",
+  "datasets": [
+    {
+      "name": "Foundation Foods",
+      "release": "2026-04-30",
+      "rows": 469,
+      "url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_csv_2026-04-30.zip"
+    },
+    {
+      "name": "SR Legacy",
+      "release": "2018-04",
+      "rows": 7793,
+      "url": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_sr_legacy_food_csv_2018-04.zip"
+    }
+  ],
+  "excluded": [
+    "Branded Foods",
+    "FNDDS (Survey Foods)"
+  ],
+  "archives": [
+    {
+      "file": "FoodData_Central_foundation_food_csv_2026-04-30.zip",
+      "sha256": "70457ee9d9342f43bda2010318c85f04210c689fdeb9cd2da4c513b0e8dbc655"
+    },
+    {
+      "file": "FoodData_Central_sr_legacy_food_csv_2018-04.zip",
+      "sha256": "b80817294b8850530aaedf2e515c02593b1824f763a0ff356e5c2081643e6fd0"
+    }
+  ],
+  "total_rows": 8262
+}

@@ -64,15 +64,13 @@ export const config = {
     rerankTimeoutMs: parseInt(process.env.LLM_RERANK_TIMEOUT_MS || "8000", 10),
   },
 
-  // USDA FoodData Central — optional generic-route fallback provider. Only wired into the
-  // provider registry when USDA_API_KEY is set; there is no dummy/placeholder provider when
-  // it's absent, the generic chain simply has one fewer provider.
-  usda: {
-    apiKey: process.env.USDA_API_KEY || "",
-    baseUrl: process.env.USDA_BASE_URL || "https://api.nal.usda.gov/fdc/v1",
-    rateLimit: parseInt(process.env.USDA_RATE_LIMIT || "10", 10),
-    maxRetries: parseInt(process.env.USDA_MAX_RETRIES || "3", 10),
-    retryBackoffMs: parseInt(process.env.USDA_RETRY_BACKOFF_MS || "500", 10),
+  // USDA FoodData Central generic foods, bundled at resources/usda/usda-generic.sqlite (built by
+  // scripts/import_usda.py; public domain / CC0). There is no API key and no network call: the
+  // live search API was removed because its result window, not its data, was the defect.
+  // USDA_LOCAL_DB_PATH overrides the bundled path, e.g. to point at a regenerated export without
+  // a code change. Empty means "use the bundled default" (usda-local-provider.ts).
+  usdaLocal: {
+    dbPath: process.env.USDA_LOCAL_DB_PATH || "",
   },
 
   // BLS 4.0 Open Data (Max Rubner-Institut, CC BY 4.0) — bundled with this service at

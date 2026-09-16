@@ -227,7 +227,7 @@ export interface IngredientClassification {
   llmClassified: boolean
 }
 
-export type FallbackStatus = "mealie-recipe" | "bls" | "usda" | "off" | "llm-nutrient" | "unresolved"
+export type FallbackStatus = "mealie-recipe" | "bls" | "usda-local" | "off" | "llm-nutrient" | "unresolved"
 
 export interface ProviderMatch {
   nutrients: NutrientSet
@@ -276,7 +276,7 @@ export interface IngredientMatch {
   confidence: number | null
   fallbackStatus: FallbackStatus
   llmParticipated: boolean
-  /** USDA dataset tier for this match, when the provider was "usda" — null otherwise. */
+  /** USDA dataset ("SR Legacy" / "Foundation") when the provider was "usda-local" — else null. */
   dataType?: string | null
   /** The matched candidate's own food type — see ProviderMatch.foodType. */
   foodType?: FoodType
