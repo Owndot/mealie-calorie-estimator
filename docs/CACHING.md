@@ -80,3 +80,30 @@ runs are warm again. LLM gram/nutrient caches are unaffected by this change and 
 existing rows.
 
 No schema change is required — the added semantics live inside the key string, not in new columns.
+
+## What changed with production hardening
+
+Matching semantics changed again, so stored matches from the previous algorithm must stop being
+addressable:
+
+| a cached match for | can never be served again |
+|---|---|
+| a pluralised German ingredient | a miss (the core gate now joins "Kidneybohnen" to "Kidneybohne") |
+| pickle brine | cucumber juice — derived products are classed, not lumped together |
+| a stated light/lean claim | a record that does not answer it, when one that does exists |
+
+The `provider_match_cache` also gained a `provenance` column, added by `ALTER TABLE` when absent
+because `CREATE TABLE IF NOT EXISTS` does nothing to an existing database. Without it a cache HIT
+silently dropped `llmReranked`/`rerankReason`/`unmetAttributes` — visible in production as a match
+reported at a rerank-only confidence of 0.8 while claiming it had never been reranked.
+
+Versions bumped in this change: **BLS v22 → v23**, **OFF v17 → v18**, **USDA v17 → v18**.
+
+## Recipe-source dependencies
+
+The `mealie-recipe` provider does not use the provider cache at all — it reads the source recipe
+live, so there is no stored nutrient value to go stale. What *is* persisted is the dependency: a
+consumer records `calorie_estimator_recipe_sources` (slug → fingerprint of the source's
+nutrition/servings/yield). At the consumer's next run, a changed fingerprint forces re-estimation
+even though its own ingredient hash is unchanged. This is checked at the dependent rather than
+cascaded from the source, so nothing can storm.

@@ -4,10 +4,11 @@ import { waitForRateLimit, RateLimitType } from "../../utils/rate-limiter.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodRoute, FoodType } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
-import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, type RankableCandidate } from "./ranking.js"
+import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchConflict, matchingContextKey, tokenize, GENERIC_DESCRIPTOR_WORDS, type RankableCandidate, type RankedCandidate } from "./ranking.js"
 import { FULL_EVIDENCE } from "../identity-evidence.js"
-import { attributesKey } from "./food-semantics.js"
-import { UNKNOWN_ATTRIBUTES } from "../../types.js"
+import { attributesKey, inferAttributesFromName, unmetModifierFamilies } from "./food-semantics.js"
+import { rerankCandidates, rerankTrigger, identityKey, RERANK_MIN_CANDIDATE_SCORE, type TriggerCandidate } from "./candidate-rerank.js"
+import { UNKNOWN_ATTRIBUTES, type FoodAttributes } from "../../types.js"
 
 interface FdcNutrient {
   nutrientId: number
@@ -59,7 +60,7 @@ const NUTRIENT_IDS = {
  * fix would otherwise be silently masked by up to CACHE_MATCH_TTL of stale cached matches for
  * any already-resolved ingredient text (same pattern as bls-provider.ts's BLS_MATCH_ALGORITHM_VERSION).
  */
-const USDA_MATCH_ALGORITHM_VERSION = "v17"
+const USDA_MATCH_ALGORITHM_VERSION = "v18"
 
 /**
  * Dataset-tier ranking signal — NOT a hard filter by itself (categoryConflict/findMismatch/state
@@ -158,6 +159,37 @@ function extractNutrients(food: FdcFood): NutrientSet {
     cholesterolPer100g: cholesterolMg !== null ? cholesterolMg / 1000 : null,
   }
 }
+
+
+
+/**
+ * True when a multi-word core is only partly present in the candidate name.
+ *
+ * "chili pepper" against "Peppers, sweet, red, raw" matches the generic head and loses the word
+ * that carried the identity — which is how a chili became a sweet bell pepper in production, right
+ * after BLS's own reranker had declined its chili candidates. A single-word core is excluded: the
+ * core gate already requires it outright, and demanding more would fire on every ordinary match.
+ *
+ * This is a question, not a verdict: it only asks the judge to look. "bell pepper" against
+ * "Peppers, sweet, raw" is the same shape and IS correct, which is precisely why the decision
+ * belongs to a semantic judge rather than another lexical rule.
+ */
+function answersOnlyPartOfCore(core: string | null | undefined, candidateName: string): boolean {
+  const coreTokens = tokenize(core ?? "").filter((t) => t.length >= 3 && !GENERIC_DESCRIPTOR_WORDS.has(t))
+  if (coreTokens.length < 2) return false
+  const candidate = tokenize(candidateName)
+  const matched = coreTokens.filter((c) => candidate.some((t) => t === c || t === `${c}s` || c === `${t}s`))
+  return matched.length > 0 && matched.length < coreTokens.length
+}
+
+/** English identity of a candidate name: the words that actually name a food. */
+function identityTokensOf(name: string): string[] {
+  const kept = tokenize(name).filter((t) => t.length >= 3 && !/^\d/.test(t) && !GENERIC_DESCRIPTOR_WORDS.has(t))
+  return kept.length > 0 ? kept : tokenize(name)
+}
+
+/** A ranked USDA candidate carrying the rerank outcome, when one happened. */
+type RankedUsda = RankedCandidate<RankableFdcFood> & { rerankConfidence?: number; rerankReason?: string | null }
 
 interface RankableFdcFood extends RankableCandidate {
   food: FdcFood
@@ -285,7 +317,12 @@ export class UsdaProvider implements NutrientProvider {
       rejectBrandedWithoutBrandEvidence: route === "generic" && !query.brand,
       dataTypeScore: (dt) => dataTypeScore(route, dt),
     })
-    const top = ranked[0]
+    // The same semantic judge BLS uses, applied here too. Found live: BLS's reranker correctly
+    // declined its chili candidates, and USDA then accepted "Peppers, sweet, red, raw" for "rote
+    // Chilischoten" a moment later — a distinction rejected upstream reintroduced downstream
+    // because the safety rules stopped at the BLS boundary.
+    const reranked = await this.maybeRerank(query, ranked, attrs, strictCore)
+    const top: RankedUsda | undefined = reranked ?? ranked[0]
 
     if (!top) {
       markProviderMiss(this.name, missKey)
@@ -322,14 +359,93 @@ export class UsdaProvider implements NutrientProvider {
       provider: this.name,
       providerId: String(food.fdcId),
       productName: food.description,
-      confidence: Math.min(0.9, top.score / 100),
+      // Same semantic basis as BLS, one step lower throughout: USDA is reached through an English
+      // translation of the ingredient, so there is one more place for the identity to drift.
+      confidence: top.rerankConfidence !== undefined
+        ? Math.min(0.8, top.rerankConfidence)
+        : !strictCore?.trim()
+          ? Math.min(0.55, top.score / 100)
+          : top.score >= MIN_ACCEPTABLE_SCORE + 25 ? 0.8 : 0.7,
       dataType: food.dataType ?? null,
       foodType: usdaFoodType(food.foodCategory),
-      matchReason: query.foodName.trim().toLowerCase() === food.description.trim().toLowerCase() ? "exact-name" : "fuzzy",
+      matchReason: top.rerankConfidence !== undefined
+        ? "llm-reranked"
+        : query.foodName.trim().toLowerCase() === food.description.trim().toLowerCase() ? "exact-name" : "fuzzy",
+      ...(top.rerankConfidence !== undefined ? { llmReranked: true as const, rerankReason: top.rerankReason ?? null } : {}),
     }
 
     setCachedProviderMatch(this.name, queryKey, match)
     return match
+  }
+
+  /**
+   * Asks the shared semantic judge when this lookup is ambiguous. Returns the reranked candidate,
+   * or null meaning "nothing changes" — every failure, NONE, and a below-threshold confidence all
+   * leave the deterministic ordering exactly as it was.
+   */
+  private async maybeRerank(
+    query: ProviderQuery,
+    ranked: RankedCandidate<RankableFdcFood>[],
+    attrs: FoodAttributes,
+    core: string | null | undefined,
+  ): Promise<RankedUsda | null> {
+    if (!config.llm.enabled || !config.llm.apiKey || !config.llm.rerankEnabled) return null
+
+    const asTrigger = (r: RankedCandidate<RankableFdcFood>): TriggerCandidate => ({
+      score: r.score,
+      record: {
+        blsCode: String(r.candidate.food.fdcId),
+        nutrients: { kcalPer100g: findNutrient(r.candidate.food, NUTRIENT_IDS.energyKcal) },
+        attributes: inferAttributesFromName(r.candidate.name),
+        inferredState: r.candidate.state ?? "unknown",
+        identityTokens: identityTokensOf(r.candidate.name),
+      },
+    })
+
+    // Only gate-surviving candidates carrying real identity evidence are ever offered.
+    const eligible = ranked.filter((r) => !r.mismatchReason && r.score >= RERANK_MIN_CANDIDATE_SCORE)
+    if (eligible.length === 0) return null
+    const pool = new Map(eligible.map((r) => [String(r.candidate.food.fdcId), asTrigger(r)]))
+
+    const accepted = ranked[0] && !ranked[0].mismatchReason && ranked[0].score >= MIN_ACCEPTABLE_SCORE ? ranked[0] : null
+    const reason = rerankTrigger(accepted ? asTrigger(accepted) : null, pool, attrs, query.state)
+      ?? (accepted && answersOnlyPartOfCore(core, accepted.candidate.name) ? "partial-core" : null)
+    if (!reason) return null
+
+    const offered = eligible.slice(0, config.llm.rerankMaxCandidates)
+    const decision = await rerankCandidates(
+      {
+        provider: this.name,
+        structuredName: query.structuredName ?? query.foodName,
+        canonicalGerman: query.canonicalGerman ?? null,
+        canonicalEnglish: query.foodName,
+        coreFood: core ?? null,
+        state: query.state,
+        attributes: attrs,
+      },
+      offered.map((r) => ({
+        providerId: String(r.candidate.food.fdcId),
+        productName: r.candidate.name,
+        kcalPer100g: findNutrient(r.candidate.food, NUTRIENT_IDS.energyKcal),
+        form: inferAttributesFromName(r.candidate.name).form,
+        preservation: inferAttributesFromName(r.candidate.name).preservation,
+        score: r.score,
+        unmet: unmetModifierFamilies(query.foodName, r.candidate.name),
+      })),
+    )
+
+    if (!decision) return null
+    if (decision.providerId === null) {
+      // An explicit NONE is a rejection of the whole field, including whatever ranked first.
+      logger.info({ foodName: query.foodName, trigger: reason, reason: decision.reason }, "USDA: rerank declined every candidate")
+      return { candidate: offered[0].candidate, score: -1000, mismatchReason: `rerank declined: ${decision.reason}` }
+    }
+
+    const selected = offered.find((r) => String(r.candidate.food.fdcId) === decision.providerId)
+    if (!selected) return null
+    if (accepted && identityKey(asTrigger(selected).record.identityTokens) === identityKey(asTrigger(accepted).record.identityTokens)) return null
+
+    return { ...selected, rerankConfidence: decision.confidence, rerankReason: decision.reason }
   }
 }
 

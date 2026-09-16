@@ -2,7 +2,7 @@ import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { callLlm } from "../llm-client.js"
 import { getCachedRerank, setCachedRerank } from "../../utils/cache.js"
-import type { FoodAttributes } from "../../types.js"
+import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type FoodState } from "../../types.js"
 
 /**
  * LLM-assisted reranking of DATABASE candidates.
@@ -24,6 +24,179 @@ import type { FoodAttributes } from "../../types.js"
  * reorder what survived, or decline.
  */
 
+/**
+ * Ranks how well a record's OWN attributes answer the attributes the query asked for. Higher is
+ * better. This is the positive counterpart of the attribute CONFLICT gates, which can only reject:
+ * once "Dose" stopped being scored as a second food, "Kidneybohnen a. d. Dose" reached
+ * "Kidneybohne reif, Konserve, abgetropft" (128 kcal) AND the dry "Kidneybohne reif" (316 kcal)
+ * with identical scores, because a silent candidate never conflicts with anything. Preferring the
+ * record that actually states the requested attribute is what keeps a 2.5x error from being a
+ * coin flip.
+ *
+ * The reverse direction matters just as much: when the query is silent, a record that introduces
+ * an attribute is a guess, so an attribute-neutral record is preferred over a specific one.
+ */
+export function attributeFit(queryAttrs: FoodAttributes, record: { attributes: FoodAttributes }): number {
+  const ca = record.attributes
+  let fit = 0
+  for (const axis of ["form", "preservation"] as const) {
+    const wanted = queryAttrs[axis]
+    const got = ca[axis]
+    if (wanted !== "unknown") fit += got === wanted ? 2 : 0
+    // "fresh"/"roh" is BLS's default annotation on almost every base ingredient, not introduced
+    // specificity, so it must not be counted against a record for a query that said nothing.
+    else if (got !== "unknown" && !(axis === "preservation" && got === "fresh")) fit -= 1
+  }
+  return fit
+}
+
+/**
+ * Whether a lookup is ambiguous enough to be worth an LLM call, shared by every provider.
+ *
+ * Provider-agnostic on purpose: the distinction "chili pepper" vs "sweet pepper" that BLS's
+ * reranker correctly declined was being reintroduced verbatim by USDA a moment later, because the
+ * safety rules stopped at the BLS boundary. A rejected semantic distinction must not come back
+ * through the next provider in the chain.
+ */
+export interface TriggerCandidate {
+  score: number
+  record: {
+    blsCode: string
+    nutrients: { kcalPer100g: number | null }
+    attributes: FoodAttributes
+    inferredState: FoodState
+    /** The record's name with qualifiers stripped — its bare identity. */
+    identityTokens: string[]
+  }
+}
+
+/**
+ * Score band within which a rival counts as "close enough that the deterministic order is not
+ * decisive", and the relative energy gap that makes the choice between them actually matter.
+ */
+/**
+ * How far below the winner a rival may score and still count as ambiguity. Wide on purpose: it
+ * only ever applies to a rival with a DIFFERENT stripped identity, which is rare, and the scoring
+ * artefacts this project keeps hitting are exactly the reason a real alternative can sit well below
+ * the winner — BLS's "Erbse grün, roh" (88 kcal) trails "Erbse reif" (311) by 35 points purely
+ * because its colour word is scored as foreign content.
+ */
+const RERANK_BAND = 40
+const MATERIAL_KCAL_RATIO = 0.25
+/**
+ * ...and an absolute floor alongside it. A relative test alone calls 0 vs 25 kcal/100 g an infinite
+ * difference, which made every low-energy food look ambiguous: plain salt (0) against herb salt
+ * (25), plain yoghurt (67) against the low-fat one (39). At the quantities these are used in, a
+ * difference this small cannot move a recipe, and it is not worth an LLM call.
+ */
+const MATERIAL_KCAL_ABSOLUTE = 30
+/**
+ * Minimum deterministic score for a candidate to be worth showing the model. The floor for "has
+ * calories but shares nothing with the query" is 15, so anything at or below that is noise.
+ */
+export const RERANK_MIN_CANDIDATE_SCORE = 20
+
+function materiallyDifferent(a: number | null, b: number | null): boolean {
+  if (a === null || b === null) return false
+  const delta = Math.abs(a - b)
+  if (delta < MATERIAL_KCAL_ABSOLUTE) return false
+  const larger = Math.max(Math.abs(a), Math.abs(b))
+  return larger > 0 && delta / larger > MATERIAL_KCAL_RATIO
+}
+
+/**
+ * The ONLY conditions under which an LLM call is made. Returns a short trigger label, or null to
+ * mean "the deterministic answer is good enough — do not spend a call".
+ *
+ * An exact normalized-name match never reaches here: it returns from the variant loop before the
+ * rerank hook, which is what keeps confident matches free of any LLM involvement.
+ */
+/**
+ * How decisively the deterministic rules ranked a candidate on evidence OTHER than its lexical
+ * score: does it answer the attributes the query asked for, and does its preparation state agree?
+ * A rival the rules already placed below the winner on this evidence is not ambiguity — the
+ * pipeline HAS an answer, and paying for an LLM call to re-litigate it is waste.
+ */
+function decisiveness(record: TriggerCandidate["record"], queryAttrs: FoodAttributes, queryState: FoodState): number {
+  let value = attributeFit(queryAttrs, record)
+  if (queryState !== "unknown" && record.inferredState !== "unknown") {
+    value += record.inferredState === queryState ? 1 : -1
+  }
+  return value
+}
+
+/**
+ * Exactly what rerankTrigger() reads — declared structurally so the decision can be tested against
+ * hand-built records without reaching for the full BLS row shape or a cast.
+ */
+export interface TriggerCandidate {
+  score: number
+  record: {
+    blsCode: string
+    nutrients: { kcalPer100g: number | null }
+    attributes: FoodAttributes
+    inferredState: FoodState
+    /** The record's name with qualifiers stripped — see identityTokens() in this file. */
+    identityTokens: string[]
+  }
+}
+
+export function rerankTrigger(
+  deterministic: TriggerCandidate | null,
+  survivors: Map<string, TriggerCandidate>,
+  queryAttrs: FoodAttributes = UNKNOWN_ATTRIBUTES,
+  queryState: FoodState = "unknown",
+): "no-acceptable-candidate" | "material-rival" | "unanswered-attribute" | null {
+  // (a) Retrieval found records that passed every gate, but none scored well enough to accept.
+  // Without a rerank this is simply a miss — which is correct far more often than not, but is
+  // exactly where "Petersilienblatt" and the canned-tuna records sit.
+  if (!deterministic) return survivors.size > 0 ? "no-acceptable-candidate" : null
+
+  // (b) Something else is within a hair of the winner, would change the answer materially, AND was
+  // not already placed below it on attribute or state evidence. All three are required: a close
+  // rival with the same energy is not worth a call, and neither is one the rules already decided
+  // against — which is what keeps confident everyday matches (Zwiebel, canned kidney beans) free of
+  // any LLM involvement.
+  const topDecisiveness = decisiveness(deterministic.record, queryAttrs, queryState)
+  const topIdentity = identityKey(deterministic.record.identityTokens)
+
+  // (c) The ingredient STATED an attribute — canned, dried, ground — and the record we are about to
+  // accept does not answer it, while one that survived the gates does. Score is irrelevant here:
+  // ignoring something the cook actually wrote is a defect regardless of how well the winner reads
+  // lexically. Found live: "Thunfisch a. d. Dose" accepted BLS's FROZEN tuna while the drained
+  // canned record sat 35 points below it.
+  const statesAttribute = queryAttrs.form !== "unknown" || queryAttrs.preservation !== "unknown"
+  if (statesAttribute) {
+    for (const rival of survivors.values()) {
+      if (rival.record.blsCode === deterministic.record.blsCode) continue
+      if (attributeFit(queryAttrs, rival.record) > attributeFit(queryAttrs, deterministic.record)) {
+        return "unanswered-attribute"
+      }
+    }
+  }
+
+  for (const rival of survivors.values()) {
+    if (rival.record.blsCode === deterministic.record.blsCode) continue
+    if (deterministic.score - rival.score > RERANK_BAND) continue
+    if (decisiveness(rival.record, queryAttrs, queryState) < topDecisiveness) continue
+    // BLS stores raw/cooked/baked/grilled/frozen variants of nearly every food at identical
+    // scores, and raw-vs-cooked really is a 2x energy difference — but that is a PREPARATION
+    // question the state rules already answer, not the variety question this reranker exists for.
+    // Treating it as ambiguity asked the model about "Nudeln", "Tomate", "Reis" and "Zwiebel" on
+    // every recipe. Only a rival whose stripped identity actually differs counts.
+    if (identityKey(rival.record.identityTokens) === topIdentity) continue
+    if (materiallyDifferent(deterministic.record.nutrients.kcalPer100g, rival.record.nutrients.kcalPer100g)) {
+      return "material-rival"
+    }
+  }
+  return null
+}
+
+export function identityKey(tokens: string[]): string {
+  return [...tokens].sort().join(" ")
+}
+
+
 /** Bump when the prompt, the validation rules or the candidate fields change. */
 const RERANK_CACHE_VERSION = "v1"
 
@@ -36,6 +209,8 @@ export interface RerankCandidate {
   preservation: string
   /** The deterministic score this candidate earned, so the model can see how close the field is. */
   score: number
+  /** Nutritional claims the ingredient made that this candidate does not answer. */
+  unmet?: string[]
 }
 
 export interface RerankQuery {
@@ -74,7 +249,8 @@ function rerankCacheKey(query: RerankQuery, candidates: RerankCandidate[]): stri
 function buildPrompt(query: RerankQuery, candidates: RerankCandidate[]): string {
   const lines = candidates.map((c, i) =>
     `${i + 1}. ${c.productName}` +
-    ` [kcal/100g=${c.kcalPer100g ?? "?"}; form=${c.form}; preservation=${c.preservation}; score=${Math.round(c.score)}]`)
+    ` [kcal/100g=${c.kcalPer100g ?? "?"}; form=${c.form}; preservation=${c.preservation}` +
+    `${c.unmet && c.unmet.length > 0 ? `; unmet=${c.unmet.join(",")}` : ""}; score=${Math.round(c.score)}]`)
 
   const asked = [
     `structured name: ${query.structuredName}`,
@@ -102,6 +278,11 @@ RULES
 - A candidate must NOT add anything the ingredient did not say: a different base ingredient or
   grain, a variety, a plant part (leaf/seed/root), a preparation, a preservation state
   (fresh/dried/canned/frozen), or added sugar/fat.
+- Being made FROM the same plant or animal is NOT enough. Pickle brine is not cucumber juice;
+  whey is not milk; a stock is not the meat. If the processing or the product differs, it is a
+  different food, however closely related the source is.
+- If the ingredient states a nutritional claim (light, reduced-fat, lean) and a candidate is marked
+  unmet, that candidate does NOT satisfy the claim — prefer one that does, or answer NONE.
 - If the ingredient DOES state an attribute (canned, dried, ground, fresh), prefer a candidate
   that states the same one over a candidate that is silent about it.
 - Answer NONE whenever no candidate is the same food, or when several are plausible and they

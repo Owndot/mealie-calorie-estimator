@@ -88,6 +88,17 @@ export const config = {
     tag: process.env.ESTIMATE_TAG || "estimate",
   },
 
+  // The user's own Mealie recipes as a source for homemade ingredients (a curry paste, a spice
+  // mix). Conservative by construction — see mealie-recipe-provider.ts.
+  mealieRecipeSource: {
+    enabled: (process.env.MEALIE_RECIPE_SOURCE_ENABLED || "true").toLowerCase() === "true",
+    /** How long the recipe-name index is reused before it is rebuilt. */
+    indexTtlMs: parseInt(process.env.MEALIE_RECIPE_INDEX_TTL || "300", 10) * 1000,
+    /** Maximum nesting of recipe-as-ingredient resolution. 1 = a recipe may use recipes, but those
+     *  are read as stored and never resolved further. */
+    maxDepth: Math.max(1, parseInt(process.env.MEALIE_RECIPE_MAX_DEPTH || "1", 10)),
+  },
+
   cache: {
     dbPath: process.env.CACHE_DB_PATH || "data/cache.db",
     // Successful provider matches change rarely — cache them longest.

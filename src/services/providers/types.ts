@@ -58,6 +58,14 @@ export interface ProviderQuery {
    * anyway. Optional/defaults to "generic" for any caller that predates this field.
    */
   route?: FoodRoute
+  /** Which Mealie household this recipe belongs to — the recipe source reads through the same token. */
+  householdId?: string | null
+  /**
+   * Slugs of the recipes already being resolved, outermost first. The mealie-recipe provider
+   * refuses to resolve through any of them, which is what makes a dependency cycle impossible
+   * rather than merely unlikely.
+   */
+  ancestorSlugs?: string[]
 }
 
 export interface NutrientProvider {

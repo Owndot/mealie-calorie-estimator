@@ -7,7 +7,7 @@ import { createUsdaProviderIfConfigured } from "../../src/services/providers/usd
 import { buildQueryKey, setCachedProviderMatch } from "../../src/utils/cache.js"
 
 /** Mirrors USDA_MATCH_ALGORITHM_VERSION; a bump here must be mirrored, which is the point. */
-const USDA_CACHE_VERSION = "v17"
+const USDA_CACHE_VERSION = "v18"
 import type { MealieRecipe, MealieIngredient } from "../../src/types.js"
 
 /**

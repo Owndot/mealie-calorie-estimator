@@ -2,9 +2,9 @@
 import type { FoodState, FoodType, FoodAttributes } from "../../types.js"
 import { evidenceKey, type IdentityEvidence } from "../identity-evidence.js"
 import {
-  GERMAN_DESCRIPTOR_WORDS, compoundSpecifier, compoundMatchesTokens, absenceMarkerStem,
+  GERMAN_DESCRIPTOR_WORDS, compoundSpecifier, compoundMatchesTokens, absenceMarkerStem, germanStem, germanTokenMatches,
   formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, inferAttributesFromName, compoundSegments,
-  derivedProductConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, type PlantPart,
+  derivedProductConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, unmetModifierFamilies, type PlantPart,
 } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
@@ -241,7 +241,22 @@ export function coreIdentityConflict(
       // the mirror case where the CORE is the fused compound and the record spells it out
       // ("Hähnchenbrust" vs "Hähnchen Brustfilet"). Without the second, supplying a more precise
       // core turned a perfect record into a hard rejection.
-      : candidateTokens.some((t) => t.includes(core)) || compoundMatchesTokens(core, candidateTokens),
+      //
+      // The stem is tried as well, and that is not a refinement — it is the fix for the largest
+      // production failure this project has had. German nouns inflect, and the classifier returns
+      // whichever form the ingredient used: "Kidneybohnen a. d. Dose" yields the PLURAL core
+      // "Kidneybohnen", while BLS files the record as "Kidneybohne reif, Konserve, abgetropft".
+      // Neither containment nor compound segmentation joins those, so this HARD GATE removed every
+      // kidney-bean record from consideration, BLS reported a miss, and 400 g of beans fell through
+      // to USDA's "Kidney beans, NFS" — a prepared entry carrying added cooking fat, 708 kcal
+      // against the correct record's 512. The same gate silently did this to any pluralised
+      // ingredient: Tomaten, Erbsen, Linsen, Karotten, Zwiebeln.
+      //
+      // germanTokenMatches()/germanStem() already knew these are the same word; the gate simply
+      // never asked them.
+      : candidateTokens.some((t) =>
+          t.includes(core) || t.includes(germanStem(core)) || germanTokenMatches(t, core))
+        || compoundMatchesTokens(core, candidateTokens),
   )
   return !hasCore
 }
@@ -276,6 +291,18 @@ export function coreIdentityScoreAdjustment(
   const modifierTokens = queryTokens.filter((t) =>
     t.length >= CORE_TOKEN_MIN_LENGTH && !coreTokens.some((c) => t.includes(c) || c.includes(t)))
 
+  // A query token that CONTAINS the core carries its own qualifier fused into it, and the filter
+  // above drops the whole token — so the qualifier is lost. With core "Bohne" the query
+  // "Kidneybohnen" contributed nothing, and the candidate "Kidneybohne" was then penalised 35
+  // points for introducing "kidney" that the query had in fact named. Recovering the prefix keeps
+  // the raw ingredient text in play rather than discarding it at the core boundary.
+  for (const t of queryTokens) {
+    for (const c of coreTokens) {
+      const fused = compoundSpecifier(t, c, GENERIC_DESCRIPTOR_WORDS)
+      if (fused && !modifierTokens.includes(fused)) modifierTokens.push(fused)
+    }
+  }
+
   const queryNamesDerivedProduct = namesDerivedProduct(fullQueryText)
   const candidateTokens = tokenize(candidateName)
   let modifierMatches = 0
@@ -297,7 +324,10 @@ export function coreIdentityScoreAdjustment(
       else extraCount++
       continue
     }
-    if (coreTokens.some((c) => t.includes(c))) continue
+    // Plural tolerance here too, for the same reason as the gate above: with the core "Tomaten"
+    // the record token "tomate" does not CONTAIN it, so a perfect match was charged 35 points of
+    // foreign content and sank below the acceptance threshold.
+    if (coreTokens.some((c) => t.includes(c) || t.includes(germanStem(c)) || germanTokenMatches(t, c))) continue
     if (modifierTokens.some((m) => t.includes(m) || m.includes(t))) {
       modifierMatches++
       continue
@@ -805,10 +835,30 @@ export function rankCandidates<T extends RankableCandidate>(
 
       return { candidate, score, mismatchReason }
     })
-    .sort((a, b) => b.score - a.score)
+    // Ordered on the score MINUS any unmet nutritional claim, while `score` itself stays the
+    // unpenalised value the acceptance threshold is applied to — see UNMET_MODIFIER_WEIGHT.
+    .sort((a, b) =>
+      (b.score - unmetModifierPenalty(queryFoodName, b.candidate.name))
+      - (a.score - unmetModifierPenalty(queryFoodName, a.candidate.name)))
 }
 
 /** Minimum score (out of the ~100 max above) to accept the top-ranked candidate at all. */
+/**
+ * Ordering weight for a nutritional claim the query made and the candidate does not answer.
+ *
+ * Applied to the SORT only, never to the accepted score. Subtracting it outright pushed
+ * "mageres Rinderhackfleisch" below the acceptance threshold and lost the ingredient altogether —
+ * but BLS has no leaner mince under that name (its lean record is filed as "Tatar"), so the honest
+ * outcome is the ordinary mince match, reported with the shortfall attached, not a miss. Ordering
+ * on it means a candidate that DOES state the claim wins whenever one exists, while coverage is
+ * unaffected when none does. The shortfall then travels into provenance and match quality.
+ */
+export const UNMET_MODIFIER_WEIGHT = 25
+
+export function unmetModifierPenalty(queryText: string, candidateName: string): number {
+  return unmetModifierFamilies(queryText, candidateName).length * UNMET_MODIFIER_WEIGHT
+}
+
 export const MIN_ACCEPTABLE_SCORE = 30
 
 /** The acceptance-relevant query context, as it exists at cache-hit time. */

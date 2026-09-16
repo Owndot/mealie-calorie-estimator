@@ -2,7 +2,8 @@ import { getRecipe, getRecipeHouseholdId, patchRecipe } from "./mealie-client.js
 import { computeIngredientHash, isManuallyOwned, hasManuallyModifiedNutrition, buildManualAckPatch, shouldEstimate } from "./estimator.js"
 import { perServingFromRecipeNutrition, tagsAreComplete, resolveAndMergeTags, estimateAndTag } from "./tagging.js"
 import { logger } from "../utils/logger.js"
-import type { Completeness } from "../types.js"
+import { sourceFingerprint } from "./providers/mealie-recipe-provider.js"
+import type { Completeness, MealieRecipe } from "../types.js"
 
 export interface PipelineOptions {
   /** Bypass the ingredient-hash-unchanged skip and re-estimate. Never bypasses manual protection by itself. */
@@ -26,6 +27,40 @@ export type PipelineOutcome =
  * entry points, so loop prevention / manual protection / force semantics are enforced
  * identically everywhere instead of being reimplemented per route.
  */
+/**
+ * True when any of the user's own recipes this one draws nutrition from has changed since the last
+ * estimate — see the mealie-recipe provider. Compares the recorded fingerprint against the source's
+ * current nutrition/servings/yield state.
+ *
+ * Checked at the DEPENDENT's next run rather than cascaded from the source, which keeps the update
+ * path a simple check and makes a webhook storm structurally impossible: nothing here writes to any
+ * recipe other than the one being processed.
+ */
+async function recipeSourcesChanged(recipe: MealieRecipe, householdId: string | null): Promise<boolean> {
+  const raw = recipe.extras?.calorie_estimator_recipe_sources
+  if (!raw) return false
+
+  let recorded: Record<string, string>
+  try {
+    recorded = JSON.parse(raw) as Record<string, string>
+  } catch {
+    return false
+  }
+
+  for (const [slug, fingerprint] of Object.entries(recorded)) {
+    if (slug === recipe.slug) continue // cannot depend on itself; ignore rather than loop
+    try {
+      const source = await getRecipe(slug, householdId)
+      if (sourceFingerprint(source) !== fingerprint) return true
+    } catch {
+      // A source that cannot be read (deleted, permissions) is not evidence of a change; the
+      // existing estimate stands until something else prompts a re-run.
+      continue
+    }
+  }
+  return false
+}
+
 export async function runEstimationPipeline(slug: string, opts: PipelineOptions = {}): Promise<PipelineOutcome> {
   const recipe = await getRecipe(slug)
 

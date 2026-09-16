@@ -98,6 +98,21 @@ export async function initCache(): Promise<void> {
     }
   }
 
+  // Provenance that post-dates the original table. CREATE TABLE IF NOT EXISTS does nothing to an
+  // existing database, so the column is added explicitly when absent. Without it a cache HIT
+  // silently dropped llmReranked/rerankReason/unmetAttributes — observed in production as a match
+  // reported at a rerank-only confidence of 0.8 while claiming it had never been reranked.
+  const columns = new Set<string>()
+  const info = db.prepare("PRAGMA table_info(provider_match_cache)")
+  try {
+    while (info.step()) columns.add(String((info.getAsObject() as Record<string, unknown>).name))
+  } finally {
+    info.free()
+  }
+  if (!columns.has("provenance")) {
+    db.run("ALTER TABLE provider_match_cache ADD COLUMN provenance TEXT")
+  }
+
   // Negative cache: a provider had no acceptable match for this query. Avoids re-hitting rate
   // limited network providers (OFF/USDA) for a food that is known not to resolve there.
   db.run(`CREATE TABLE IF NOT EXISTS provider_miss_cache (
@@ -154,6 +169,34 @@ function isExpired(updatedAt: number, ttlMs: number): boolean {
   return Date.now() - updatedAt > ttlMs
 }
 
+
+/**
+ * Provenance fields added after the cache table was designed. Kept as one JSON column rather than
+ * a column each, so a further field costs no migration: the shape is read back defensively and an
+ * unreadable value simply means "no provenance", never a broken cache entry.
+ */
+function serializeProvenance(match: ProviderMatch): string | null {
+  const extra: Record<string, unknown> = {}
+  if (match.llmReranked) extra.llmReranked = true
+  if (match.rerankReason) extra.rerankReason = match.rerankReason
+  if (match.unmetAttributes?.length) extra.unmetAttributes = match.unmetAttributes
+  return Object.keys(extra).length > 0 ? JSON.stringify(extra) : null
+}
+
+function parseProvenance(raw: unknown): Partial<ProviderMatch> {
+  if (typeof raw !== "string" || raw.length === 0) return {}
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    return {
+      ...(parsed.llmReranked === true ? { llmReranked: true } : {}),
+      ...(typeof parsed.rerankReason === "string" ? { rerankReason: parsed.rerankReason } : {}),
+      ...(Array.isArray(parsed.unmetAttributes) ? { unmetAttributes: parsed.unmetAttributes.map(String) } : {}),
+    }
+  } catch {
+    return {}
+  }
+}
+
 export function getCachedProviderMatch(provider: string, queryKey: string): ProviderMatch | undefined {
   const stmt = db.prepare(
     "SELECT canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason FROM provider_match_cache WHERE provider = ? AND query_key = ?",
@@ -173,6 +216,7 @@ export function getCachedProviderMatch(provider: string, queryKey: string): Prov
       data_type: string | null
       food_type: string | null
       match_reason: string | null
+      provenance?: string | null
     }
     if (isExpired(row.updated_at, config.cache.matchTtlMs)) {
       db.run("DELETE FROM provider_match_cache WHERE provider = ? AND query_key = ?", [provider, queryKey])
@@ -191,6 +235,7 @@ export function getCachedProviderMatch(provider: string, queryKey: string): Prov
       dataType: row.data_type,
       foodType: (row.food_type ?? undefined) as ProviderMatch["foodType"],
       matchReason: row.match_reason ?? undefined,
+      ...parseProvenance(row.provenance),
     }
   } catch {
     return undefined
@@ -203,8 +248,8 @@ export function setCachedProviderMatch(provider: string, queryKey: string, match
   const now = Date.now()
   db.run(
     `INSERT INTO provider_match_cache
-       (provider, query_key, canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (provider, query_key, canonical_name, brand, state, provider_id, product_name, confidence, nutrients, updated_at, data_type, food_type, match_reason, provenance)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(provider, query_key) DO UPDATE SET
        canonical_name = excluded.canonical_name,
        brand = excluded.brand,
@@ -216,7 +261,8 @@ export function setCachedProviderMatch(provider: string, queryKey: string, match
        updated_at = excluded.updated_at,
        data_type = excluded.data_type,
        food_type = excluded.food_type,
-       match_reason = excluded.match_reason`,
+       match_reason = excluded.match_reason,
+       provenance = excluded.provenance`,
     [
       provider,
       queryKey,
@@ -231,6 +277,7 @@ export function setCachedProviderMatch(provider: string, queryKey: string, match
       match.dataType ?? null,
       match.foodType ?? null,
       match.matchReason ?? null,
+      serializeProvenance(match),
     ],
   )
   scheduleSave()
