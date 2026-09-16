@@ -103,23 +103,21 @@ describe("a stated nutritional attribute steers which provider is used", () => {
     expect(r.confidence!).toBeGreaterThan(0.6)
   })
 
-  it("lean ground beef: no provider satisfies it, so the LLM estimate of the full text wins", async () => {
+  it("lean ground beef: an estimate cannot displace the flagged record, however lean it claims to be", async () => {
     // Measured: BLS's mince is 224 kcal/16.4% fat and USDA's family tops out at 80/20 = 254/20% —
     // FATTIER than BLS. BLS's genuinely lean record is filed as "Tatar/Schabefleisch" (115 kcal,
-    // 3% fat), a different product, and is deliberately not substituted. So nothing in either
-    // database is lean mince, and the estimate made from the whole phrase is the better answer.
+    // 3% fat), a different product, and is deliberately not substituted. Nothing in either database
+    // is lean mince.
     //
-    // 176 IS THIS STUB'S OWN NUMBER. It is what the line below tells the fake LLM to say, chosen as
-    // a plausible figure for lean mince; no database was consulted for it and nothing in the system
-    // verifies it. What the test asserts is the ROUTING — that the whole phrase including "mager"
-    // reaches the estimator and its answer is used — not that lean mince is 176 kcal. The recorded
-    // confidence says the same thing: 0.35, the floor for an estimate, against 0.85 for a database
-    // record. Read any quoted 176 as "whatever the model answers here", never as a measurement.
+    // Production ran exactly this and the estimator answered 250 kcal/100 g — MORE than the 224
+    // record it was then allowed to displace "because it satisfied reduced-fat". It satisfied
+    // nothing; it simply had no name for the attribute check to read. The number below is that
+    // production value, and the assertion is that it does not win.
     const { r } = await one("mageres Rinderhackfleisch", 400, "Gramm", {
       canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef",
       coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef",
       state: "raw", category: "meat",
-    }, { usda: USDA, llmNutrients: { "lean ground beef": { kcal: 176, protein: 20, carbs: 0, fat: 10 } } })
+    }, { usda: USDA, llmNutrients: { "lean ground beef": { kcal: 250, protein: 20, carbs: 0, fat: 18 } } })
 
     // The complete provenance row, pinned field by field.
     expect({
@@ -128,14 +126,12 @@ describe("a stated nutritional attribute steers which provider is used", () => {
       matchReason: r.matchReason, llmReranked: r.llmReranked, rerankReason: r.rerankReason,
       unmetAttributes: r.unmetAttributes, requestedFatPercent: r.requestedFatPercent,
     }).toEqual({
-      provider: "llm-nutrient",
-      // No record, because there is no record: an estimate names no database row, and saying so is
-      // the point. Unknown is not zero and not a citation.
-      productName: null, providerId: null,
-      kcalPer100g: 176, grams: 400, confidence: 0.35,
-      matchReason: null, llmReranked: false, rerankReason: null,
-      // Empty because the estimate was made FROM the claim — there is nothing left unmet.
-      unmetAttributes: [], requestedFatPercent: null,
+      provider: "bls", productName: "Rind Hackfleisch, roh", providerId: "U010100",
+      kcalPer100g: 224, grams: 400, confidence: 0.55,
+      matchReason: "fuzzy", llmReranked: false, rerankReason: null,
+      // Still unmet, and still said so. The honest answer to "is this lean?" is "no, and I could
+      // not find one", not a number nothing checked.
+      unmetAttributes: ["reduced-fat"], requestedFatPercent: null,
     })
     expect(r.productName ?? "").not.toMatch(/Tatar|Schabefleisch/)
   })
@@ -178,6 +174,81 @@ describe("a stated nutritional attribute steers which provider is used", () => {
     })
     // Without an LLM this stays unresolved rather than becoming 30% whipping cream.
     expect(r.productName ?? "").not.toMatch(/Schlagsahne|30 %|36 %/)
+  })
+})
+
+/**
+ * THE INVARIANT, stated without reference to any particular food.
+ *
+ * A later provider may replace an identity-compatible fallback because of an explicit nutritional
+ * attribute ONLY when that later result carries positive evidence the attribute is satisfied. The
+ * evidence the architecture can read is the candidate's own record NAME. A result with no record
+ * name — every LLM estimate, by construction — provides none, and an absent attribute check is not
+ * a passed one.
+ *
+ * Both directions are asserted, on the same invented food, so neither can be satisfied by an
+ * accident of the real databases.
+ */
+describe("displacing a flagged record requires positive evidence, not merely an absent objection", () => {
+  const CLAIM: Omit<ClassificationStub, "index"> = {
+    canonicalGerman: "Zorbal, mager", canonicalEnglish: "low-fat zorbal",
+    coreFoodGerman: "Zorbal", coreFoodEnglish: "zorbal",
+    state: "unknown", category: "dairy", foodType: "processed_single_food",
+  }
+  // The identity-compatible record that does NOT state the claim: BLS/OFF are silent on this
+  // invented food, so OFF supplies the flagged fallback and USDA supplies the challenger.
+  const flagged = [{
+    product_name: "Zorbal", brands: "", categories_tags: [],
+    // Macros consistent with the energy, or the sanity check rejects the record before the
+    // resolver ever sees it and the test proves nothing: 38*9 + 10*4 + 5*4 = 402 ~ 400.
+    nutriments: { "energy-kcal_100g": 400, proteins_100g: 10, fat_100g: 38, carbohydrates_100g: 5 },
+  }]
+
+  it("an LLM estimate does NOT clear the claim, and the flagged record is kept", async () => {
+    const { r } = await one("Zorbal mager", 100, "Gramm", CLAIM, {
+      off: { "low-fat zorbal": flagged },
+      // Deliberately lower in energy than the record, so the outcome cannot be explained as the
+      // resolver preferring the smaller number. It is refused for having no evidence, not for
+      // being high.
+      llmNutrients: { "low-fat zorbal": { kcal: 120, protein: 10, carbs: 5, fat: 2 } },
+    })
+    expect(r.provider).toBe("off")
+    expect(r.productName).toBe("Zorbal")
+    expect(r.kcalPer100g).toBe(400)
+    expect(r.unmetAttributes).toEqual(["reduced-fat"])
+  })
+
+  it("a later record whose NAME states the claim DOES replace it", async () => {
+    const { r } = await one("Zorbal mager", 100, "Gramm", CLAIM, {
+      off: { "low-fat zorbal": flagged },
+      usda: {
+        "low-fat zorbal": [{
+          fdcId: 9000001, description: "Zorbal, low fat", dataType: "SR Legacy",
+          foodCategory: "Dairy and Egg Products",
+          foodNutrients: [
+            { nutrientId: 1008, nutrientName: "Energy", unitName: "KCAL", value: 150 },
+            { nutrientId: 1004, nutrientName: "Total lipid (fat)", unitName: "G", value: 3 },
+          ],
+        }],
+      },
+      llmNutrients: { "low-fat zorbal": { kcal: 120, protein: 10, carbs: 5, fat: 2 } },
+    })
+    expect(r.provider).toBe("usda")
+    expect(r.productName).toBe("Zorbal, low fat")
+    expect(r.kcalPer100g).toBe(150)
+    // Satisfied, so no caveat carried forward from the record it replaced.
+    expect(r.unmetAttributes).toEqual([])
+  })
+
+  it("an estimate still answers normally when there is no flagged record to displace", async () => {
+    // The rule is about REPLACING evidence with none. With nothing to replace, the estimate is
+    // still the correct last resort — otherwise this would turn every unmatched claim-bearing
+    // ingredient into an unresolved one.
+    const { r } = await one("Zorbal mager", 100, "Gramm", CLAIM, {
+      llmNutrients: { "low-fat zorbal": { kcal: 120, protein: 10, carbs: 5, fat: 2 } },
+    })
+    expect(r.provider).toBe("llm-nutrient")
+    expect(r.kcalPer100g).toBe(120)
   })
 })
 

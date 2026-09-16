@@ -306,6 +306,35 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
   ],
 }
 
+/**
+ * What the DEPLOYED PR #8 build (main 8a44799) actually produced for the Big-Mac-Salat, read back
+ * from the live run — the regression this branch fixes.
+ *
+ * Two ingredients whose BLS record carried unmetAttributes ["reduced-fat"] were displaced by the
+ * LLM estimate at the end of the chain, and the resolver logged that the estimate "satisfies the
+ * stated nutritional attribute". It had no evidence for that: an estimate has no record name, so
+ * the name-based attribute check never ran, and `unmetAttributes: []` meant "never asked", not
+ * "nothing wrong". The beef estimate was 250 kcal/100 g — MORE than the 224 kcal ordinary mince it
+ * replaced for being insufficiently lean.
+ *
+ *   mageres Rinderhackfleisch  400 g   BLS 224 -> llm-nutrient 250   +104.0 kcal
+ *   Mayo Light                  12 g   BLS 490 -> llm-nutrient  50    -52.8 kcal
+ *                                                                     -------
+ *                                                              net   + 51.2 kcal
+ *
+ * 2553.416 + 51.2 = 2604.616 over 3 servings = 868. `tests/production-recipes-e2e.test.ts` drives
+ * this exact input and reproduces 2604.616 on 8a44799; with the evidence check it returns to the
+ * database records and production's own 2553.416.
+ */
+export const BIG_MAC_DEPLOYED_PR8 = {
+  totalKcal: 2604.616,
+  perServingKcal: 868,
+  displaced: [
+    { name: "mageres Rinderhackfleisch", grams: 400, wasKcalPer100g: 224, becameKcalPer100g: 250 },
+    { name: "Mayo Light", grams: 12, wasKcalPer100g: 490, becameKcalPer100g: 50 },
+  ],
+} as const
+
 export const BIG_MAC_SALAT: ProductionRecipe = {
   slug: "knuspriger-big-mac-salat",
   servings: 3,
@@ -326,7 +355,12 @@ export const BIG_MAC_SALAT: ProductionRecipe = {
     c(4, "Cheddar", "cheddar", "Cheddar", "cheddar", { category: "dairy", foodType: "processed_single_food" }),
     c(5, "Zwiebel", "onion", "Zwiebel", "onion", { state: "raw", category: "vegetable" }),
     c(6, "Öl", "oil", "Öl", "oil", { category: "oil" }),
-    c(7, "Mayonnaise, leicht", "light mayo", "Mayonnaise", "mayonnaise", { category: "condiment", foodType: "processed_single_food" }),
+    // coreFoodEnglish is "mayo", not "mayonnaise". This is not a guess: with "mayonnaise" the USDA
+    // lookup accepts "Mayonnaise, light" (2710220, 238 kcal), and with "mayo" every candidate is
+    // gated out and the lookup reports topScore -127.5 — the exact figure production logged. The
+    // earlier fixture modelled the wrong one, which is why acceptance testing reported a USDA
+    // record production never reached. See PRODUCTION_USDA_MISS below.
+    c(7, "Mayonnaise, leicht", "light mayo", "Mayonnaise", "mayo", { category: "condiment", foodType: "processed_single_food" }),
     c(8, "Senf", "mustard", "Senf", "mustard", { category: "condiment", foodType: "processed_single_food" }),
     c(9, "Ketchup", "ketchup", "Ketchup", "ketchup", { category: "condiment", foodType: "processed_single_food" }),
     c(10, "Joghurt", "yogurt", "Joghurt", "yogurt", { category: "dairy", foodType: "processed_single_food" }),
@@ -353,6 +387,12 @@ export const BIG_MAC_SALAT: ProductionRecipe = {
     oil: { kcal: 884, protein: 0, carbs: 0, fat: 100 },
     "cucumber water": { kcal: 12, protein: 0.3, carbs: 2.5, fat: 0.1 },
     "paprika powder": { kcal: 282, protein: 14, carbs: 54, fat: 13 },
+    // What production's estimator ACTUALLY returned once PR #8 let the chain reach it. Both are
+    // read back from the deployed run, not modelled. The beef figure is the whole point of this
+    // fixture: 250 kcal/100 g is MORE than the 224 kcal ordinary mince it was allowed to displace
+    // "because it satisfied reduced-fat".
+    "lean ground beef": { kcal: 250, protein: 20, carbs: 0, fat: 18 },
+    "light mayo": { kcal: 50, protein: 0.5, carbs: 5, fat: 3 },
   },
   // EXACT: 2499.956 from the database rows + 53.460 from these three = 2553.416, production's own
   // total to the milli-kcal. Note this is the total production recorded, with its 490 kcal
