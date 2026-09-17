@@ -56,6 +56,12 @@ async function main() {
         usdaLocalEnabled: usdaLocal !== null,
         usdaLocalDatasets: usdaLocal?.datasets ?? null,
         llmEnabled: config.llm.enabled && Boolean(config.llm.apiKey),
+        // Reported because it is an OPT-IN: with the code default now false, a deployment that
+        // means to run the semantic judge must say so in its environment, and the only way to
+        // confirm it did is to see it here. Silently starting without it would quietly return the
+        // service to the purely deterministic chain.
+        judgeEnabled: config.llm.judgeEnabled,
+        judgeModel: config.llm.judgeEnabled ? config.llm.judgeModel : null,
       },
       "Calorie estimator server started",
     )
