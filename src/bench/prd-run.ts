@@ -6,6 +6,7 @@ import { askJudge, JUDGE_PROMPT_VERSION } from "../services/providers/judge/judg
 import { orderCandidates } from "../services/providers/judge/candidate-pool.js"
 import { buildShortlist } from "./shortlist.js"
 import { searchOff, filterOffHits, offProxyJustified } from "./off-proxy.js"
+import { askPropertyJudge } from "./property-judge.js"
 import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type FoodType } from "../types.js"
 import type { JudgeCandidate } from "../services/providers/judge/types.js"
 
@@ -196,6 +197,32 @@ async function main(): Promise<void> {
 
     const unique = [...new Set(outcomes)]
     console.log(`  STABILITY ${unique.length === 1 ? "STABLE" : "UNSTABLE"} across ${PERMUTATIONS} permutations -> ${JSON.stringify(unique)}`)
+
+    // Same pools, same permutations, but the model is told WHICH property went unsatisfied.
+    if (current?.match.productName && shortlist.property.kind !== "none") {
+      const propOutcomes: string[] = []
+      for (let i = 0; i < PERMUTATIONS; i++) {
+        const permuted = rotate(finalPool, i * 3 + 1)
+        const out = await askPropertyJudge({
+          structuredName: c.structured, canonicalEnglish: c.english, canonicalGerman: c.german,
+          coreFoodEnglish: c.coreEn, state: c.state, form: attributes.form,
+          preservation: attributes.preservation, fatPercent: attributes.fatPercent, category: c.category,
+        }, permuted, current.match.productName, shortlist.property.description)
+        totals.calls++
+        totals.prompt += out.promptTokens
+        totals.completion += out.completionTokens
+        totals.latency += out.latencyMs
+        if (!out.decision) totals.invalid++
+        const d = out.decision
+        const picked = d?.candidateId ? permuted.find((p) => p.id === d.candidateId) : null
+        propOutcomes.push(d ? `${d.verdict}:${d.candidateId ?? "-"}` : `invalid:${out.invalidReason ?? "?"}`)
+        console.log(`  PROP ${i} -> ${d ? d.verdict.toUpperCase() : `INVALID(${out.invalidReason})`}` +
+          `${picked ? ` ${picked.id} "${picked.name.slice(0, 40)}" ${picked.nutrients.kcalPer100g}kcal fat=${picked.nutrients.fatPer100g}` : ""} conf=${d?.confidence ?? "-"}`)
+        if (d?.reason) console.log(`         reason: ${d.reason}`)
+      }
+      const pu = [...new Set(propOutcomes)]
+      console.log(`  PROP-STABILITY ${pu.length === 1 ? "STABLE" : "UNSTABLE"} -> ${JSON.stringify(pu)}`)
+    }
     const wouldApply = unique.length === 1 && outcomes[0].startsWith("selected:")
     console.log(`  WOULD REPLACE: ${wouldApply ? outcomes[0].slice("selected:".length) : "no — keeping the deterministic result"}`)
   }
