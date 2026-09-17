@@ -34,10 +34,15 @@ export const config = {
     timeoutMs: parseInt(process.env.MEALIE_TIMEOUT_MS || "30000", 10),
   },
 
-  // Only the /search endpoint is used (off-provider.ts) — there is no product-barcode lookup in
-  // this codebase, so no product-endpoint base URL or rate limit is declared here.
   openFoodFacts: {
     searchBaseUrl: process.env.OFF_SEARCH_BASE_URL || "https://search.openfoodfacts.org",
+    /**
+     * Product-by-barcode lookup, used only to reload the target of a user-confirmed override.
+     * Separate base URL because OFF serves search and products from different hosts; it shares
+     * ONE rate-limit budget, one retry policy and one User-Agent with search, so adding this
+     * route cannot double the request rate this service puts on OFF.
+     */
+    productBaseUrl: process.env.OFF_PRODUCT_BASE_URL || "https://world.openfoodfacts.org",
     language: process.env.OFF_LANGUAGE || "de",
     searchRateLimit: parseInt(process.env.OFF_SEARCH_RATE_LIMIT || "10", 10),
     maxRetries: parseInt(process.env.OFF_MAX_RETRIES || "3", 10),
@@ -125,6 +130,17 @@ export const config = {
     /** Maximum nesting of recipe-as-ingredient resolution. 1 = a recipe may use recipes, but those
      *  are read as stored and never resolved further. */
     maxDepth: Math.max(1, parseInt(process.env.MEALIE_RECIPE_MAX_DEPTH || "1", 10)),
+  },
+
+  /**
+   * User-confirmed food overrides. Durable user data, deliberately in its OWN file rather than the
+   * cache: cache.db is TTL-swept, has a clear-all for tests, and is the file someone would delete
+   * to reset bad matches. OVERRIDE_ADMIN_TOKEN gates the management API; unset means the routes do
+   * not exist at all.
+   */
+  overrides: {
+    dbPath: process.env.OVERRIDES_DB_PATH || "data/overrides.db",
+    adminToken: process.env.OVERRIDE_ADMIN_TOKEN || "",
   },
 
   cache: {

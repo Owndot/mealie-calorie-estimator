@@ -13,12 +13,13 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     // OFF is branded product-label data. Both are always present — USDA used to be conditional on
     // an API key, and there is no key any more.
     const chain = getProviderChain("generic").map((p) => p.name)
-    expect(chain).toEqual(["mealie-recipe", "bls", "usda-local", "off"])
+    // The user's own recipes, then their confirmed overrides, then everything automatic.
+    expect(chain).toEqual(["mealie-recipe", "food-override", "bls", "usda-local", "off"])
   })
 
   it("branded route starts with OFF, then BLS, then the local USDA database", () => {
     const chain = getProviderChain("branded")
-    expect(chain.map((p) => p.name)).toEqual(["mealie-recipe", "off", "bls", "usda-local"])
+    expect(chain.map((p) => p.name)).toEqual(["mealie-recipe", "food-override", "off", "bls", "usda-local"])
   })
 
   it("never contains the removed live FoodData Central provider", () => {
@@ -68,7 +69,7 @@ describe("getProviderChain — routing-aware, not a single global chain", () => 
     config.llm.enabled = true
     config.llm.apiKey = "test-key"
     expect(getProviderChain("generic").map((p) => p.name))
-      .toEqual(["mealie-recipe", "bls", "usda-local", "off", "llm-nutrient"])
+      .toEqual(["mealie-recipe", "food-override", "bls", "usda-local", "off", "llm-nutrient"])
   })
 
   it("does not include the LLM provider when enabled but no API key is set", () => {

@@ -107,6 +107,49 @@ function extractNutrients(n: OffNutriments): NutrientSet {
  * day) every time OFF has a rate-limit flood or blip, silently starving unrelated foods of
  * branded nutrition long after OFF recovers.
  */
+/**
+ * Loads one OFF product by barcode, for a user-confirmed override's target.
+ *
+ * Shares this module's SINGLE rate-limit budget, retry policy and User-Agent with search — two
+ * independent buckets against the same service would quietly double the request rate this
+ * estimator puts on OFF, which is not a cost a new feature gets to impose unilaterally. Only the
+ * base URL differs, because OFF serves products and search from different hosts.
+ */
+export async function loadOffProductByBarcode(barcode: string): Promise<{ name: string; brand: string | null; nutrients: NutrientSet; foodType: FoodType } | null> {
+  const params = new URLSearchParams({ fields: OFF_PROXY_FIELDS })
+  const url = `${config.openFoodFacts.productBaseUrl}/api/v2/product/${encodeURIComponent(barcode)}?${params}`
+
+  await waitForRateLimit(RateLimitType.Search)
+  const res = await fetchWithRetry(url, barcode)
+  if (!res || !res.ok) {
+    logger.warn({ barcode, status: res?.status ?? null }, "OFF product lookup failed")
+    return null
+  }
+
+  let body: { status?: number; product?: Record<string, unknown> }
+  try {
+    body = (await res.json()) as typeof body
+  } catch {
+    logger.warn({ barcode }, "OFF product lookup returned unparseable JSON")
+    return null
+  }
+  const product = body.product
+  if (!product || body.status === 0) return null
+
+  const name = typeof product.product_name === "string" ? product.product_name.trim() : ""
+  if (!name) return null
+  const nutrients = extractNutrients((product.nutriments ?? {}) as OffNutriments)
+  // No energy means no usable nutrition — the caller must fall back rather than serve a blank.
+  if (nutrients.kcalPer100g === null) return null
+
+  return {
+    name,
+    brand: normalizeOffBrand(product.brands),
+    nutrients,
+    foodType: offFoodType(product.categories_tags),
+  }
+}
+
 /** The barcode is needed as a provider id; the ordinary provider path never uses it. */
 const OFF_PROXY_FIELDS = ["code", "product_name", "brands", "nutriments", "categories_tags"].join(",")
 

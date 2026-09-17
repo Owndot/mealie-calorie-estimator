@@ -120,7 +120,12 @@ async function resolveDeterministic(query: ProviderQuery, route: FoodRoute): Pro
       continue
     }
 
-    const resolved = { match, fallbackStatus: toFallbackStatus(provider.name) }
+    // Derived from the MATCH's provider, not the chain entry's name. For every ordinary provider
+    // these are the same string, because each sets `provider` to its own name. They differ for a
+    // user-confirmed override, which is a reason rather than a source: the numbers really did come
+    // from BLS/USDA/OFF, and provenance must say so. The override itself is recorded as
+    // matchReason: "user-confirmed-override".
+    const resolved = { match, fallbackStatus: toFallbackStatus(match.provider) }
 
     if ((match.unmetAttributes?.length ?? 0) === 0) {
       // Nothing to displace: first acceptable match wins, exactly as before.

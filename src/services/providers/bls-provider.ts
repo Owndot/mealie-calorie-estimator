@@ -93,6 +93,7 @@ interface BlsData {
   /** The ingredient_preferred subset — the degraded-mode fuzzy candidate pool. */
   preferredRecords: BlsFoodRecord[]
   byNormalizedNameDe: Map<string, BlsFoodRecord[]>
+  byCode: Map<string, BlsFoodRecord>
   preferredCodes: Set<string>
 }
 
@@ -179,7 +180,7 @@ async function loadBlsData(): Promise<BlsData | null> {
     { count: records.length, ingredientPreferred: preferredRecords.length, dbPath },
     "Loaded BLS 4.0 reference database",
   )
-  return { records, preferredRecords, byNormalizedNameDe, preferredCodes }
+  return { records, preferredRecords, byNormalizedNameDe, byCode: new Map(records.map((r) => [r.blsCode, r])), preferredCodes }
 }
 
 /**
@@ -268,7 +269,7 @@ export function __buildTestBlsData(inputs: TestBlsFoodInput[]): BlsData {
   }
 
   const preferredRecords = records.filter((r) => r.ingredientPreferred)
-  return { records, preferredRecords, byNormalizedNameDe, preferredCodes: new Set(preferredRecords.map((r) => r.blsCode)) }
+  return { records, preferredRecords, byNormalizedNameDe, byCode: new Map(records.map((r) => [r.blsCode, r])), preferredCodes: new Set(preferredRecords.map((r) => r.blsCode)) }
 }
 
 /**
@@ -1027,6 +1028,17 @@ export async function __scoreForDiagnostics(
     .sort((a, b) => b.score - a.score)
     .slice(0, 6)
     .map((s) => ({ code: s.record.blsCode, name: s.record.nameDe, score: Math.round(s.score), reason: s.mismatchReason }))
+}
+
+/**
+ * Loads one BLS record by its official code, for a user-confirmed override's target. Reads the
+ * same in-memory data every lookup uses, so an override can never drift from the live database.
+ */
+export async function loadBlsRecordByCode(code: string): Promise<{ name: string; nutrients: NutrientSet; state: FoodState; foodType: FoodType } | null> {
+  const data = await getBlsData()
+  const record = data?.byCode.get(code)
+  if (!record) return null
+  return { name: record.nameDe, nutrients: record.nutrients, state: record.inferredState, foodType: record.foodType }
 }
 
 export function createBlsProviderIfAvailable(): BlsProvider {

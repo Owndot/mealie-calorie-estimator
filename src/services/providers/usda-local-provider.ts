@@ -207,6 +207,15 @@ export function getUsdaLocalData(): Promise<UsdaData | null> {
 }
 
 /** Test seam: forces the next lookup to re-read the database from disk. */
+/** Loads one USDA record by FDC id, for a user-confirmed override's target. */
+export async function loadUsdaRecordById(fdcId: string): Promise<{ name: string; nutrients: NutrientSet; state: FoodState; foodType: FoodType; dataType: string } | null> {
+  const data = await getUsdaLocalData()
+  const id = Number(fdcId)
+  const record = data?.records.find((r) => r.fdcId === id)
+  if (!record) return null
+  return { name: record.description, nutrients: record.nutrients, state: record.state, foodType: record.foodType, dataType: record.dataType }
+}
+
 export function __resetUsdaLocalForTests(): void {
   loadPromise = null
 }

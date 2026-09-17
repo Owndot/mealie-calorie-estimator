@@ -3,13 +3,16 @@ import cors from "@fastify/cors"
 import { config } from "./config.js"
 import { logger } from "./utils/logger.js"
 import { initCache, flushCache } from "./utils/cache.js"
+import { initOverrides, flushOverrides, countOverrides } from "./services/food-overrides.js"
 import { webhookRoutes } from "./routes/webhook.js"
 import { estimateRoutes } from "./routes/estimate.js"
 import { backfillRoutes } from "./routes/backfill.js"
+import { overrideRoutes } from "./routes/overrides.js"
 import { getUsdaLocalData } from "./services/providers/usda-local-provider.js"
 
 async function main() {
   await initCache()
+  await initOverrides()
   const app = Fastify({
     logger: false,
   })
@@ -19,6 +22,7 @@ async function main() {
   await app.register(webhookRoutes)
   await app.register(estimateRoutes)
   await app.register(backfillRoutes)
+  await app.register(overrideRoutes)
 
   app.get("/health", async () => {
     return { status: "ok", timestamp: new Date().toISOString() }
@@ -34,6 +38,7 @@ async function main() {
     shuttingDown = true
     logger.info({ signal }, "Shutting down, flushing cache")
     flushCache()
+    flushOverrides()
     try {
       await app.close()
     } finally {
@@ -62,6 +67,8 @@ async function main() {
         // service to the purely deterministic chain.
         judgeEnabled: config.llm.judgeEnabled,
         judgeModel: config.llm.judgeEnabled ? config.llm.judgeModel : null,
+        foodOverrides: countOverrides(),
+        overrideApiEnabled: Boolean(config.overrides.adminToken),
       },
       "Calorie estimator server started",
     )

@@ -4,6 +4,7 @@ import { createBlsProviderIfAvailable } from "./bls-provider.js"
 import { usdaLocalProvider } from "./usda-local-provider.js"
 import { llmNutrientProvider } from "./llm-nutrient-provider.js"
 import { mealieRecipeProvider } from "./mealie-recipe-provider.js"
+import { overrideProvider } from "./override-provider.js"
 import type { NutrientProvider } from "./types.js"
 import type { FoodRoute } from "../../types.js"
 
@@ -23,7 +24,12 @@ function buildGenericProviders(): NutrientProvider[] {
   // The user's own recipes come first on both routes: a homemade paste or spice mix is the one
   // food no public database can know, and the provider only ever answers on an exact recipe-name
   // match, so it is silent for every ordinary ingredient.
-  return [mealieRecipeProvider, createBlsProviderIfAvailable(), usdaLocalProvider, offProvider]
+  //
+  // A user-confirmed override comes second — after the recipes, before everything automatic. It
+  // settles what automatic resolution could not; a Mealie recipe is not automatic resolution, and
+  // letting a static pointer shadow a live recipe would make editing that recipe ineffective.
+  // Both are silent unless they have something for this exact ingredient.
+  return [mealieRecipeProvider, overrideProvider, createBlsProviderIfAvailable(), usdaLocalProvider, offProvider]
 }
 
 /**
@@ -33,7 +39,7 @@ function buildGenericProviders(): NutrientProvider[] {
  * generically). OFF is never repeated after BLS/USDA — it already ran first.
  */
 function buildBrandedProviders(): NutrientProvider[] {
-  return [mealieRecipeProvider, offProvider, createBlsProviderIfAvailable(), usdaLocalProvider]
+  return [mealieRecipeProvider, overrideProvider, offProvider, createBlsProviderIfAvailable(), usdaLocalProvider]
 }
 
 /**
