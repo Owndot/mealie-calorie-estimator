@@ -17,6 +17,7 @@ import {
   inferAttributesFromName, attributesKey,
 } from "./food-semantics.js"
 import { UNKNOWN_ATTRIBUTES } from "../../types.js"
+import { sanityCheckNutrients } from "../sanity-check.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
 const BLS_MATCH_ALGORITHM_VERSION = "v23"
@@ -579,8 +580,26 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
  * first, and a candidate with *unknown* inferred state (BLS's name didn't say) is never treated as
  * a conflict either way.
  */
-function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minScore: number, queryAttrs = UNKNOWN_ATTRIBUTES, identityText = ""): ScoredRecord | null {
-  const acceptable = sorted.filter((c) => c.score >= minScore && !c.mismatchReason)
+function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minScore: number, queryAttrs = UNKNOWN_ATTRIBUTES, identityText = "", sanityName = ""): ScoredRecord | null {
+  // Nutritional plausibility is part of SELECTION, not just a veto applied afterwards.
+  //
+  // The resolver sanity-checks whatever a provider returns, but a failure there discards the whole
+  // PROVIDER: the chain moves on, and every remaining candidate this provider had — including a
+  // perfectly good one at the same score — is never considered. "Wasser" is what exposed it. BLS
+  // holds Trinkwasser (N110000, 0 kcal) and Obstbrand/Obstwasser (P752100, 274 kcal, a fruit
+  // schnapps); German compounds them identically, so both score 57 and the tie fell to the
+  // schnapps. The resolver then rejected 274 kcal for "Wasser" — correctly — and left the
+  // ingredient unresolved, which withheld the entire recipe's nutrition, with 0 kcal water sitting
+  // one position down the list.
+  //
+  // So the same check runs here, against the same query name the resolver will use, while the
+  // alternatives are still in hand. A candidate whose numbers cannot be true for the food that was
+  // asked for is not a candidate. This does not weaken the resolver's check — that still runs, and
+  // still has the final word.
+  const acceptable = sorted.filter((c) =>
+    c.score >= minScore
+    && !c.mismatchReason
+    && (!sanityName || sanityCheckNutrients(c.record.nutrients, sanityName).ok))
   if (acceptable.length === 0) return null
 
   // Within one score band, attribute fit decides before raw score does — a two-point lexical edge
@@ -863,7 +882,7 @@ export class BlsProvider implements NutrientProvider {
         const seen = survivors.get(c.record.blsCode)
         if (!seen || c.score > seen.score) survivors.set(c.record.blsCode, c)
       }
-      const picked = pickBestCandidate(scored, query.state, FUZZY_MIN_SCORE, attrs, identityText)
+      const picked = pickBestCandidate(scored, query.state, FUZZY_MIN_SCORE, attrs, identityText, query.foodName)
       if (picked && !deterministic) deterministic = picked
     }
 
