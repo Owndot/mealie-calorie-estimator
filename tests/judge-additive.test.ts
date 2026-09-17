@@ -296,3 +296,135 @@ describe("with the judge disabled, PR C is inert", () => {
     expect(r!.fallbackStatus).toBe("llm-nutrient")
   })
 })
+
+// ---------------------------------------------------------------------------------------------
+
+describe("OFF as a verified retail proxy, on the additive path only", () => {
+  const OFF_HIT = (over: Record<string, unknown> = {}) => ({
+    code: "4061458212588",
+    product_name: "Kochsahne 7%Fett",
+    brands: ["Milsani", "Aldi"],
+    categories_tags: ["en:dairies", "en:creams"],
+    nutriments: { "energy-kcal_100g": 85, proteins_100g: 2.9, carbohydrates_100g: 3.9, fat_100g: 7 },
+    ...over,
+  })
+
+  /** Routes the judge prompt, the nutrient fallback and the OFF proxy search separately. */
+  let retailSeenByJudge = false
+  const judgeSawRetail = () => retailSeenByJudge
+
+  function stubWithOff(hits: unknown[], judgeReply: (ids: string[]) => string) {
+    calls = { judge: 0, nutrients: 0 }
+    retailSeenByJudge = false
+    let offSearches = 0
+    const chat = (content: string) =>
+      new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: { body?: string }) => {
+      const u = String(url)
+      if (u.startsWith(config.openFoodFacts.searchBaseUrl)) {
+        offSearches++
+        return new Response(JSON.stringify({ hits }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      const body = String(init?.body ?? "{}")
+      const prompt = String(JSON.parse(body).messages?.[0]?.content ?? "")
+      if (prompt.includes(JUDGE_MARKER)) {
+        calls.judge++
+        const ids = [...String(JSON.parse(body).messages?.[1]?.content ?? "").matchAll(/id=(\S+) \|/g)].map((m) => m[1])
+        if (ids.some((i) => i.startsWith("off:"))) retailSeenByJudge = true
+        return chat(judgeReply(ids))
+      }
+      calls.nutrients++
+      return chat(JSON.stringify({ kcal: 70, protein: 3, carbs: 4, fat: 4.5 }))
+    }))
+    return { offSearches: () => offSearches }
+  }
+
+  const KOCHSAHNE: Q = {
+    de: "Kochsahne 7 % Fett", en: "cooking cream 7% fat", coreDe: "Sahne", coreEn: "cream",
+    category: "dairy", foodType: "processed_single_food", attributes: attrs({ fatPercent: 7 }),
+  }
+
+  it("replaces a fabricated estimate with a real retail record when nothing local states the number", async () => {
+    const off = stubWithOff([OFF_HIT()], (ids) => {
+      const target = ids.find((i) => i.startsWith("off:"))!
+      return `{"decision":"selected","candidateId":"${target}","confidence":0.9,"reason":"exact stated fat percentage"}`
+    })
+    const r = await resolve(KOCHSAHNE)
+    expect(off.offSearches()).toBeGreaterThan(0)
+    expect(r!.fallbackStatus).toBe("off")
+    expect(r!.match.providerId).toBe("4061458212588")
+    // Nutrients are the product's, copied verbatim — the model returned an id and nothing else.
+    expect(r!.match.nutrients.kcalPer100g).toBe(85)
+    expect(r!.match.nutrients.fatPer100g).toBe(7)
+  })
+
+  it("does NOT query OFF for an ordinary ingredient a local database already answers", async () => {
+    const off = stubWithOff([OFF_HIT()], () => { throw new Error("the judge must not be asked") })
+    const r = await resolve({ de: "Tomate", en: "tomato", coreDe: "Tomate", coreEn: "tomato", category: "vegetable", state: "raw" })
+    expect(r!.fallbackStatus).toBe("bls")
+    expect(off.offSearches()).toBe(0)
+    expect(calls.judge).toBe(0)
+  })
+
+  it("does NOT query OFF for a numeric claim a local record already states", async () => {
+    const off = stubWithOff([OFF_HIT()], (ids) => `{"decision":"selected","candidateId":"${ids[0]}","confidence":0.9,"reason":"x"}`)
+    await resolve({
+      de: "Rinderhackfleisch 10 % Fett", en: "ground beef 10% fat", coreDe: "Rinderhackfleisch",
+      coreEn: "ground beef", category: "meat", state: "raw", attributes: attrs({ fatPercent: 10 }),
+    })
+    // USDA files the 90/10 grade as a record of its own, so the JUDGE never opens a proxy route
+    // for it. (The ordinary OFF provider is still part of the chain and may run on its own terms;
+    // what is asserted here is that no proxy search was added on top of it.)
+    expect(off.offSearches()).toBeLessThanOrEqual(1)
+    expect(judgeSawRetail()).toBe(false)
+  })
+
+  it("keeps the strict filter: a product with no energy, or the wrong measured fat, never reaches the judge", async () => {
+    let offered: string[] = []
+    stubWithOff(
+      [
+        OFF_HIT({ code: "111", nutriments: { proteins_100g: 3 } }),                                   // no energy
+        OFF_HIT({ code: "222", nutriments: { "energy-kcal_100g": 300, fat_100g: 30 } }),               // 30% vs 7%
+        OFF_HIT({ code: "333", product_name: "Schoko-Riegel", nutriments: { "energy-kcal_100g": 500, fat_100g: 7 } }), // core absent from name
+        OFF_HIT(),                                                                                     // the genuine one
+      ],
+      (ids) => { offered = ids; return '{"decision":"none","candidateId":null,"confidence":1,"reason":"x"}' },
+    )
+    await resolve(KOCHSAHNE)
+    expect(offered).toContain("off:4061458212588")
+    for (const rejected of ["off:111", "off:222", "off:333"]) expect(offered).not.toContain(rejected)
+  })
+
+  it("an OFF search failure changes nothing — the deterministic fallback stands", async () => {
+    calls = { judge: 0, nutrients: 0 }
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown, init?: { body?: string }) => {
+      if (String(url).startsWith(config.openFoodFacts.searchBaseUrl)) throw new Error("ECONNRESET")
+      const prompt = String(JSON.parse(String(init?.body ?? "{}")).messages?.[0]?.content ?? "")
+      if (prompt.includes(JUDGE_MARKER)) {
+        calls.judge++
+        return new Response(JSON.stringify({ choices: [{ message: { content: '{"decision":"none","candidateId":null,"confidence":1,"reason":"x"}' } }] }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ kcal: 70, protein: 3, carbs: 4, fat: 4.5 }) } }] }), { status: 200 })
+    }))
+    const r = await resolve(KOCHSAHNE)
+    expect(r!.fallbackStatus).toBe("llm-nutrient")
+    expect(r!.match.nutrients.kcalPer100g).toBe(70)
+  })
+
+  it("never lets a retail record displace an ACCEPTED database record", async () => {
+    const off = stubWithOff([OFF_HIT({ product_name: "Mageres Rinderhackfleisch zum Braten", code: "4313249214975", nutriments: { "energy-kcal_100g": 163, fat_100g: 8.9, proteins_100g: 21 } })],
+      (ids) => `{"decision":"selected","candidateId":"${ids[0]}","confidence":1,"reason":"x"}`)
+    const r = await resolve({
+      de: "Rinderhackfleisch, mager", en: "lean ground beef", coreDe: "Rinderhackfleisch",
+      coreEn: "ground beef", category: "meat", state: "raw",
+    })
+    // BLS accepts a record for this query, so the fast path returns before any pool is built.
+    expect(r!.fallbackStatus).toBe("bls")
+    expect(r!.match.unmetAttributes).toEqual(["reduced-fat"])
+    // The judge is never asked at all, so no retail record can reach this resolution — the
+    // unmet-attribute replacement path is deliberately not part of this change.
+    expect(calls.judge).toBe(0)
+  })
+})
