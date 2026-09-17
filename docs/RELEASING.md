@@ -20,17 +20,27 @@ deciding whether a change is a patch or a minor.
 ## Procedure
 
 1. Make sure `main` is green and the working tree is clean.
-2. Rehearse — build and verify **without publishing**:
+2. Set the version in `package.json` and merge that change through a normal PR:
+   ```jsonc
+   { "version": "1.1.0" }
+   ```
+   This comes first because it is what states the version: the rehearsal reads it, and the workflow
+   later refuses to publish a tag that disagrees with it, so a release is always reproducible from
+   the source tree.
+3. Rehearse — build and verify **without publishing**:
    ```bash
    gh workflow run Release --ref main -f dry_run=true
    gh run watch
    ```
-3. Set the version in `package.json` and merge that change through a normal PR:
-   ```jsonc
-   { "version": "1.1.0" }
+   The rehearsal runs the real release path: the full test suite, the real image build, and the real
+   image-tag computation — which is why step 2 comes first. With no tag pushed it takes the version
+   from `package.json` and reports the tags it would publish:
    ```
-   The workflow refuses to publish a tag that disagrees with `package.json`, so a release is always
-   reproducible from the source tree.
+   ghcr.io/owndot/mealie-nutrition-engine:1.1.0
+   ghcr.io/owndot/mealie-nutrition-engine:1.1
+   ```
+   `:latest` is deliberately absent — only a real tag push moves it. A rehearsal that computes no
+   tags fails, because it would otherwise pass while proving nothing.
 4. Tag the merge commit and push:
    ```bash
    git checkout main && git pull --ff-only
@@ -39,6 +49,9 @@ deciding whether a change is a patch or a minor.
    ```
 5. The workflow publishes `ghcr.io/owndot/mealie-nutrition-engine:1.1.0`, `:1.1`, `:latest` and
    opens the GitHub Release with generated notes.
+
+Pushing the tag is the only publishing step. If it fails partway, fix the cause and re-run the same
+workflow run — the version is stated, not consumed, so nothing is burned and the tag stays valid.
 
 ## Versioning
 
