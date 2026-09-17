@@ -2,6 +2,8 @@ import { config } from "../../config.js"
 import { logger } from "../../utils/logger.js"
 import { callLlm } from "../llm-client.js"
 import { getCachedRerank, setCachedRerank } from "../../utils/cache.js"
+import { germanTokenMatches, inferAttributesFromName } from "./food-semantics.js"
+import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type FoodState } from "../../types.js"
 
 /**
@@ -194,6 +196,119 @@ export function rerankTrigger(
 
 export function identityKey(tokens: string[]): string {
   return [...tokens].sort().join(" ")
+}
+
+/**
+ * What the identity gate reads from a candidate. Declared structurally so BLS rows and USDA rows
+ * both satisfy it without either provider learning about the other.
+ */
+export interface IdentityCandidate {
+  identityTokens: string[]
+  attributes: FoodAttributes
+}
+
+/** Below this a token is too short for compound containment to be evidence rather than accident. */
+const MIN_COMPOUND_PART = 4
+
+/** The query's own words, normalized the same way record names are. */
+function queryIdentityTokens(query: RerankQuery): string[] {
+  const text = [query.structuredName, query.canonicalGerman, query.canonicalEnglish, query.coreFood]
+    .filter(Boolean).join(" ")
+  return normalizeGermanText(text).split(/[^\p{L}\p{N}]+/u).filter((t) => t.length >= 3)
+}
+
+/**
+ * Whether the QUERY accounts for this record token.
+ *
+ * Deliberately one-directional: the query may contain the token inside a compound
+ * ("Rinderhackfleisch" accounts for "hackfleisch"), but a record token that merely CONTAINS a
+ * query token is not accounted for — "Milch" does not license "Rohmilch". Getting that backwards
+ * would let any specialisation of the query word pass as supported, which is precisely the move
+ * this gate exists to catch.
+ */
+function supportedByQuery(token: string, queryTokens: string[]): boolean {
+  return queryTokens.some((q) =>
+    q === token || germanTokenMatches(q, token)
+    || (token.length >= MIN_COMPOUND_PART && q.includes(token)))
+}
+
+/** Whether the replacement still carries an identity token the original had. Equality only. */
+function survives(token: string, replacementTokens: string[]): boolean {
+  return replacementTokens.some((r) => r === token || germanTokenMatches(r, token))
+}
+
+/**
+ * Deterministic identity-preservation gate applied AFTER the model has chosen.
+ *
+ * The acceptance path used to end at "the proposed record's identity differs from the deterministic
+ * winner's" — a check written to reject same-identity noise ("Senf mittelscharf" -> "Senf scharf")
+ * which, read as a pass condition, says the opposite of what is wanted: the more destructive a
+ * rerank is, the more certainly it qualifies. Measured live, a beef-mince query resolved to a
+ * beef-AND-PORK patty record on the reasoning "Same base ingredient, state, and form as ground
+ * beef" — a species and a form change at once, with nothing in the pipeline able to object, because
+ * species and form are not modelled anywhere: BLS annotates both mince and patty as form "unknown".
+ *
+ * So identity is checked as identity, in the only vocabulary that generalises across providers and
+ * needs no table of foods, species or products — the tokens themselves:
+ *
+ *   1. a token the QUERY accounts for and the deterministic winner carried must survive;
+ *   2. otherwise-unaccounted tokens may only be INTRODUCED when they buy something the ingredient
+ *      actually asked for.
+ *
+ * "Actually asked for" is read from the query's own words via inferAttributesFromName(), never from
+ * the classifier's attributes. That is the difference between this gate and a cosmetic one: the
+ * classifier emits `state: "raw"` as a null value on roughly two thirds of all ingredients (#47),
+ * and an escape hatch keyed on unevidenced claims would be opened by exactly the inputs it needs to
+ * resist. Plain "Milch" states no attribute at all, so no escape is available to it and the
+ * pasteurised record it already had stands.
+ *
+ * Returns true when the replacement may be accepted. A null deterministic winner is always true:
+ * there is no identity to preserve, and that rescue path is what most reranks legitimately do.
+ */
+export function rerankPreservesIdentity(
+  query: RerankQuery,
+  deterministic: IdentityCandidate | null,
+  replacement: IdentityCandidate,
+): boolean {
+  if (!deterministic) return true
+
+  const queryTokens = queryIdentityTokens(query)
+  const kept = deterministic.identityTokens.filter((t) => supportedByQuery(t, queryTokens))
+  const gained = replacement.identityTokens.filter((t) => supportedByQuery(t, queryTokens))
+
+  // (1) Identity the query accounted for and the winner carried must survive. This is the whole of
+  // the mince/patty case: the query named a product, the winner matched it, the replacement dropped
+  // it for a different one. No knowledge of species or products is needed to see that.
+  if (!kept.every((t) => survives(t, replacement.identityTokens))) return false
+
+  // (2) ...and a LATERAL SUBSTITUTION of an unstated guess is not an improvement.
+  //
+  // The winner having no unaccounted identity of its own is the ordinary case, and there the model
+  // is ADDING knowledge the ingredient omitted — unqualified peas really are the green ones, a
+  // sweet-pepper record really should give way to a chili one. That is what reranking is for, and
+  // nothing here may stand in its way.
+  //
+  // What is not an improvement is the winner having already committed to something unstated and the
+  // replacement swapping it for a DIFFERENT something unstated: neither is accounted for by the
+  // ingredient, neither covers more of it, and the deterministic order already settled the choice.
+  // This is the same defect the same-identity check above rejects — one unsupported subtype traded
+  // for another — and it was only ever caught when the two happened to strip to identical tokens.
+  const unaccounted = deterministic.identityTokens.filter((t) => !supportedByQuery(t, queryTokens))
+  if (unaccounted.length === 0) return true
+
+  const introduced = replacement.identityTokens.filter((t) => !supportedByQuery(t, queryTokens))
+  if (introduced.every((t) => survives(t, unaccounted))) return true
+
+  // Two ways out, both objective: cover strictly more of what the ingredient actually said...
+  if (gained.length > kept.length) return true
+
+  // ...or answer an attribute the ingredient's OWN WORDS state. Read from the text via
+  // inferAttributesFromName(), never from query.attributes or query.state: the classifier emits
+  // `state: "raw"` as a null value on roughly two thirds of all ingredients (#47), and an escape
+  // keyed on unevidenced claims would be opened by exactly the inputs it needs to resist.
+  const evidenced = inferAttributesFromName(
+    [query.structuredName, query.canonicalGerman, query.canonicalEnglish].filter(Boolean).join(" "))
+  return attributeFit(evidenced, replacement) > attributeFit(evidenced, deterministic)
 }
 
 

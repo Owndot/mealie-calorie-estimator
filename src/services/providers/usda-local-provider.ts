@@ -14,7 +14,7 @@ import {
 } from "./ranking.js"
 import { FULL_EVIDENCE } from "../identity-evidence.js"
 import { attributesKey, inferAttributesFromName, unmetModifierFamilies } from "./food-semantics.js"
-import { rerankCandidates, rerankTrigger, identityKey, RERANK_MIN_CANDIDATE_SCORE, type TriggerCandidate } from "./candidate-rerank.js"
+import { rerankCandidates, rerankTrigger, identityKey, rerankPreservesIdentity, RERANK_MIN_CANDIDATE_SCORE, type TriggerCandidate } from "./candidate-rerank.js"
 import { UNKNOWN_ATTRIBUTES, type FoodAttributes } from "../../types.js"
 
 /**
@@ -490,16 +490,17 @@ export class UsdaLocalProvider implements NutrientProvider {
     if (!reason) return null
 
     const offered = eligible.slice(0, config.llm.rerankMaxCandidates)
+    const rerankQuery = {
+      provider: this.name,
+      structuredName: query.structuredName ?? query.foodName,
+      canonicalGerman: query.canonicalGerman ?? null,
+      canonicalEnglish: query.foodName,
+      coreFood: core ?? null,
+      state: query.state,
+      attributes: attrs,
+    }
     const decision = await rerankCandidates(
-      {
-        provider: this.name,
-        structuredName: query.structuredName ?? query.foodName,
-        canonicalGerman: query.canonicalGerman ?? null,
-        canonicalEnglish: query.foodName,
-        coreFood: core ?? null,
-        state: query.state,
-        attributes: attrs,
-      },
+      rerankQuery,
       offered.map((r) => ({
         providerId: String(r.candidate.record.fdcId),
         productName: r.candidate.record.description,
@@ -520,6 +521,16 @@ export class UsdaLocalProvider implements NutrientProvider {
     const selected = offered.find((r) => String(r.candidate.record.fdcId) === decision.providerId)
     if (!selected) return null
     if (accepted && identityKey(asTrigger(selected).record.identityTokens) === identityKey(asTrigger(accepted).record.identityTokens)) return null
+
+    // Identical protection to BLS, from the same shared rule: a rerank that abandons the identity
+    // the query supported, or invents new identity nothing asked for, is not an improvement.
+    if (!rerankPreservesIdentity(rerankQuery, accepted ? asTrigger(accepted).record : null, asTrigger(selected).record)) {
+      logger.info(
+        { foodName: query.foodName, kept: accepted?.candidate.record.description, proposed: selected.candidate.record.description, reason: decision.reason },
+        "USDA local: rerank would not preserve food identity, keeping the deterministic winner",
+      )
+      return null
+    }
 
     return { ...selected, rerankConfidence: decision.confidence, rerankReason: decision.reason }
   }
