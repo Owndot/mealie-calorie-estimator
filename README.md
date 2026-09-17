@@ -40,14 +40,50 @@ exactly that: you choose the real record once, and the engine remembers it.
 
 ## Features
 
-- Recipe-created / recipe-updated webhooks, with loop prevention
-- Deterministic gram resolution from Mealie's structured quantities and units (German units included)
-- Multi-source resolution with hard semantic gates, so a wrong-but-similar food is rejected rather than used
-- Per-ingredient provenance: provider, record id, confidence, unmet attributes, classification
-- Persistent SQLite caching, surviving restarts
-- User-confirmed overrides with a small admin API
-- Manual-nutrition protection and a force-recalculate endpoint
-- Optional auto-tagging by calorie band and digestibility
+**Automatic, once connected**
+
+- **Processes recipes on their own** — Mealie notifies the engine whenever a recipe is created or
+  updated, and it does the rest. No per-recipe API calls.
+- **Calculates whole-recipe nutrition** from Mealie's structured quantities and units (German units
+  included), dividing by servings exactly once.
+- **Resolves ingredients against real food records** — bundled BLS 4.0 and USDA databases first,
+  Open Food Facts for branded products, with hard semantic gates that reject a wrong-but-similar
+  food instead of using it.
+- **Tags every estimated recipe** with a calorie band and a digestibility band — see
+  [Automatic tagging](#automatic-tagging).
+- **Records provenance per ingredient**: which database, which record id, confidence, and what it
+  could *not* satisfy.
+- **Protects manual nutrition** and prevents webhook loops, so re-running is always safe.
+
+**Optional**
+
+- **Backfill** every existing recipe in one request.
+- **Your own Mealie recipes as a nutrition source** — a homemade curry paste resolves from the
+  recipe you already wrote (on by default).
+- **LLM assistance** for normalizing ingredient names and estimating awkward units — off by
+  default, and never used to produce a nutrient value when a real record exists.
+- **User-confirmed overrides** for genuinely ambiguous foods: bind one ingredient to one real
+  record, once.
+
+## How it works
+
+Once the Mealie notifier is connected, this happens by itself:
+
+```
+recipe created or updated in Mealie
+  └─ Mealie sends a notification to the engine
+     └─ ingredients are normalized and resolved against real food records
+        └─ nutrition is calculated in code, then divided by servings exactly once
+           └─ nutrition is written back to the recipe
+              └─ calorie + digestibility tags and provenance are added
+```
+
+The engine writes **only** nutrition, its own `calorie_estimator_*` extras, and its own tags. Your
+ingredients, quantities, units, instructions, images and your own tags are never modified.
+
+Re-running is safe by design. An unchanged recipe is a no-op — the engine fingerprints the
+ingredients, so a webhook it triggered itself settles immediately instead of looping. Nutrition you
+entered by hand is detected and preserved rather than overwritten.
 
 ## Nutrition sources
 
@@ -101,7 +137,12 @@ Open Food Facts, but have **not** been systematically validated.
 - Docker and Docker Compose
 - Optional: an OpenAI-compatible LLM endpoint and key
 
-## Installation
+## Quick Start
+
+Three steps. **Step 2 is the one that makes everything automatic** — without the Mealie notifier the
+engine runs but nothing ever reaches it.
+
+### 1. Start the engine
 
 ```bash
 git clone https://github.com/Owndot/mealie-nutrition-engine.git
@@ -133,17 +174,20 @@ volumes:
 The engine must be able to reach Mealie, and Mealie must be able to reach the engine — put both on
 the same Docker network.
 
-### Connect Mealie
+### 2. Connect the Mealie notifier
 
-In Mealie: **Settings → Notifiers → Create**, with an Apprise URL pointing at the engine:
+This is what makes recipes process themselves. Skip it and nothing happens automatically.
 
-```
-json://nutrition-engine:8000/webhook
-```
+In Mealie, go to **Settings → Notifiers → Create** and set:
 
-Enable **Recipe Created** and **Recipe Updated**; leave the rest off.
+- **Apprise URL**: `json://nutrition-engine:8000/webhook`
+  (use the engine's container name and port as Mealie sees them)
+- **Events**: enable **Recipe Created** and **Recipe Updated**. Leave the rest off.
 
-### Verify the installation
+Save it, then create or edit any recipe — nutrition and tags appear on their own within a few
+seconds.
+
+### 3. Verify
 
 ```bash
 curl -s http://127.0.0.1:8000/health
@@ -160,20 +204,35 @@ docker compose logs nutrition-engine | grep "server started"
 curl -X POST "http://127.0.0.1:8000/estimate/<recipe-slug>?force=true"
 ```
 
-and check the recipe in Mealie for nutrition values and a `calorie_estimator_provenance` extra.
+and check the recipe in Mealie: it should now have nutrition values, two auto-tags, and a
+`calorie_estimator_provenance` extra naming the record behind every ingredient.
+
+### Already have recipes?
+
+Run the backfill once and the whole library is processed with the same rules:
+
+```bash
+curl -X POST http://127.0.0.1:8000/backfill
+```
 
 ## Configuration
 
-Every supported variable is documented in [`.env.example`](.env.example). Only two are required:
+**Only two variables are required.** Everything else has a working default, and every supported
+variable is documented in [`.env.example`](.env.example).
 
 | Variable | Required | Notes |
 |---|---|---|
 | `MEALIE_URL` | **yes** | e.g. `http://mealie:9000` |
 | `MEALIE_API_TOKEN` | **yes** | a dedicated service-account token |
-| `LLM_ENABLED`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | no | any OpenAI-compatible endpoint |
+| `OFF_LANGUAGE` | no | Open Food Facts search language, default `de` |
+| `ESTIMATE_STRATEGY` | no | `all` (default) or `tagged` — see [Optional and advanced](#optional-and-advanced) |
+| `LLM_ENABLED`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | no | any OpenAI-compatible endpoint; **off** by default |
 | `LLM_JUDGE_ENABLED` | no | semantic judge, **off** by default |
 | `OVERRIDE_ADMIN_TOKEN` | no | enables the override API; unset means those routes do not exist |
 | `CACHE_DB_PATH`, `OVERRIDES_DB_PATH` | no | default to `data/` |
+| `LOG_LEVEL` | no | `info`; use `debug` for per-ingredient detail |
+
+Automatic tagging has no setting — see [Automatic tagging](#automatic-tagging).
 
 ### Persistence and backups
 
@@ -186,51 +245,78 @@ Both databases live in `/app/data`:
 
 Keep `/app/data` on a named volume or bind mount. Both survive container recreation.
 
+## Automatic tagging
+
+Every estimated recipe is tagged in Mealie with **one calorie tag and one digestibility tag**. This
+is always on — there is no setting to disable it. Tags are created in Mealie the first time they are
+needed.
+
+**Calorie tags**, from calories *per serving*:
+
+| Tag | Per serving |
+|---|---|
+| `Calories:Light` | under 350 kcal |
+| `Calories:Moderate` | 350 – 600 kcal |
+| `Calories:Hearty` | 601 – 850 kcal |
+| `Calories:Heavy` | over 850 kcal |
+
+**Digestibility tags**, from the share of calories coming from fat:
+
+| Tag | Criteria |
+|---|---|
+| `Digest:Easy` | fat under 30 % of calories **and** 600 kcal or less per serving |
+| `Digest:Slow` | fat 40 % or more of calories |
+| `Digest:Moderate` | in between — e.g. fat 30–40 %, or low-fat but calorie-dense |
+| `Digest:Unknown` | fat or calorie data missing |
+
+**Your own tags are never touched.** The engine remembers which tags it applied (in the
+`calorie_estimator_tags` extra) and replaces only those on the next run. A recipe that already has
+nutrition but is missing its tags — after an upgrade, say — gets them back without being
+re-estimated.
+
+The digestibility bands are a rough guide from macronutrient ratios, not a medical or dietary claim.
+
 ## User-confirmed overrides
 
-When automatic resolution is ambiguous or knowingly incomplete, bind the ingredient to a real
-record once and the engine remembers it. An override is a **pointer**, never a copy of the numbers:
-the nutrients are reloaded from the provider every time, and a target that cannot be loaded falls
-back to normal resolution rather than serving something stale.
+**You do not need these for normal use.** Ingredients resolve automatically; overrides exist for the
+few that cannot be resolved honestly by any search.
 
-Set `OVERRIDE_ADMIN_TOKEN` to enable the API; every request needs `Authorization: Bearer <token>`.
+Some ambiguity is genuine. Asked which of four real light mayonnaises a recipe means, the correct
+machine answer is "I don't know" — and the engine says so by flagging the unsatisfied property
+rather than guessing. When an ingredient is ambiguous like that, or keeps resolving to the wrong
+food, you can bind it **once** to a real record — from BLS, the local USDA database, Open Food Facts
+or one of your own Mealie recipes — and the engine remembers your choice from then on.
 
-```bash
-TOKEN=...   # OVERRIDE_ADMIN_TOKEN
+An override stores a **pointer to that record**, never a copy of its numbers: the nutrients are
+re-read from the source every time, so the binding cannot silently go stale, and a target that can
+no longer be loaded falls back to normal resolution instead of serving something outdated.
 
-# What does this ingredient resolve to, and what key would an override use?
-curl -sX POST http://127.0.0.1:8000/overrides/preview \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"foodName":"Rinderhackfleisch mager","unitName":"g"}'
+Set `OVERRIDE_ADMIN_TOKEN` to enable the management API. Preview, create, list, delete, suggestions,
+`curl` examples and the security notes are in **[`docs/OVERRIDES.md`](docs/OVERRIDES.md)**.
 
-# Bind it to a real record (bls | usda-local | off | mealie-recipe)
-curl -sX PUT http://127.0.0.1:8000/overrides \
-  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"foodName":"Rinderhackfleisch mager","unitName":"g",
-       "provider":"off","providerId":"4313249214975"}'
+## Optional and advanced
 
-curl -s  http://127.0.0.1:8000/overrides                    -H "Authorization: Bearer $TOKEN"
-curl -sX DELETE http://127.0.0.1:8000/overrides/<id>        -H "Authorization: Bearer $TOKEN"
-curl -s "http://127.0.0.1:8000/overrides/suggestions?slug=<recipe-slug>" -H "Authorization: Bearer $TOKEN"
-```
+| Capability | How to enable | Notes |
+|---|---|---|
+| **Backfill** | `curl -X POST http://127.0.0.1:8000/backfill` | walks every recipe once, applying the same rules; safe to re-run |
+| **Force one recipe** | `curl -X POST "http://127.0.0.1:8000/estimate/<slug>?force=true"` | recalculates even if unchanged; still will not overwrite manual nutrition |
+| **Overwrite manual nutrition** | add `&overrideManual=true` | the only way to replace nutrition a person entered — deliberately separate from `force` |
+| **Estimate only tagged recipes** | `ESTIMATE_STRATEGY=tagged`, `ESTIMATE_TAG=estimate` | default is `all` |
+| **Per-household tokens** | `MEALIE_API_TOKEN_<HOUSEHOLD_ID>` | for multi-household Mealie; non-alphanumerics in the id become `_` |
+| **Your recipes as a source** | `MEALIE_RECIPE_SOURCE_ENABLED` | **on** by default |
+| **LLM assistance** | `LLM_ENABLED=true` + `LLM_API_KEY` | any OpenAI-compatible endpoint |
+| **Semantic judge** | `LLM_JUDGE_ENABLED=true` | off by default; needs the LLM |
+| **Overrides API** | `OVERRIDE_ADMIN_TOKEN` | unset means the routes do not exist |
 
-`preview` shows both what the ingredient resolves to **now** and what it would resolve to
-**without** the override, so a binding is always made against the current behaviour. Full details in
-[`docs/OVERRIDES.md`](docs/OVERRIDES.md).
-
-> **Security.** `OVERRIDE_ADMIN_TOKEN` grants write access to how your nutrition is resolved. Use a
-> long random value, keep it out of version control, and do not expose port 8000 beyond your own
-> network — the examples bind to `127.0.0.1` deliberately.
-
-## Endpoints
+### Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/health` | liveness |
 | `POST` | `/webhook` | Mealie notifier target |
-| `POST` | `/estimate/:slug?force=true` | recalculate one recipe |
+| `POST` | `/estimate/:slug` | recalculate one recipe |
 | `POST` | `/backfill` | recalculate in bulk |
-| `*` | `/overrides…` | override management (token required) |
+| `*` | `/overrides…` | override management — see [`docs/OVERRIDES.md`](docs/OVERRIDES.md) |
 
 ## Updating
 
@@ -245,13 +331,33 @@ Your data volume is untouched. If a release changes matching behaviour, the note
 | Symptom | Likely cause |
 |---|---|
 | `getaddrinfo EAI_AGAIN mealie` | the containers are not on the same Docker network |
-| Recipes never update | the Mealie notifier is not enabled, or not pointed at `/webhook` |
+| Recipes never update | the Mealie notifier is not enabled, or not pointed at `/webhook` — see [Quick Start step 2](#2-connect-the-mealie-notifier) |
+| Nutrition appears but no tags | the recipe was estimated by an older version; re-save it or run `/backfill` — tags are re-added without re-estimating |
+| Only some recipes are processed | `ESTIMATE_STRATEGY=tagged` is set, so only recipes carrying `ESTIMATE_TAG` are estimated |
 | `usdaLocalEnabled:false` at startup | the image was built without `resources/` — rebuild |
 | Nutrition looks wrong for one ingredient | read its `calorie_estimator_provenance` row; if `unmetAttributes` is non-empty the engine is telling you it could not satisfy a stated property — a good override candidate |
 | Judge never runs | `LLM_JUDGE_ENABLED` is off by default, and requires `LLM_ENABLED` + a key |
 | Override API returns 401/404 | `OVERRIDE_ADMIN_TOKEN` unset (404) or wrong (401) |
 
 Set `LOG_LEVEL=debug` for per-ingredient resolution detail.
+
+## Limitations
+
+- German is the validated language; English is best-effort (see above)
+- Open Food Facts is live data: products appear and disappear, and search results drift
+- LLM-estimated ingredients are marked `llm-nutrient` and are estimates, not measurements
+- Unknown is not zero — unresolved ingredients are withheld or flagged, never silently counted as 0
+- Nutrition is computed for whole recipes and divided by servings exactly once; per-portion accuracy
+  depends on Mealie's `recipeServings` being correct
+
+## Detailed documentation
+
+| Document | Covers |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | pipeline, provider order, semantic gates, provenance |
+| [`docs/OVERRIDES.md`](docs/OVERRIDES.md) | the override API in full, key design, backups |
+| [`docs/CACHING.md`](docs/CACHING.md) | cache layers, TTLs, invalidation |
+| [`docs/RELEASING.md`](docs/RELEASING.md) | how a version is cut |
 
 ## Development
 
@@ -264,18 +370,7 @@ npm run build
 ```
 
 Tests run against the **real** bundled BLS and USDA databases — a matching change that breaks a real
-food fails the suite. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for provider order and
-gating, [`docs/CACHING.md`](docs/CACHING.md) for cache layers and TTLs, and
-[`docs/RELEASING.md`](docs/RELEASING.md) for how a version is cut.
-
-## Limitations
-
-- German is the validated language; English is best-effort (see above)
-- Open Food Facts is live data: products appear and disappear, and search results drift
-- LLM-estimated ingredients are marked `llm-nutrient` and are estimates, not measurements
-- Unknown is not zero — unresolved ingredients are withheld or flagged, never silently counted as 0
-- Nutrition is computed for whole recipes and divided by servings exactly once; per-portion accuracy
-  depends on Mealie's `recipeServings` being correct
+food fails the suite.
 
 ## Contributing
 

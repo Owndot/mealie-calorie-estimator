@@ -44,8 +44,8 @@ function buildBrandedProviders(): NutrientProvider[] {
 
 /**
  * Routing-aware provider chain:
- *   generic:  cache → own recipes → BLS → OFF → USDA (optional) → LLM last
- *   branded:  cache → own recipes → OFF → BLS → USDA (optional) → LLM last
+ *   generic:  own recipes → overrides → BLS → USDA → OFF → LLM last
+ *   branded:  own recipes → overrides → OFF → BLS → USDA → LLM last
  * (each provider checks its own cache first internally). The LLM nutrient estimate is always
  * last, on both routes, and only included when LLM_ENABLED + LLM_API_KEY are set — direct LLM
  * nutrient estimation is the absolute last resort, never a substitute for a real database match.
