@@ -1,9 +1,9 @@
 version: "3.9"
 
-x-calorie-env: &calorie-env
+x-nutrition-env: &nutrition-env
   MEALIE_URL: ${MEALIE_URL:-http://mealie:9000}
   OFF_LANGUAGE: ${OFF_LANGUAGE:-en}
-  OFF_USER_AGENT: ${OFF_USER_AGENT:-MealieCalorieEstimator/1.0 (calories@example.com)}
+  OFF_USER_AGENT: ${OFF_USER_AGENT:-mealie-nutrition-engine/1.0.0 (+https://github.com/Owndot/mealie-nutrition-engine)}
   LLM_ENABLED: ${LLM_ENABLED:-false}
   LLM_API_KEY: ${LLM_API_KEY:-}
   LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
@@ -13,22 +13,31 @@ x-calorie-env: &calorie-env
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
 services:
-  calorie-estimator:
-    build: .
-    container_name: mealie-calorie-estimator
+  nutrition-engine:
+    image: ghcr.io/owndot/mealie-nutrition-engine:latest
+    # Use `build: .` instead of `image:` to run from a local checkout.
+    container_name: mealie-nutrition-engine
     environment:
-      <<: *calorie-env
+      <<: *nutrition-env
       MEALIE_API_TOKEN: ${MEALIE_API_TOKEN}
+      # Optional: the semantic judge, off unless explicitly enabled.
+      LLM_JUDGE_ENABLED: ${LLM_JUDGE_ENABLED:-false}
+      # Optional: the user-confirmed override API. Unset means the routes do not exist.
+      OVERRIDE_ADMIN_TOKEN: ${OVERRIDE_ADMIN_TOKEN:-}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Durable state. `cache.db` is a rebuildable cache; `overrides.db` holds the food records a
+      # person deliberately chose and is NOT reconstructible — back this volume up.
+      - nutrition-engine-data:/app/data
     restart: unless-stopped
 
-  calorie-estimator-test:
+  nutrition-engine-test:
     build: .
-    container_name: mealie-calorie-estimator-test
+    container_name: mealie-nutrition-engine-test
     env_file: .compose-test.env
     environment:
-      <<: *calorie-env
+      <<: *nutrition-env
       MEALIE_URL: http://mealie:9000
       LOG_LEVEL: debug
     ports:
@@ -74,4 +83,5 @@ services:
       - test
 
 volumes:
+  nutrition-engine-data:
   mealie-test-data:

@@ -73,14 +73,14 @@ jobs:
           context: .
           push: false
           load: true
-          tags: mealie-calorie-estimator:ci
+          tags: mealie-nutrition-engine:ci
 
       # The BLS database is a bundled resource, not a dependency, so a Dockerfile that forgets to
       # COPY it still builds and still starts — it just silently disables the primary provider.
       # Asserting the file is present and non-trivial in the image catches that at PR time.
       - name: Verify bundled BLS database is in the image
         run: |
-          size=$(docker run --rm --entrypoint sh mealie-calorie-estimator:ci \
+          size=$(docker run --rm --entrypoint sh mealie-nutrition-engine:ci \
             -c 'wc -c < resources/bls/bls-4.0.sqlite')
           echo "BLS database size: ${size} bytes"
           test "${size}" -gt 1000000
@@ -91,7 +91,7 @@ jobs:
       # a mere existence check.
       - name: Verify bundled USDA generic database is in the image
         run: |
-          size=$(docker run --rm --entrypoint sh mealie-calorie-estimator:ci \
+          size=$(docker run --rm --entrypoint sh mealie-nutrition-engine:ci \
             -c 'wc -c < resources/usda/usda-generic.sqlite')
           echo "USDA database size: ${size} bytes"
           test "${size}" -gt 1000000
@@ -103,7 +103,7 @@ jobs:
             -e MEALIE_URL=http://127.0.0.1:9 \
             -e LLM_ENABLED=false \
             -e LOG_LEVEL=info \
-            mealie-calorie-estimator:ci
+            mealie-nutrition-engine:ci
 
       - name: Smoke test /health
         run: |
@@ -126,7 +126,7 @@ jobs:
         run: |
           docker run --rm --entrypoint node \
             -e MEALIE_API_TOKEN=ci-smoke-token \
-            mealie-calorie-estimator:ci \
+            mealie-nutrition-engine:ci \
             --input-type=module \
             -e "const { BlsProvider } = await import('/app/dist/services/providers/bls-provider.js');
                 const { initCache } = await import('/app/dist/utils/cache.js');
@@ -147,7 +147,7 @@ jobs:
         run: |
           docker run --rm --network none --entrypoint node \
             -e MEALIE_API_TOKEN=ci-smoke-token \
-            mealie-calorie-estimator:ci \
+            mealie-nutrition-engine:ci \
             --input-type=module \
             -e "const { usdaLocalProvider, getUsdaLocalData } = await import('/app/dist/services/providers/usda-local-provider.js');
                 const { initCache } = await import('/app/dist/utils/cache.js');

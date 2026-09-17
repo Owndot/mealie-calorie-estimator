@@ -1,7 +1,29 @@
+# Secrets and local configuration
 .env
+.env.*
+!.env.example
 .compose-test.env
-node_modules
-dist/
-test-results.xml
+
+# Runtime state: SQLite caches, the override database, backups
 data/
 *.db
+*.db-journal
+*.sqlite-journal
+*.bak
+backup/
+backups/
+
+# Build output and test artefacts
+node_modules/
+dist/
+coverage/
+test-results/
+test-results.xml
+*.tsbuildinfo
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

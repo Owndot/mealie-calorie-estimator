@@ -62,7 +62,10 @@ export const config = {
      * NOT used for an authoritative absence, where OFF has actually said the product is gone.
      */
     productStaleGraceMs: parseInt(process.env.OFF_PRODUCT_STALE_GRACE || "604800", 10) * 1000,
-    userAgent: process.env.OFF_USER_AGENT || `mealie-calorie-estimator/${version} (mail@timo-reymann.de)`,
+    // Open Food Facts asks callers to identify themselves. The inherited default carried the
+    // UPSTREAM maintainer's personal email, which attributed this fork's traffic to someone who
+    // did not send it; the project URL is an equally valid contact and is honest.
+    userAgent: process.env.OFF_USER_AGENT || `mealie-nutrition-engine/${version} (+https://github.com/Owndot/mealie-nutrition-engine)`,
   },
 
   llm: {

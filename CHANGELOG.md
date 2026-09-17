@@ -1,3 +1,16 @@
+# Changelog
+
+> **Version numbering restarts at 1.0.0 with this project's first independent release.**
+>
+> The entries below 1.9.0 belong to the upstream project this was forked from
+> ([timo-reymann/mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator))
+> and are kept for attribution and history. They describe releases this repository never published:
+> it has no tags of its own, and its nutrition engine has since been substantially rewritten.
+> Continuing upstream's numbering would have claimed a lineage of releases that were never made
+> here. See [docs/RELEASING.md](docs/RELEASING.md).
+
+---
+
 ## [1.9.0](https://github.com/timo-reymann/mealie-calorie-estimator/compare/v1.8.0...v1.9.0) (2026-07-26)
 
 ### Features

@@ -1,0 +1,124 @@
+name: Release
+
+# ONE authoritative version: the git tag.
+#
+# The inherited release path ran in CircleCI — semantic-release deriving a version from commit
+# history, then a Docker Hub push to an account this project does not own. Neither works here, and
+# semantic-release is actively unsafe on this repository: it computes the next version from the
+# commits since the last tag, this fork has NO tags, and its history begins in an upstream project
+# already at 1.9.x. Left to analyse that history it would invent a version describing someone
+# else's releases.
+#
+# So the version is stated, not inferred. A maintainer tags `vX.Y.Z`; this workflow builds that
+# exact commit, publishes the image under the same version, and creates the matching GitHub
+# Release. The tag, the image tag and the Release title cannot disagree, because all three are
+# derived from one input.
+#
+# Release procedure is documented in docs/RELEASING.md.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build and verify without publishing anything"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Mirrors the Dockerfile: the optional rolldown binding is not resolved by `npm ci` alone on
+      # linux-x64, and vitest fails to start without it.
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm install @rolldown/binding-linux-x64-gnu --no-save
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # A tag that disagrees with package.json is a release nobody can reproduce from the source
+      # tree. Catch it before anything is published, not after.
+      - name: Tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG_VERSION package.json=$PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
+  publish:
+    name: Publish image and release
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      # On a dry run the image is still BUILT — a release rehearsal that skips the build proves
+      # nothing — it is simply not pushed.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' || !inputs.dry_run }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

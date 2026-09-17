@@ -1,6 +1,8 @@
 # Instructions for AI coding agents
 
-This is a [mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator) project — a TypeScript/Node.js service using Fastify that estimates nutrition for Mealie recipes.
+This is [mealie-nutrition-engine](https://github.com/Owndot/mealie-nutrition-engine) — a TypeScript/Node.js Fastify service that resolves nutrition for Mealie recipes from real food-composition records, with provenance.
+
+Read `docs/ARCHITECTURE.md` before changing anything in `src/services/providers/`: the provider order and the hard gates encode measured production failures, and the tests pin real foods to real records.
 
 ## Commands
 

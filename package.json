@@ -1,6 +1,6 @@
 {
-  "name": "mealie-calorie-estimator",
-  "version": "1.9.0",
+  "name": "mealie-nutrition-engine",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -8,7 +8,8 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
@@ -28,5 +29,19 @@
   },
   "optionalDependencies": {
     "@rolldown/binding-linux-x64-gnu": "^1.0.3"
-  }
+  },
+  "description": "Provenance-aware nutrition resolver for Mealie: deterministic real food records first, LLM assistance only where evidence is insufficient.",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Owndot/mealie-nutrition-engine.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Owndot/mealie-nutrition-engine/issues"
+  },
+  "homepage": "https://github.com/Owndot/mealie-nutrition-engine#readme",
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
 }
