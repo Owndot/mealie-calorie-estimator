@@ -48,7 +48,7 @@ const PROVIDER_NAME = "usda-local"
  * re-importing a new USDA release also invalidates this provider's cached matches and cannot leave
  * a stale row pointing at an fdc_id that moved.
  */
-const USDA_LOCAL_MATCH_ALGORITHM_VERSION = "v2"
+const USDA_LOCAL_MATCH_ALGORITHM_VERSION = "v3"
 
 /** The importer's output contract. A database written by a different shape must not be read. */
 const SUPPORTED_SCHEMA_VERSION = "1"
@@ -240,9 +240,17 @@ type RankedUsda = RankedCandidate<RankableUsdaRecord> & { rerankConfidence?: num
  * hidden — unlike the API's relevance window, which hid records that would have won. With no
  * usable token the whole pool is returned rather than nothing, so the gates decide, never this.
  */
-function retrieve(records: UsdaRecord[], queryText: string, core: string | null | undefined): UsdaRecord[] {
-  const asked = [...tokenize(queryText), ...tokenize(core ?? "")]
+/**
+ * The tokens this provider can actually search on. Sole definition — the retrieval below and the
+ * gate in lookup() must agree by construction, not by two copies staying in step.
+ */
+function constraintTokens(queryText: string, core: string | null | undefined): string[] {
+  return [...tokenize(queryText), ...tokenize(core ?? "")]
     .filter((t) => t.length > 2 && !GENERIC_DESCRIPTOR_WORDS.has(t))
+}
+
+function retrieve(records: UsdaRecord[], queryText: string, core: string | null | undefined): UsdaRecord[] {
+  const asked = constraintTokens(queryText, core)
   // An empty constraint set means this provider was asked nothing it can act on — NOT that
   // everything qualifies. Returning `records` here handed all 8,262 rows to ranking, which then
   // scored them against a query that asked for nothing and answered confidently: "Ei" (German for
@@ -311,6 +319,21 @@ export class UsdaLocalProvider implements NutrientProvider {
       coreFood: strictCore, coreMatchMode: "token" as const, evidence, attributes: attrs,
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
+
+    // Can this provider answer this question AT ALL? Asked before the cache, deliberately.
+    //
+    // v1.0.4 made retrieval fail closed on an empty constraint set, but that check lives inside
+    // retrieve(), which a cache hit never reaches: lookup() reads provider_match_cache first and
+    // returns on a hit. So an entry written by the OLD fail-open algorithm stayed authoritative
+    // after the upgrade, and production kept serving "Ei" -> USDA 325658 "Sausage, Italian, pork"
+    // at 322 kcal/100 g (53 g -> 170.66 kcal) from a cache row the new invariant never saw.
+    //
+    // Note this could NOT be caught the way the BLS cache poisoning was, by re-checking
+    // plausibility on read: that sausage is nutritionally self-consistent (322 kcal vs 317 by
+    // Atwater), so a sanity check passes it. The defect is not implausible numbers, it is a match
+    // the current algorithm could not produce. So the invariant is enforced on its own terms —
+    // no constrained tokens means this provider declines, on every path, cached or not.
+    if (constraintTokens(query.foodName, strictCore).length === 0) return null
 
     const cached = query.poolOnly ? undefined : getCachedProviderMatch(this.name, queryKey)
     if (cached) {
