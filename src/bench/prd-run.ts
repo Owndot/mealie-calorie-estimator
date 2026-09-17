@@ -7,6 +7,7 @@ import { orderCandidates } from "../services/providers/judge/candidate-pool.js"
 import { buildShortlist } from "./shortlist.js"
 import { searchOff, filterOffHits, offProxyJustified } from "./off-proxy.js"
 import { askPropertyJudge } from "./property-judge.js"
+import { askMultilingualJudge } from "./multilingual-judge.js"
 import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type FoodType } from "../types.js"
 import type { JudgeCandidate } from "../services/providers/judge/types.js"
 
@@ -137,16 +138,16 @@ async function main(): Promise<void> {
       } catch { /* a provider that cannot answer contributes nothing */ }
     }
 
-    const shortlist = buildShortlist(survivors, c.structured, attributes, config.llm.judgeMaxCandidates)
-    console.log(`  PROPERTY ${shortlist.property.kind} — ${shortlist.property.description}`)
-    console.log(`  SURVIVORS ${shortlist.totalSurvivors} (hard gates passed, no score floor)`)
-    console.log(`  PROPERTY-BEARING ${shortlist.propertyBearing.length}`)
-    for (const p of shortlist.propertyBearing.slice(0, 12)) console.log(`      ${line(p)}`)
-    console.log(`  LOST TO A PLAIN TOP-${config.llm.judgeMaxCandidates} SCORE CAP: ${shortlist.rescuedFromTruncation.length}`)
-    for (const p of shortlist.rescuedFromTruncation) console.log(`      rescued ${line(p)}`)
+    const localOnly = buildShortlist(survivors, c.structured, attributes, config.llm.judgeMaxCandidates)
+    console.log(`  PROPERTY ${localOnly.property.kind} — ${localOnly.property.description}`)
+    console.log(`  SURVIVORS ${localOnly.totalSurvivors} (hard gates passed, no score floor)`)
+    console.log(`  PROPERTY-BEARING ${localOnly.propertyBearing.length}`)
+    for (const p of localOnly.propertyBearing.slice(0, 12)) console.log(`      ${line(p)}`)
+    console.log(`  LOST TO A PLAIN TOP-${config.llm.judgeMaxCandidates} SCORE CAP: ${localOnly.rescuedFromTruncation.length}`)
+    for (const p of localOnly.rescuedFromTruncation) console.log(`      rescued ${line(p)}`)
 
     // OFF only when the local databases cannot express the property.
-    const justification = offProxyJustified(shortlist.propertyBearing, shortlist.property.kind)
+    const justification = offProxyJustified(localOnly.propertyBearing, localOnly.property.kind)
     let offCandidates: JudgeCandidate[] = []
     console.log(`  OFF ROUTING ${justification.justified ? "JUSTIFIED" : "SKIPPED"} — ${justification.why}`)
     if (justification.justified) {
@@ -162,8 +163,11 @@ async function main(): Promise<void> {
       }
     }
 
-    const finalPool = orderCandidates([...shortlist.offered, ...offCandidates], config.llm.judgeMaxCandidates)
-    console.log(`  FINAL SHORTLIST ${finalPool.length}`)
+    // Rebuilt WITH the retail survivors, so they get places of their own rather than competing on
+    // a score they do not have.
+    const shortlist = buildShortlist(survivors, c.structured, attributes, config.llm.judgeMaxCandidates, offCandidates)
+    const finalPool = shortlist.offered
+    console.log(`  FINAL SHORTLIST ${finalPool.length} (retail represented: ${finalPool.filter((p) => p.provider === "off").length}/${offCandidates.length})`)
     for (const p of finalPool) console.log(`      ${line(p)}`)
 
     if (finalPool.length === 0) {
@@ -199,7 +203,7 @@ async function main(): Promise<void> {
     console.log(`  STABILITY ${unique.length === 1 ? "STABLE" : "UNSTABLE"} across ${PERMUTATIONS} permutations -> ${JSON.stringify(unique)}`)
 
     // Same pools, same permutations, but the model is told WHICH property went unsatisfied.
-    if (current?.match.productName && shortlist.property.kind !== "none") {
+    if (current?.match.productName && localOnly.property.kind !== "none") {
       const propOutcomes: string[] = []
       for (let i = 0; i < PERMUTATIONS; i++) {
         const permuted = rotate(finalPool, i * 3 + 1)
@@ -207,7 +211,7 @@ async function main(): Promise<void> {
           structuredName: c.structured, canonicalEnglish: c.english, canonicalGerman: c.german,
           coreFoodEnglish: c.coreEn, state: c.state, form: attributes.form,
           preservation: attributes.preservation, fatPercent: attributes.fatPercent, category: c.category,
-        }, permuted, current.match.productName, shortlist.property.description)
+        }, permuted, current.match.productName, localOnly.property.description)
         totals.calls++
         totals.prompt += out.promptTokens
         totals.completion += out.completionTokens
@@ -222,6 +226,30 @@ async function main(): Promise<void> {
       }
       const pu = [...new Set(propOutcomes)]
       console.log(`  PROP-STABILITY ${pu.length === 1 ? "STABLE" : "UNSTABLE"} -> ${JSON.stringify(pu)}`)
+
+      // Third variant: same pools, same permutations, evidence read across languages.
+      const mlOutcomes: string[] = []
+      for (let i = 0; i < PERMUTATIONS; i++) {
+        const permuted = rotate(finalPool, i * 3 + 1)
+        const out = await askMultilingualJudge({
+          structuredName: c.structured, canonicalEnglish: c.english, canonicalGerman: c.german,
+          coreFoodEnglish: c.coreEn, state: c.state, form: attributes.form,
+          preservation: attributes.preservation, fatPercent: attributes.fatPercent, category: c.category,
+        }, permuted, current.match.productName!, shortlist.property.description, shortlist.property.kind)
+        totals.calls++
+        totals.prompt += out.promptTokens
+        totals.completion += out.completionTokens
+        totals.latency += out.latencyMs
+        if (!out.decision) totals.invalid++
+        const d = out.decision
+        const picked = d?.candidateId ? permuted.find((p) => p.id === d.candidateId) : null
+        mlOutcomes.push(d ? `${d.verdict}:${d.candidateId ?? "-"}` : `invalid:${out.invalidReason ?? "?"}`)
+        console.log(`  MULTI ${i} -> ${d ? d.verdict.toUpperCase() : `INVALID(${out.invalidReason})`}` +
+          `${picked ? ` ${picked.id} "${picked.name.slice(0, 44)}" ${picked.nutrients.kcalPer100g}kcal fat=${picked.nutrients.fatPer100g}` : ""} conf=${d?.confidence ?? "-"}`)
+        if (d?.reason) console.log(`         reason: ${d.reason}`)
+      }
+      const mu = [...new Set(mlOutcomes)]
+      console.log(`  MULTI-STABILITY ${mu.length === 1 ? "STABLE" : "UNSTABLE"} -> ${JSON.stringify(mu)}`)
     }
     const wouldApply = unique.length === 1 && outcomes[0].startsWith("selected:")
     console.log(`  WOULD REPLACE: ${wouldApply ? outcomes[0].slice("selected:".length) : "no — keeping the deterministic result"}`)

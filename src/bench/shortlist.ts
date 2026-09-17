@@ -135,14 +135,18 @@ export interface Shortlist {
   totalSurvivors: number
 }
 
+/** Share of the shortlist reserved for strictly-filtered retail candidates, when any exist. */
+const RETAIL_SHARE = 0.25
+
 export function buildShortlist(
   survivors: JudgeCandidate[],
   structuredName: string,
   attributes: FoodAttributes,
   limit: number,
+  retailCandidates: JudgeCandidate[] = [],
 ): Shortlist {
   const property = propertyUnderInvestigation(structuredName, attributes)
-  const ordered = orderCandidates(survivors, Number.MAX_SAFE_INTEGER)
+  const ordered = orderCandidates([...survivors, ...retailCandidates], Number.MAX_SAFE_INTEGER)
   const scoreOnlyTopN = ordered.slice(0, limit)
 
   const propertyBearing = ordered.filter((c) => property.expressedBy(c))
@@ -150,6 +154,19 @@ export function buildShortlist(
 
   const offered: JudgeCandidate[] = propertyBearing.slice(0, reserved)
   const taken = new Set(offered.map((c) => c.id))
+
+  // Retail candidates get places of their own, decided by the strict OFF pre-filter rather than by
+  // the English marker vocabulary above. The vocabulary can only recognise claims it has words
+  // for, so letting it gate visibility would mean a German or French label is judged by whether an
+  // English table happens to list its wording — and a retail label is precisely where a
+  // qualitative claim lives. The pre-filter has already established the product is plausibly the
+  // same food; whether its wording expresses the claim is the judge's question, not the table's.
+  const retail = ordered.filter((c) => c.provider === "off" && !taken.has(c.id))
+  for (const c of retail.slice(0, Math.floor(limit * RETAIL_SHARE))) {
+    offered.push(c)
+    taken.add(c.id)
+  }
+
   for (const c of ordered) {
     if (offered.length >= limit) break
     if (taken.has(c.id)) continue
