@@ -80,6 +80,51 @@ registered at all.
 Addressed by a short opaque `id`, not the semantic key — the key contains spaces and separators and
 its shape may change.
 
+### Worked example
+
+```bash
+TOKEN=...   # the value of OVERRIDE_ADMIN_TOKEN
+
+# 1. Ask what this ingredient does today, and what key an override would use.
+curl -sX POST http://127.0.0.1:8000/overrides/preview \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"foodName":"Rinderhackfleisch mager","unitName":"g"}'
+
+# 2. Bind it to a real record — provider is bls | usda-local | off | mealie-recipe.
+curl -sX PUT http://127.0.0.1:8000/overrides \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"foodName":"Rinderhackfleisch mager","unitName":"g",
+       "provider":"off","providerId":"4313249214975",
+       "note":"Edeka lean mince, 163 kcal / 8.9 % fat"}'
+
+# 3. Review, or undo.
+curl -s  http://127.0.0.1:8000/overrides                     -H "Authorization: Bearer $TOKEN"
+curl -sX DELETE http://127.0.0.1:8000/overrides/<id>         -H "Authorization: Bearer $TOKEN"
+
+# Which ingredients in a recipe are worth overriding at all?
+curl -s "http://127.0.0.1:8000/overrides/suggestions?slug=<recipe-slug>" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+`preview` reports both what the ingredient resolves to **now** and what it would resolve to
+**without** any override, so a binding is always made against the behaviour you actually have rather
+than a guess about it.
+
+`PUT` refuses a target it cannot load, so a typo in `providerId` fails at creation instead of
+becoming a silently broken override later.
+
+### Security
+
+`OVERRIDE_ADMIN_TOKEN` grants write access to how your nutrition is resolved, so treat it like any
+other admin credential:
+
+- use a long random value, and keep it out of version control;
+- do not expose port 8000 beyond your own network — the examples bind to `127.0.0.1` deliberately;
+- leaving the variable unset is a valid choice: the routes are then not registered at all, and the
+  engine resolves everything automatically.
+
+A wrong token returns 401; no token configured returns 404, because the routes do not exist.
+
 ## Provenance
 
 ```json
