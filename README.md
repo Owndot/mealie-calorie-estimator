@@ -265,7 +265,8 @@ npm run build
 
 Tests run against the **real** bundled BLS and USDA databases — a matching change that breaks a real
 food fails the suite. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for provider order and
-gating, [`docs/CACHING.md`](docs/CACHING.md) for cache layers and TTLs.
+gating, [`docs/CACHING.md`](docs/CACHING.md) for cache layers and TTLs, and
+[`docs/RELEASING.md`](docs/RELEASING.md) for how a version is cut.
 
 ## Limitations
 
