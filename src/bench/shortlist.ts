@@ -50,9 +50,17 @@ export interface PropertyUnderInvestigation {
   expressedBy: (c: JudgeCandidate) => boolean
 }
 
+/**
+ * A claim is made by a WORD, not by a syllable. Exact tokens plus German adjective endings only —
+ * the compound-head rule the marker tables use reads "tallow" as "low" and "Sahnetoffee" as a
+ * cream claim, which on the first benchmark run made 388 of 691 beef records look like they
+ * asserted leanness and wrongly suppressed the OFF proxy for the one case that needed it.
+ */
+const ADJECTIVE_ENDINGS = ["", "e", "er", "es", "en", "em"]
+
 const hasWord = (text: string, words: string[]): boolean => {
   const tokens = semanticTokens(text)
-  return tokens.some((t) => words.some((w) => t === w || (t.length > w.length && t.endsWith(w))))
+  return tokens.some((t) => words.some((w) => ADJECTIVE_ENDINGS.some((e) => t === w + e)))
 }
 
 /** A percentage the candidate's own NAME states, e.g. "90% lean meat / 10% fat" -> [90, 10]. */
@@ -73,11 +81,15 @@ export function propertyUnderInvestigation(
     return {
       kind: "numeric-fat",
       description: `an explicit ${wanted}% fat`,
-      // Stated in the name, or measured to effectively that value. Both are the candidate
-      // ASSERTING the number, not being closest to it.
+      // The candidate's own NAME must state the number. Measured fat landing near the target is a
+      // nutritional coincidence, not a claim: on the first run it made a strawberry charlotte
+      // (7.5 g fat) and an instant oatmeal (7.46 g) "express" a 7 % cooking-cream query, and
+      // suppressed the OFF proxy that actually states it. OFF products are exempt because the
+      // strict filter has already checked their measured fat against the request — for a retail
+      // product the measured value IS the label.
       expressedBy: (c) =>
         statedPercentages(c.name).some((p) => Math.abs(p - wanted) <= 0.5)
-        || (c.nutrients.fatPer100g !== null && Math.abs(c.nutrients.fatPer100g - wanted) <= 0.5),
+        || (c.provider === "off" && c.nutrients.fatPer100g !== null && Math.abs(c.nutrients.fatPer100g - wanted) <= 0.5),
     }
   }
   if (hasWord(structuredName, REDUCED_FAT_WORDS)) {
