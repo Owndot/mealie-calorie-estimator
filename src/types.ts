@@ -354,6 +354,29 @@ export type Completeness = "complete" | "partial" | "withheld"
  */
 export type MatchQuality = "high" | "mixed" | "low"
 
+/**
+ * EVIDENCE: where a resolved ingredient's nutrient numbers actually came from.
+ *
+ * A third axis, independent of both Completeness (coverage) and MatchQuality (trust in the record
+ * that was found). An ingredient can have perfect coverage, a high-confidence match, and still be
+ * a generated estimate rather than a measured record — and a user deserves to be told which.
+ *
+ * THE extension point for new evidence kinds: add the class here and map it in evidenceClassFor().
+ * A future "user-confirmed" class (nutrients a person saved by hand for a food no database carries)
+ * belongs here too, and must stay distinguishable from BOTH database records and model estimates.
+ */
+export type EvidenceClass = "database" | "estimated"
+
+/**
+ * Recipe-level summary of the evidence mix, measured by share of total CALORIES rather than
+ * ingredient weight — a litre of estimated stock matters far less than 30 g of estimated oil.
+ *
+ * `mixed` deliberately does NOT assert "database-backed": it means some estimated content below
+ * the presentation threshold. The raw shares on EstimateResult carry the actual truth and are
+ * always persisted, so this label can be retuned without redesigning provenance.
+ */
+export type RecipeEvidence = "database" | "mixed" | "estimated"
+
 export interface EstimateResult {
   slug: string
   servings: number | null
@@ -365,6 +388,16 @@ export interface EstimateResult {
   matchedIngredients: IngredientMatch[]
   completeness: Completeness
   completenessReason: string | null
+  /** Where this recipe's calories came from. Null only when nothing resolved at all. */
+  evidence: RecipeEvidence | null
+  /** 0..1 share of total kcal from `llm-nutrient`. Null when no calories could be computed —
+   *  never conflate that with 0, which means "calories known, none of them estimated". */
+  estimatedKcalShare: number | null
+  /** 0..1 share of total kcal from real records. Today this is 1 - estimatedKcalShare, but that
+   *  identity breaks as soon as a third evidence class exists, which is why it is stored. */
+  databaseKcalShare: number | null
+  /** 0..1 share of known ingredient weight that resolved to nothing. Always computable. */
+  unresolvedWeightShare: number
   matchQuality: MatchQuality
   matchQualityReason: string | null
   /** Matched ingredients whose record is not trustworthy enough to present without caveat. */

@@ -2,6 +2,7 @@ import crypto from "node:crypto"
 import type {
   MealieRecipe, IngredientMatch, EstimateResult, NutritionPatch,
   NutrientSet, MealieNutrition, Completeness, MatchQuality, FoodState,
+  EvidenceClass, RecipeEvidence,
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
@@ -140,6 +141,55 @@ function collectValidIngredients(recipe: MealieRecipe): ValidIngredient[] {
   return result
 }
 
+/**
+ * Recipe-evidence classification threshold: above this share of total CALORIES coming from
+ * `llm-nutrient`, a recipe is summarised as `estimated` rather than `mixed`.
+ *
+ * A CLASSIFICATION/PRESENTATION threshold — neither a trust boundary nor a withholding one.
+ * It does not mark where generated numbers start being unreliable (they are generated at any
+ * share), and crossing it withholds nothing: an `estimated` recipe is written exactly like any
+ * other, just labelled honestly. Withholding remains purely a COVERAGE decision, made by
+ * classifyCompleteness from unresolved weight and untouched by this axis.
+ *
+ * Below it, `mixed` still means "contains estimated content" and must not be read as
+ * database-backed; the exact share is always persisted, so this can be retuned later without
+ * touching provenance or migrating anything.
+ *
+ * Deliberately one named constant: the literal must not be scattered through code or tests.
+ */
+export const EVIDENCE_ESTIMATED_KCAL_SHARE = 0.25
+
+/**
+ * Maps a provider to its evidence class. THE extension point for new evidence kinds.
+ *
+ * Only a value this service GENERATED is `estimated`. Everything else is a real record, including
+ * one reached with model assistance: LLM normalization, reranking and the semantic judge all end
+ * on a record some database actually publishes, and that record is what the numbers come from.
+ *
+ * Overrides need no case of their own — override-provider.ts reports the REAL underlying provider
+ * and records the override only as matchReason, so an override classifies through its target. A
+ * future custom-food provider would be added here as its own class.
+ */
+export function evidenceClassFor(provider: string): EvidenceClass {
+  return provider === "llm-nutrient" ? "estimated" : "database"
+}
+
+/**
+ * Summarises the evidence mix. Keyed on the estimated CONTRIBUTION rather than the share so that a
+ * zero-calorie recipe (water and salt) is still correctly `database`: its share is null because
+ * there are no calories to divide, but "none of them were estimated" remains true.
+ */
+function classifyEvidence(
+  estimatedKcal: number,
+  totalKcal: number,
+  hasAnyMatch: boolean,
+): RecipeEvidence | null {
+  if (!hasAnyMatch) return null
+  if (estimatedKcal === 0) return "database"
+  if (totalKcal <= 0) return "estimated"
+  return estimatedKcal / totalKcal > EVIDENCE_ESTIMATED_KCAL_SHARE ? "estimated" : "mixed"
+}
+
 /** Significance threshold: unresolved weight above this fraction of total known weight withholds nutrition entirely. */
 const WITHHOLD_WEIGHT_FRACTION = 0.3
 
@@ -261,6 +311,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
   let resolvedWeight = 0
   let totalKnownWeight = 0
   let hasAnyMatch = false
+  // Calorie contributions split by evidence class. Weight would be the wrong measure here: a litre
+  // of estimated stock barely matters, 30 g of estimated oil does.
+  let totalKcalContribution = 0
+  let estimatedKcalContribution = 0
 
   for (const ing of validIngredients) {
     const classification = classificationByIndex.get(ing.index)
@@ -363,6 +417,15 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     resolvedWeight += grams
     hasAnyMatch = true
 
+    // An ingredient whose kcal is unknown is excluded from BOTH sides: it can neither inflate nor
+    // dilute the share. Math.abs mirrors classifyMatchQuality's treatment of contributions.
+    const kcalPer100g = resolved.match.nutrients.kcalPer100g
+    if (kcalPer100g !== null && Number.isFinite(kcalPer100g)) {
+      const contribution = Math.abs((kcalPer100g * grams) / 100)
+      totalKcalContribution += contribution
+      if (evidenceClassFor(resolved.match.provider) === "estimated") estimatedKcalContribution += contribution
+    }
+
     matchedIngredients.push({
       name: ing.foodName,
       canonicalName: resolved.match.canonicalName,
@@ -415,6 +478,17 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
 
   const { matchQuality, reason: matchQualityReason, lowConfidence } = classifyMatchQuality(matchedIngredients)
 
+  // Shares are null when there are no calories to divide — distinct from 0, which asserts that
+  // calories ARE known and none of them were estimated.
+  const estimatedKcalShare = totalKcalContribution > 0
+    ? Math.min(1, Math.max(0, estimatedKcalContribution / totalKcalContribution))
+    : null
+  const databaseKcalShare = estimatedKcalShare === null ? null : 1 - estimatedKcalShare
+  const unresolvedWeightShare = totalKnownWeight > 0
+    ? Math.min(1, Math.max(0, (totalKnownWeight - resolvedWeight) / totalKnownWeight))
+    : 0
+  const evidence = classifyEvidence(estimatedKcalContribution, totalKcalContribution, hasAnyMatch)
+
   const result: EstimateResult = {
     slug: recipe.slug,
     servings,
@@ -426,6 +500,10 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     matchedIngredients,
     completeness,
     completenessReason,
+    evidence,
+    estimatedKcalShare,
+    databaseKcalShare,
+    unresolvedWeightShare,
     matchQuality,
     matchQualityReason,
     lowConfidenceIngredients: lowConfidence,
@@ -572,6 +650,21 @@ export function buildNutritionPatch(
   if (result.completenessReason) {
     extras.calorie_estimator_status_reason = result.completenessReason
   }
+
+  // EVIDENCE — a separate axis from the coverage status above. Written as its own key so
+  // calorie_estimator_status keeps exactly the meaning and value set it has always had.
+  //
+  // The raw shares are persisted independently of the label: the label is a presentation choice
+  // that may be retuned, the shares are the evidence. A null share is OMITTED rather than written
+  // as "0" — "no calories to divide" and "calories known, none estimated" are different facts.
+  if (result.evidence) extras.calorie_estimator_evidence = result.evidence
+  if (result.estimatedKcalShare != null) {
+    extras.calorie_estimator_estimated_kcal_share = result.estimatedKcalShare.toFixed(4)
+  }
+  if (result.databaseKcalShare != null) {
+    extras.calorie_estimator_database_kcal_share = result.databaseKcalShare.toFixed(4)
+  }
+  extras.calorie_estimator_unresolved_weight_share = (result.unresolvedWeightShare ?? 0).toFixed(4)
 
   // COVERAGE and QUALITY are reported as separate keys. calorie_estimator_status keeps its exact
   // existing values and meaning, so nothing downstream breaks; these are additive.
