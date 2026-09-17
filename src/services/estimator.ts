@@ -340,13 +340,25 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     })
     const judgeTrigger = need ? need.reasons.join(",") : null
 
+    // The classifier's own verdict, carried into provenance so a change in how an ingredient
+    // is READ is visible without having to infer it from which record won.
+    const classificationRecord = {
+      state,
+      form: (classification?.attributes ?? UNKNOWN_ATTRIBUTES).form,
+      preservation: (classification?.attributes ?? UNKNOWN_ATTRIBUTES).preservation,
+      foodType,
+      category: classification?.category ?? null,
+      coreEnglish: coreFoodEnglish,
+      cached: classification?.fromCache ?? false,
+    }
+
     if (!resolved) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
         name: ing.foodName, canonicalName: canonicalEnglish, brand, route, grams, gramsEstimated,
         matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
-        judgeTrigger,
+        judgeTrigger, classification: classificationRecord,
       })
       continue
     }
@@ -379,6 +391,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       sourceRecipeSlug: resolved.match.sourceRecipeSlug ?? null,
       sourceRecipeFingerprint: resolved.match.sourceRecipeFingerprint ?? null,
       judgeTrigger,
+      classification: classificationRecord,
       // A reranked match DID involve the LLM, even though its nutrients came from a database.
       llmParticipated: (classification?.llmClassified ?? false)
         || resolved.fallbackStatus === "llm-nutrient"
@@ -600,6 +613,7 @@ export function buildNutritionPatch(
     unmetAttributes: i.unmetAttributes ?? [],
     requestedFatPercent: i.requestedFatPercent ?? null,
     sourceRecipeSlug: i.sourceRecipeSlug ?? null,
+    classification: i.classification ?? null,
     // Judge observability. judgeTrigger is present whenever something about this ingredient is
     // semantically unresolved; the rest stay null until the judge is enabled and actually runs.
     judgeTrigger: i.judgeTrigger ?? null,

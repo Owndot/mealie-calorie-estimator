@@ -225,6 +225,12 @@ export interface IngredientClassification {
   route: FoodRoute
   /** true when the LLM batch normalizer actually produced this row (vs. deterministic fallback) */
   llmClassified: boolean
+  /**
+   * True when this interpretation came from the persistent classification cache rather than a
+   * fresh request. Observability only — a cached classification is the same classification, which
+   * is the whole point: it is what stops one recipe being read two different ways on two days.
+   */
+  fromCache?: boolean
 }
 
 export type FallbackStatus = "mealie-recipe" | "bls" | "usda-local" | "off" | "llm-nutrient" | "unresolved"
@@ -291,6 +297,22 @@ export interface IngredientMatch {
   /** The fat percentage the INGREDIENT stated ("Kochsahne 15%"), carried through so the number
    *  survives normalization and is visible in provenance whatever the outcome. */
   requestedFatPercent?: number | null
+  /**
+   * What the CLASSIFIER decided this ingredient is — the input side of the lookup, distinct from
+   * the record that was matched. Recorded because a silent classification change is otherwise
+   * invisible: production moved one unchanged recipe between 2004 and 2604 kcal by reading "300 g
+   * Nudeln" as cooked on some runs and raw on others, and nothing in provenance showed it.
+   */
+  classification?: {
+    state: FoodState
+    form: string
+    preservation: string
+    foodType: FoodType
+    category: string | null
+    coreEnglish: string | null
+    /** True when this interpretation came from the classification cache rather than a request. */
+    cached: boolean
+  }
   /** See ProviderMatch.sourceRecipeSlug. */
   sourceRecipeSlug?: string | null
   sourceRecipeFingerprint?: string | null
