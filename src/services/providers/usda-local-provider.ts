@@ -325,6 +325,32 @@ export class UsdaLocalProvider implements NutrientProvider {
       dataTypeScore,
     })
 
+    // Same contract as BLS: everything that survived the HARD GATES, reported before any score
+    // threshold is applied. MIN_ACCEPTABLE_SCORE below decides what this provider will USE; it
+    // must not decide what a judge is allowed to SEE.
+    if (query.candidateSink) {
+      const survivors = ranked.filter((r) => !r.mismatchReason && r.candidate.record.nutrients.kcalPer100g !== null)
+      if (survivors.length > 0) {
+        query.candidateSink(survivors.map((r) => {
+          const rec = r.candidate.record
+          return {
+            id: `usda-local:${rec.fdcId}`,
+            provider: "usda-local",
+            providerId: String(rec.fdcId),
+            name: rec.description,
+            dataType: rec.dataType,
+            brand: null,
+            category: rec.category,
+            state: rec.state,
+            form: rec.attributes.form,
+            preservation: rec.attributes.preservation,
+            nutrients: rec.nutrients,
+            score: r.score,
+          }
+        }))
+      }
+    }
+
     const reranked = await this.maybeRerank(query, ranked, attrs, strictCore)
     const top: RankedUsda | undefined = reranked ?? ranked[0]
 

@@ -294,12 +294,26 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       }
     }
 
+    // The classifier's own verdict, carried into provenance so a change in how an ingredient is
+    // READ is visible without having to infer it from which record won. Built before the weight
+    // check, so an ingredient whose grams cannot be resolved still reports how it was classified.
+    const classificationRecord = {
+      state,
+      form: (classification?.attributes ?? UNKNOWN_ATTRIBUTES).form,
+      preservation: (classification?.attributes ?? UNKNOWN_ATTRIBUTES).preservation,
+      foodType,
+      category: classification?.category ?? null,
+      coreEnglish: coreFoodEnglish,
+      cached: classification?.fromCache ?? false,
+    }
+
     if (grams === null) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
         name: ing.foodName, canonicalName: canonicalEnglish, brand, route, grams: null, gramsEstimated: false,
         matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
         fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
+        classification: classificationRecord,
       })
       continue
     }
@@ -338,19 +352,11 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       match: resolved?.match ?? null,
       fallbackStatus: resolved?.fallbackStatus ?? "unresolved",
     })
-    const judgeTrigger = need ? need.reasons.join(",") : null
+    // When the judge actually ran, the trigger it ran UNDER is the truthful record — after a
+    // successful selection the outcome is a database record, so judgeNeed() would now
+    // (correctly) report nothing and the reason for asking would be lost.
+    const judgeTrigger = resolved?.judge?.trigger ?? (need ? need.reasons.join(",") : null)
 
-    // The classifier's own verdict, carried into provenance so a change in how an ingredient
-    // is READ is visible without having to infer it from which record won.
-    const classificationRecord = {
-      state,
-      form: (classification?.attributes ?? UNKNOWN_ATTRIBUTES).form,
-      preservation: (classification?.attributes ?? UNKNOWN_ATTRIBUTES).preservation,
-      foodType,
-      category: classification?.category ?? null,
-      coreEnglish: coreFoodEnglish,
-      cached: classification?.fromCache ?? false,
-    }
 
     if (!resolved) {
       unmatchedNames.push(ing.foodName)
@@ -391,6 +397,12 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       sourceRecipeSlug: resolved.match.sourceRecipeSlug ?? null,
       sourceRecipeFingerprint: resolved.match.sourceRecipeFingerprint ?? null,
       judgeTrigger,
+      judgeVerdict: resolved.judge?.verdict === "invalid" ? null : (resolved.judge?.verdict ?? null),
+      judgeReason: resolved.judge?.reason ?? null,
+      judgeCandidates: resolved.judge?.candidates ?? null,
+      judgePoolFingerprint: resolved.judge?.poolFingerprint ?? null,
+      judgeModel: resolved.judge?.model ?? null,
+      judgePromptVersion: resolved.judge?.promptVersion ?? null,
       classification: classificationRecord,
       // A reranked match DID involve the LLM, even though its nutrients came from a database.
       llmParticipated: (classification?.llmClassified ?? false)
