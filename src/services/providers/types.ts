@@ -31,6 +31,14 @@ export interface ProviderQuery {
    */
   poolOnly?: boolean
   /**
+   * Resolve as if no user-confirmed override existed for this ingredient.
+   *
+   * Only the override provider reads it, and only to stay silent. It exists so "what would this
+   * resolve to without my override?" can be answered by ASKING the real chain with one provider
+   * silenced, rather than by a second approximation of resolver semantics that would drift.
+   */
+  ignoreOverrides?: boolean
+  /**
    * Nutritionally meaningful form/preservation/fat attributes. Participate in candidate validation
    * (formConflict/preservationConflict/fatConflict) and in cache identity, so a cached "ground
    * ginger" can never be served to a "fresh ginger" query. "unknown" values stay permissive.

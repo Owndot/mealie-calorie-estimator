@@ -6,6 +6,8 @@ import {
   listOverrides, getOverrideById, findOverride, OVERRIDE_KEY_VERSION, type OverrideIdentity,
 } from "../src/services/food-overrides.js"
 import { resolveNutrients } from "../src/services/nutrient-resolver.js"
+import { buildResolverQuery } from "../src/services/resolver-query.js"
+import { normalizeIngredients } from "../src/services/llm-normalizer.js"
 import { UNKNOWN_ATTRIBUTES, type FoodAttributes } from "../src/types.js"
 
 /**
@@ -335,5 +337,107 @@ describe("the management API accepts the request shapes real clients send", () =
       config.overrides.adminToken = previous
       await app.close()
     }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+
+describe("preview reproduces production, and can show the automatic result underneath", () => {
+  /** Resolves through the SAME construction the estimator uses, which is the point of the test. */
+  async function productionResolve(foodName: string, ignoreOverrides = false) {
+    const [classification] = await normalizeIngredients([{ index: 0, foodName, unitName: "g" }])
+    const built = buildResolverQuery(foodName, classification, ignoreOverrides ? { ignoreOverrides: true } : {})
+    return resolveNutrients(built.query, built.route)
+  }
+
+  const stubClassifier = (items: Record<string, unknown>[]) => {
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+      if (String(url).startsWith(config.openFoodFacts.searchBaseUrl)) {
+        return new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(items) } }] }), { status: 200 })
+    }))
+  }
+
+  const CLASSIFIED = (over: Record<string, unknown>) => ({
+    index: 0, canonicalGerman: "x", canonicalEnglish: "x", brand: null, state: "unknown",
+    form: "unknown", preservation: "unknown", fatPercent: null, category: null,
+    foodType: "simple", coreFoodGerman: "x", coreFoodEnglish: "x", ...over,
+  })
+
+  beforeEach(() => {
+    config.llm.enabled = true
+    config.llm.apiKey = "test-key"
+  })
+
+  it("1. lean mince: the override is active, and the automatic result underneath is the BLS record", async () => {
+    stubClassifier([CLASSIFIED({
+      canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef",
+      state: "raw", category: "meat", coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef",
+    })])
+    setOverride({
+      identity: identity("lean ground beef"), exampleName: "Rinderhackfleisch mager",
+      provider: "usda-local", providerId: "171790", recordName: "Beef, ground, 95% lean meat / 5% fat, raw",
+    })
+    __clearProviderCachesForTests()
+
+    const withOverride = await productionResolve("Rinderhackfleisch mager")
+    expect(withOverride!.match.providerId).toBe("171790")
+    expect(withOverride!.match.matchReason).toBe("user-confirmed-override")
+
+    __clearProviderCachesForTests()
+    const automatic = await productionResolve("Rinderhackfleisch mager", true)
+    // The real production answer, reached by silencing one provider — never approximated.
+    expect(automatic!.fallbackStatus).toBe("bls")
+    expect(automatic!.match.providerId).toBe("U010100")
+    expect(automatic!.match.nutrients.kcalPer100g).toBe(224)
+    expect(automatic!.match.unmetAttributes).toEqual(["reduced-fat"])
+  })
+
+  it("2. ignoring an override changes nothing else about the resolution", async () => {
+    stubClassifier([CLASSIFIED({
+      canonicalGerman: "Mayonnaise, leicht", canonicalEnglish: "light mayo", category: "condiment",
+      foodType: "processed_single_food", coreFoodGerman: "Mayonnaise", coreFoodEnglish: "mayo",
+    })])
+    const before = await productionResolve("Mayo Light", true)
+    setOverride({
+      identity: identity("light mayo", { state: "unknown" }), exampleName: "Mayo Light",
+      provider: "usda-local", providerId: "173594", recordName: "Salad dressing, mayonnaise, light",
+    })
+    __clearProviderCachesForTests()
+    const after = await productionResolve("Mayo Light", true)
+    // Binding an override must not disturb what the automatic chain would have said.
+    expect(after!.fallbackStatus).toBe(before!.fallbackStatus)
+    expect(after!.match.providerId).toBe(before!.match.providerId)
+    expect(after!.match.unmetAttributes).toEqual(before!.match.unmetAttributes)
+  })
+
+  it("3. with no override, the two answers are identical for ordinary ingredients", async () => {
+    for (const [de, en, coreDe, coreEn, category] of [
+      ["Olivenöl", "olive oil", "Öl", "oil", "oil"],
+      ["Tomate", "tomato", "Tomate", "tomato", "vegetable"],
+      ["Zwiebel", "onion", "Zwiebel", "onion", "vegetable"],
+      ["Tomatenmark", "tomato paste", "Tomatenmark", "tomato paste", "vegetable"],
+    ]) {
+      stubClassifier([CLASSIFIED({ canonicalGerman: de, canonicalEnglish: en, state: "raw", category, coreFoodGerman: coreDe, coreFoodEnglish: coreEn })])
+      __clearProviderCachesForTests()
+      const withOverrides = await productionResolve(de)
+      __clearProviderCachesForTests()
+      const ignoring = await productionResolve(de, true)
+      expect(withOverrides!.fallbackStatus, de).toBe(ignoring!.fallbackStatus)
+      expect(withOverrides!.match.providerId, de).toBe(ignoring!.match.providerId)
+      expect(withOverrides!.match.nutrients, de).toEqual(ignoring!.match.nutrients)
+      expect(withOverrides!.match.unmetAttributes, de).toEqual(ignoring!.match.unmetAttributes)
+      // …and the BLS path really was exercised: an incomplete query would have missed it.
+      expect(withOverrides!.fallbackStatus, de).toBe("bls")
+    }
+  })
+
+  it("4. preview mutates no override rows", async () => {
+    stubClassifier([CLASSIFIED({ canonicalGerman: "Tomate", canonicalEnglish: "tomato", state: "raw", category: "vegetable", coreFoodGerman: "Tomate", coreFoodEnglish: "tomato" })])
+    const before = listOverrides().length
+    await productionResolve("Tomate")
+    await productionResolve("Tomate", true)
+    expect(listOverrides()).toHaveLength(before)
   })
 })

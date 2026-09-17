@@ -74,6 +74,8 @@ export class OverrideProvider implements NutrientProvider {
 
   async lookup(query: ProviderQuery): Promise<ProviderMatch | null> {
     if (!overridesReady()) return null
+    // Deliberately silenced by the caller — see ProviderQuery.ignoreOverrides.
+    if (query.ignoreOverrides) return null
 
     const override = findOverride({
       canonicalEnglish: query.foodName,

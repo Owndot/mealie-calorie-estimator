@@ -3,13 +3,14 @@ import { config } from "../config.js"
 import { logger } from "../utils/logger.js"
 import { normalizeIngredients } from "../services/llm-normalizer.js"
 import { resolveNutrients } from "../services/nutrient-resolver.js"
+import { buildResolverQuery } from "../services/resolver-query.js"
 import { loadOverrideTarget } from "../services/providers/override-provider.js"
 import { getRecipe } from "../services/mealie-client.js"
 import {
   buildOverrideKey, overrideId, listOverrides, getOverrideById, setOverride, deleteOverride,
   OVERRIDE_KEY_VERSION, type FoodOverride, type OverrideProvider, type OverrideIdentity,
 } from "../services/food-overrides.js"
-import { UNKNOWN_ATTRIBUTES, type FoodAttributes } from "../types.js"
+import { UNKNOWN_ATTRIBUTES } from "../types.js"
 
 /**
  * Management for user-confirmed food overrides.
@@ -80,30 +81,41 @@ async function describe(o: FoodOverride): Promise<Record<string, unknown>> {
 }
 
 /**
- * Classifies one ingredient exactly as the estimator would, so the key a binding will use is
- * derived from the same pipeline rather than hand-assembled by the caller.
+ * Classifies one ingredient exactly as the estimator does, and builds exactly the query the
+ * resolver receives — through the SAME shared construction, never a local approximation. An
+ * earlier version assembled its own query and left `coreFoodGerman` null, so BLS could not match
+ * and preview reported an LLM estimate for an ingredient production was resolving from BLS.
  */
-async function classifyOne(foodName: string, unitName: string | null): Promise<{
-  identity: OverrideIdentity
-  attributes: FoodAttributes
-  canonicalGerman: string
-  coreFoodEnglish: string | null
-  category: string | null
-  foodType: string
-}> {
-  const [c] = await normalizeIngredients([{ index: 0, foodName, unitName }])
+async function classifyOne(foodName: string, unitName: string | null) {
+  const [classification] = await normalizeIngredients([{ index: 0, foodName, unitName }])
   return {
+    classification,
     identity: {
-      canonicalEnglish: c.canonicalEnglish,
-      state: c.state,
-      attributes: c.attributes ?? UNKNOWN_ATTRIBUTES,
-      brand: c.brand,
-    },
-    attributes: c.attributes ?? UNKNOWN_ATTRIBUTES,
-    canonicalGerman: c.canonicalGerman,
-    coreFoodEnglish: c.coreFoodEnglish,
-    category: c.category,
-    foodType: c.foodType,
+      canonicalEnglish: classification.canonicalEnglish,
+      state: classification.state,
+      attributes: classification.attributes ?? UNKNOWN_ATTRIBUTES,
+      brand: classification.brand,
+    } satisfies OverrideIdentity,
+  }
+}
+
+/** The fields worth showing for one resolution, in the shape provenance uses. */
+function describeResolution(resolved: Awaited<ReturnType<typeof resolveNutrients>>): Record<string, unknown> | null {
+  if (!resolved) return null
+  return {
+    provider: resolved.fallbackStatus,
+    providerId: resolved.match.providerId,
+    productName: resolved.match.productName,
+    dataType: resolved.match.dataType ?? null,
+    brand: resolved.match.brand,
+    kcalPer100g: resolved.match.nutrients.kcalPer100g,
+    fatPer100g: resolved.match.nutrients.fatPer100g,
+    proteinPer100g: resolved.match.nutrients.proteinPer100g,
+    carbsPer100g: resolved.match.nutrients.carbsPer100g,
+    confidence: resolved.match.confidence,
+    matchReason: resolved.match.matchReason ?? null,
+    unmetAttributes: resolved.match.unmetAttributes ?? [],
+    judge: resolved.judge ?? null,
   }
 }
 
@@ -160,34 +172,43 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
     const foodName = req.body?.foodName?.trim()
     if (!foodName) return reply.status(400).send({ error: "foodName is required" })
 
-    const c = await classifyOne(foodName, req.body?.unitName ?? null)
-    const key = buildOverrideKey(c.identity)
+    const { classification, identity } = await classifyOne(foodName, req.body?.unitName ?? null)
+    const key = buildOverrideKey(identity)
     const id = overrideId(key)
-
-    const resolved = await resolveNutrients({
-      foodName: c.identity.canonicalEnglish, structuredName: foodName, canonicalGerman: c.canonicalGerman,
-      brand: c.identity.brand, category: c.category, state: c.identity.state, foodType: c.foodType,
-      coreFoodGerman: null, coreFoodEnglish: c.coreFoodEnglish, route: c.identity.brand ? "branded" : "generic",
-      attributes: c.attributes, evidence: { german: true, english: true, core: true, brand: Boolean(c.identity.brand) },
-    } as never, c.identity.brand ? "branded" : "generic")
-
     const existing = getOverrideById(id)
+
+    // Both answers come from the REAL resolver on the REAL query. The second silences one
+    // provider rather than reasoning about what the chain might have done without it.
+    const current = buildResolverQuery(foodName, classification)
+    const underlying = buildResolverQuery(foodName, classification, { ignoreOverrides: true })
+
+    const resolvesNow = await resolveNutrients(current.query, current.route)
+    const resolvesWithoutOverride = await resolveNutrients(underlying.query, underlying.route)
+
     return {
       foodName,
       overrideKey: key,
       id,
-      identity: c.identity,
-      existingOverride: existing ? await describe(existing) : null,
-      resolvesToday: resolved && {
-        provider: resolved.fallbackStatus,
-        providerId: resolved.match.providerId,
-        productName: resolved.match.productName,
-        kcalPer100g: resolved.match.nutrients.kcalPer100g,
-        fatPer100g: resolved.match.nutrients.fatPer100g,
-        confidence: resolved.match.confidence,
-        matchReason: resolved.match.matchReason ?? null,
-        unmetAttributes: resolved.match.unmetAttributes ?? [],
+      classification: {
+        canonicalEnglish: classification.canonicalEnglish,
+        canonicalGerman: classification.canonicalGerman,
+        coreFoodEnglish: classification.coreFoodEnglish,
+        coreFoodGerman: classification.coreFoodGerman,
+        state: classification.state,
+        attributes: classification.attributes,
+        category: classification.category,
+        foodType: classification.foodType,
+        brand: classification.brand,
+        route: classification.route,
+        llmClassified: classification.llmClassified,
+        fromCache: classification.fromCache ?? false,
       },
+      activeOverride: existing ? await describe(existing) : null,
+      // What this ingredient resolves to right now, override included.
+      resolvesNow: describeResolution(resolvesNow),
+      // What it would resolve to automatically, with any override ignored. Identical to
+      // resolvesNow when no override is active.
+      resolvesWithoutOverride: describeResolution(resolvesWithoutOverride),
     }
   })
 
@@ -205,16 +226,17 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(400).send({ error: `provider must be one of: ${VALID_PROVIDERS.join(", ")}` })
       }
 
-      const c = await classifyOne(foodName, req.body?.unitName ?? null)
+      const { classification, identity } = await classifyOne(foodName, req.body?.unitName ?? null)
+      const a = classification.attributes ?? UNKNOWN_ATTRIBUTES
 
       // The target must be loadable NOW. Binding to something that cannot be read would store a
       // decision that is broken from birth, and the person would not find out until a recipe
       // quietly failed to change.
       const probe = await loadOverrideTarget({
         id: "", overrideKey: "", keyVersion: OVERRIDE_KEY_VERSION, exampleName: foodName,
-        canonicalEnglish: c.identity.canonicalEnglish, state: c.identity.state,
-        form: c.attributes.form, preservation: c.attributes.preservation,
-        fatPercent: c.attributes.fatPercent, brand: c.identity.brand,
+        canonicalEnglish: identity.canonicalEnglish, state: identity.state,
+        form: a.form, preservation: a.preservation,
+        fatPercent: a.fatPercent, brand: identity.brand,
         provider, providerId, recordName: "", source: "user-confirmed", note: null,
         createdAt: 0, updatedAt: 0,
       })
@@ -223,7 +245,7 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const saved = setOverride({
-        identity: c.identity, exampleName: foodName, provider, providerId,
+        identity, exampleName: foodName, provider, providerId,
         recordName: probe.name, note: req.body?.note ?? null,
       })
       logger.info({ overrideId: saved.id, foodName, provider, providerId, record: probe.name }, "Food override bound")
@@ -266,8 +288,8 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
         const fabricated = row.provider === "llm-nutrient" || row.provider === null
         if (unmet.length === 0 && !fabricated) continue
         const name = String(row.name)
-        const c = await classifyOne(name, null)
-        const key = buildOverrideKey(c.identity)
+        const { identity: suggestionIdentity } = await classifyOne(name, null)
+        const key = buildOverrideKey(suggestionIdentity)
         suggestions.push({
           slug,
           foodName: name,

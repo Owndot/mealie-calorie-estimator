@@ -5,10 +5,10 @@ import type {
 } from "../types.js"
 import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
-import { evidenceFor } from "./identity-evidence.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
 import { judgeNeed } from "./providers/judge/judge-need.js"
+import { buildResolverQuery } from "./resolver-query.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
 import { estimateGrams } from "./llm-estimator.js"
 import { computeNutritionFingerprint } from "./nutrition-format.js"
@@ -320,24 +320,14 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
 
     totalKnownWeight += grams
 
-    const resolved = await resolveNutrients(
-      {
-        foodName: canonicalEnglish, structuredName: ing.foodName, canonicalGerman, brand,
-        category: classification?.category ?? null, state, foodType, coreFoodGerman, coreFoodEnglish, route,
-        attributes: classification?.attributes ?? UNKNOWN_ATTRIBUTES,
-        // What is actually KNOWN about this ingredient's identity. Absent evidence must make a
-        // provider stricter, never more permissive — see identity-evidence.ts.
-        householdId: recipe.householdId ?? recipe.household_id ?? null,
-        // This recipe is an ancestor of anything it resolves, which is what stops a recipe
-        // resolving through itself or through a cycle.
-        ancestorSlugs: [recipe.slug],
-        evidence: evidenceFor(
-          { llmClassified: classification?.llmClassified ?? false, canonicalGerman, coreFoodGerman, coreFoodEnglish, brand },
-          ing.foodName,
-        ),
-      },
-      route,
-    )
+    // One construction, shared with the override-preview endpoint — see buildResolverQuery().
+    // This recipe is an ancestor of anything it resolves, which is what stops a recipe resolving
+    // through itself or through a cycle.
+    const built = buildResolverQuery(ing.foodName, classification, {
+      householdId: recipe.householdId ?? recipe.household_id ?? null,
+      ancestorSlugs: [recipe.slug],
+    })
+    const resolved = await resolveNutrients(built.query, built.route)
 
     // Judge ELIGIBILITY, computed for every resolution attempt whether or not the judge is
     // enabled. It is a pure, local function of the classification and the outcome — no request,
