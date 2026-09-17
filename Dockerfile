@@ -26,4 +26,7 @@ RUN mkdir -p /app/data && \
     chown -R appuser:appuser /app
 USER appuser
 EXPOSE 8000
-CMD ["node", "dist/index.js"]
+# TEMPORARY — benchmark revision only, never merged to main. Starts the normal server so the
+# deployment health check behaves as usual, then runs the READ-ONLY PR D benchmark against a
+# THROWAWAY cache file so the production cache is untouched.
+CMD ["sh", "-c", "node dist/index.js & SERVER=$!; sleep 8; CACHE_DB_PATH=/tmp/bench-prd-cache.db node dist/bench/prd-run.js 2>&1 || echo BENCH-FAILED; wait $SERVER"]
