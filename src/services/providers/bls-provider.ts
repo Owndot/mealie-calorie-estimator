@@ -14,7 +14,7 @@ import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
 import {
   compoundMatchesTokens, formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, fatApproximate,
-  inferAttributesFromName, attributesKey,
+  inferAttributesFromName, attributesKey, statedPreparation,
 } from "./food-semantics.js"
 import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 import { sanityCheckNutrients } from "../sanity-check.js"
@@ -630,12 +630,43 @@ function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minSco
   const bandTop = acceptable[0].score - ATTRIBUTE_BAND
   const banded = acceptable.filter((c) => c.score >= bandTop)
   const rest = acceptable.filter((c) => c.score < bandTop)
-  const ordered = [
-    ...[...banded].sort((a, b) =>
-      (attributeFit(queryAttrs, b.record) - unmetModifierPenalty(identityText, b.record.nameDe) / UNMET_MODIFIER_WEIGHT)
-      - (attributeFit(queryAttrs, a.record) - unmetModifierPenalty(identityText, a.record.nameDe) / UNMET_MODIFIER_WEIGHT)),
-    ...rest,
+  const bandOrdered = [...banded].sort((a, b) =>
+    (attributeFit(queryAttrs, b.record) - unmetModifierPenalty(identityText, b.record.nameDe) / UNMET_MODIFIER_WEIGHT)
+    - (attributeFit(queryAttrs, a.record) - unmetModifierPenalty(identityText, a.record.nameDe) / UNMET_MODIFIER_WEIGHT))
+
+  // A preparation state the INGREDIENT TEXT STATES is EVIDENCE, not merely a veto.
+  //
+  // Below, an explicit query state only ever rejects a candidate that actively CONTRADICTS it —
+  // and `unknown` contradicts nothing, so a record BLS never labelled satisfies "cooked" as
+  // happily as one labelled "gekocht". "Cooked Puy Lentils" is what exposed it: the core-only
+  // variant "Linsen" ties three records at 75, and the dry Linse reif (H725100, state unknown,
+  // 323 kcal) sits first, so the tied Linse reif, gekocht (H730132, state cooked, 119 kcal) — an
+  // exact state match at the same score — was never reached. Roughly a 3x error, silently.
+  //
+  // The evidence is read from the TEXT, not from query.state, and that distinction is the whole
+  // safety of this rule. reconcileState() refuses an unevidenced "cooked"/"dried" but deliberately
+  // lets an unevidenced "raw" through, because until now state was only ever a veto and a veto
+  // nobody contradicts costs nothing. Measured on the frozen corpus, 110 of 122 non-unknown states
+  // are exactly that: an unevidenced "raw" the classifier emits as a null value, on Salz, Zucker,
+  // Mehl, Essig, Parmesan and Wasser alike. Promoting on those turns a null into an assertion, and
+  // it does real damage — "Milch (Vollmilch)" carries state "raw" with no word supporting it, and
+  // BLS's M112300 "Rohmilch/Vorzugsmilch" is CORRECTLY labelled raw, so an exact-state promotion
+  // moves pasteurised whole milk to unpasteurised. Both sides are right; the state is not evidence.
+  //
+  // So: promote only on a state some word in the text actually claims. Confined to the band, so a
+  // low-scoring candidate can never jump a materially better one; stable, so candidates equal on
+  // state keep the attribute ordering above; and skipped entirely when the text states nothing —
+  // which is every deterministic query and all but twelve of the AI ones.
+  //
+  // queryState is deliberately untouched here: the conflict veto below still uses the reconciled
+  // state, so nothing this rule declines to promote loses the protection it already had.
+  const evidencedState = statedPreparation(identityText)
+  const statePreferred = evidencedState === "unknown" ? bandOrdered : [
+    ...bandOrdered.filter((c) => c.record.inferredState === evidencedState),
+    ...bandOrdered.filter((c) => c.record.inferredState !== evidencedState),
   ]
+
+  const ordered = [...statePreferred, ...rest]
 
   const top = ordered[0]
   const topConflicts = queryState !== "unknown" && top.record.inferredState !== "unknown" && top.record.inferredState !== queryState
