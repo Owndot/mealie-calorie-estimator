@@ -1,395 +1,297 @@
-mealie-calorie-estimator
-===
-[![GitHub Release](https://img.shields.io/github/v/tag/timo-reymann/mealie-calorie-estimator?label=version)](https://github.com/timo-reymann/mealie-calorie-estimator/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/timoreymann/mealie-calorie-estimator?style=flat)](https://hub.docker.com/r/timoreymann/mealie-calorie-estimator)
-[![GitHub all releases download count](https://img.shields.io/github/downloads/timo-reymann/mealie-calorie-estimator/total)](https://github.com/timo-reymann/mealie-calorie-estimator/releases)
-[![LICENSE](https://img.shields.io/github/license/timo-reymann/mealie-calorie-estimator)](https://github.com/timo-reymann/mealie-calorie-estimator/blob/main/LICENSE)
-[![CircleCI](https://circleci.com/gh/timo-reymann/mealie-calorie-estimator.svg?style=shield)](https://app.circleci.com/pipelines/github/timo-reymann/mealie-calorie-estimator)
-[![Renovate](https://img.shields.io/badge/renovate-enabled-green?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzNjkgMzY5Ij48Y2lyY2xlIGN4PSIxODkuOSIgY3k9IjE5MC4yIiByPSIxODQuNSIgZmlsbD0iI2ZmZTQyZSIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoLTUgLTYpIi8+PHBhdGggZmlsbD0iIzhiYjViNSIgZD0iTTI1MSAyNTZsLTM4LTM4YTE3IDE3IDAgMDEwLTI0bDU2LTU2YzItMiAyLTYgMC03bC0yMC0yMWE1IDUgMCAwMC03IDBsLTEzIDEyLTktOCAxMy0xM2ExNyAxNyAwIDAxMjQgMGwyMSAyMWM3IDcgNyAxNyAwIDI0bC01NiA1N2E1IDUgMCAwMDAgN2wzOCAzOHoiLz48cGF0aCBmaWxsPSIjZDk1NjEyIiBkPSJNMzAwIDI4OGwtOCA4Yy00IDQtMTEgNC0xNiAwbC00Ni00NmMtNS01LTUtMTIgMC0xNmw4LThjNC00IDExLTQgMTUgMGw0NyA0N2M0IDQgNCAxMSAwIDE1eiIvPjxwYXRoIGZpbGw9IiMyNGJmYmUiIGQ9Ik04MSAxODVsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzI1YzRjMyIgZD0iTTIyMCAxMDBsMjMgMjNjNCA0IDQgMTEgMCAxNkwxNDIgMjQwYy00IDQtMTEgNC0xNSAwbC0yNC0yNGMtNC00LTQtMTEgMC0xNWwxMDEtMTAxYzUtNSAxMi01IDE2IDB6Ii8+PHBhdGggZmlsbD0iIzFkZGVkZCIgZD0iTTk5IDE2N2wxOC0xOCAxOCAxOC0xOCAxOHoiLz48cGF0aCBmaWxsPSIjMDBhZmIzIiBkPSJNMjMwIDExMGwxMyAxM2M0IDQgNCAxMSAwIDE2TDE0MiAyNDBjLTQgNC0xMSA0LTE1IDBsLTEzLTEzYzQgNCAxMSA0IDE1IDBsMTAxLTEwMWM1LTUgNS0xMSAwLTE2eiIvPjxwYXRoIGZpbGw9IiMyNGJmYmUiIGQ9Ik0xMTYgMTQ5bDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMxZGRlZGQiIGQ9Ik0xMzQgMTMxbDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMxYmNmY2UiIGQ9Ik0xNTIgMTEzbDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMyNGJmYmUiIGQ9Ik0xNzAgOTVsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzFiY2ZjZSIgZD0iTTYzIDE2N2wxOC0xOCAxOCAxOC0xOCAxOHpNOTggMTMxbDE4LTE4IDE4IDE4LTE4IDE4eiIvPjxwYXRoIGZpbGw9IiMzNGVkZWIiIGQ9Ik0xMzQgOTVsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzFiY2ZjZSIgZD0iTTE1MyA3OGwxOC0xOCAxOCAxOC0xOCAxOHoiLz48cGF0aCBmaWxsPSIjMzRlZGViIiBkPSJNODAgMTEzbDE4LTE3IDE4IDE3LTE4IDE4ek0xMzUgNjBsMTgtMTggMTggMTgtMTggMTh6Ii8+PHBhdGggZmlsbD0iIzk4ZWRlYiIgZD0iTTI3IDEzMWwxOC0xOCAxOCAxOC0xOCAxOHoiLz48cGF0aCBmaWxsPSIjYjUzZTAyIiBkPSJNMjg1IDI1OGw3IDdjNCA0IDQgMTEgMCAxNWwtOCA4Yy00IDQtMTEgNC0xNiAwbC02LTdjNCA1IDExIDUgMTUgMGw4LTdjNC01IDQtMTIgMC0xNnoiLz48cGF0aCBmaWxsPSIjODgzMTAwIiBkPSJNMjQwIDI0OGwtNyA3Yy00IDQtMTEgNC0xNiAwbC02LTdjNCA1IDExIDUgMTUgMGw3LTdjNC01IDQtMTIgMC0xNnoiLz48L3N2Zz4=)](https://github.com/timo-reymann/mealie-calorie-estimator)
-[![codecov](https://codecov.io/gh/timo-reymann/mealie-calorie-estimator/graph/badge.svg?token=lTQRwxnxYl)](https://codecov.io/gh/timo-reymann/mealie-calorie-estimator)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=timo-reymann_mealie-calorie-estimator&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=timo-reymann_mealie-calorie-estimator)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=timo-reymann_mealie-calorie-estimator&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=timo-reymann_mealie-calorie-estimator)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=timo-reymann_mealie-calorie-estimator&metric=security_rating)](https://sonarcloud.io/summary/new_code?id=timo-reymann_mealie-calorie-estimator)
+# Mealie Nutrition Engine
 
-<p align="center">
-    <img width="300" src="./.github/images/logo.png">
-    <br />
-    Automatic nutrition estimation for recipes hosted on a <a href="https://mealie.io/">Mealie</a> instance
-</p>
+[![CI](https://github.com/Owndot/mealie-nutrition-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Owndot/mealie-nutrition-engine/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Owndot/mealie-nutrition-engine?label=release)](https://github.com/Owndot/mealie-nutrition-engine/releases)
+[![License](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
+
+Automatic, provenance-aware nutrition for recipes in [Mealie](https://mealie.io/). It listens for
+recipe webhooks, resolves every ingredient against real food-composition records, calculates the
+recipe deterministically, and writes the result back — recording, for each ingredient, exactly
+which record the numbers came from and what it could not answer.
+
+---
+
+## Why this exists
+
+Working out a recipe's nutrition sounds like a database lookup. It is not.
+
+Real recipes are full of ingredients that a search cannot honestly resolve on its own: *lean* mince,
+*light* mayonnaise, raw versus cooked, "5 % fat" versus "10 % fat", a generic ingredient versus a
+particular retail product, and German food names that have no clean equivalent in international
+databases.
+
+A naive database search will happily return something. Ask it for lean mince and it returns mince —
+quietly dropping the word that mattered, and with it about 60 kcal per 100 g. An LLM-only estimator
+has the opposite failure: it always answers, the answer is not reproducible, and the numbers are
+invented rather than measured.
+
+This project takes a third position:
+
+- **prefer real, deterministic nutrition records** — bundled reference databases, not generated values;
+- **preserve provenance** — every ingredient records its source, record id and confidence;
+- **represent unresolved attributes instead of hiding them** — if a record does not satisfy "lean",
+  it is used *and flagged*, never silently treated as equivalent;
+- **use semantic/LLM assistance only where deterministic evidence is insufficient** — and never to
+  produce a nutrient value when a real record exists.
+
+Some ambiguity cannot be resolved honestly at all. Asked which of four genuine light mayonnaises a
+recipe means, the right machine answer is "I don't know". **User-confirmed overrides** exist for
+exactly that: you choose the real record once, and the engine remembers it.
 
 ## Features
 
-<!-- List features as bullet points -->
+- Recipe-created / recipe-updated webhooks, with loop prevention
+- Deterministic gram resolution from Mealie's structured quantities and units (German units included)
+- Multi-source resolution with hard semantic gates, so a wrong-but-similar food is rejected rather than used
+- Per-ingredient provenance: provider, record id, confidence, unmet attributes, classification
+- Persistent SQLite caching, surviving restarts
+- User-confirmed overrides with a small admin API
+- Manual-nutrition protection and a force-recalculate endpoint
+- Optional auto-tagging by calorie band and digestibility
 
-- Routing-aware provider chain: [BLS 4.0](https://blsdb.de/) (bundled German nutrition database, generic foods), [Open Food Facts](https://world.openfoodfacts.org/) (branded/product foods), and USDA FoodData Central (optional generic-route fallback) — OFF is never queried for a plain generic ingredient, and there is no hand-authored local nutrition database standing in as an "authoritative" source
-- Brand detection is evidence-based only: a brand is used only when it's explicitly present in the structured `food.name`, never inferred from general knowledge
-- Sanity-checks every candidate (implausible kcal, salt/sodium unit mistakes, macro inconsistencies) and rejects/falls through to the next provider rather than trusting it blindly
-- One whole-recipe LLM batch request for ingredient normalization (never one call per ingredient); per-ingredient LLM calls remain only for unresolved unit gram estimates and a final per-food nutrient fallback
-- Food-specific unit conversion — 1 EL/TL/ml of oil, flour, sugar, honey etc. resolve to different gram weights (ml/l are volume units, never assumed to be 1g/ml); German units (EL, TL, Prise, Dose, Glas, Bund, Packung, Päckchen, Becher, Tasse, Stange, Zehe, Stück) are supported alongside metric/imperial
-- Recipes with a significant unresolved ingredient are marked withheld rather than written with misleadingly "complete" numbers; minor unresolved seasonings are marked partial and don't block the rest
-- Skips re-estimation via a SHA256 ingredient hash, preserves manually entered calories (including nutrition hand-edited *after* an earlier estimate, detected via a fingerprint of the values the estimator last wrote), and supports an explicit force-recalculate endpoint that still protects manual entries unless overridden
-- Webhook, on-demand, and bulk backfill entry points, all sharing one estimation pipeline
-- **Auto-tags** recipes with calorie range and digestibility tags
+## Nutrition sources
 
-## Purpose
+Consulted in this order. Each is silent unless it has something for the ingredient.
 
-This small service enriches [Mealie](https://mealie.io/) (self-hosted recipe manager) with nutritional data by:
+| # | Source | What it is | When it answers |
+|---|---|---|---|
+| 1 | **Your Mealie recipes** | your own computed recipes | an ingredient named exactly like one of your recipes — a homemade paste or spice mix no public database can know |
+| 2 | **User-confirmed overrides** | a record you chose | you have deliberately bound this exact ingredient |
+| 3 | **BLS 4.0** | German Bundeslebensmittelschlüssel, 7,140 records, bundled | German ingredient identities; the primary source for German recipes |
+| 4 | **USDA FoodData Central** | Foundation + SR Legacy, 8,262 generic records, bundled | generic foods, especially where BLS has no entry |
+| 5 | **Open Food Facts** | branded retail products, queried live | branded ingredients, and as a *verified proxy* for a property no generic database carries |
+| 6 | **LLM estimate** | a generated value | last resort, clearly marked as such |
 
-1. **Listening for webhooks** triggered when a recipe is created or updated.
-2. **Resolving ingredients** from structured Mealie data only (`food.name` / `quantity` / `unit` — `originalText` is never read) through a routing-aware provider chain, with sanity checks on every candidate.
-3. **Patching nutrition** back into Mealie's nutrition fields, dividing the whole-recipe total by `recipeServings` exactly once.
+Both reference databases are **bundled in the image**: no API key, no network call, no rate limit,
+and the same data every time. Open Food Facts is used selectively rather than as a general
+database — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-Unit conversion prioritizes Mealie's own structured conversion metadata (mass units only — a structured `standardUnit` of ml/l still requires food density, exactly like priority 3 below), then deterministic mass-unit conversion (g/kg/mg/oz/lb), then food-specific density (EL/TL/cup/ml/l — 200ml water and 200ml olive oil are *not* the same weight, and an unrecognized liquid never silently defaults to water density), then known piece/package weights (Stück/Dose/Glas/...), and only falls back to a bounded LLM gram estimate when nothing else resolves it. A SHA256 hash of the ingredients skips re-estimation when nothing changed, and manually entered calories are preserved unless explicitly overridden.
+### Where the LLM is used, and where it is not
 
-### Provider strategy
-
-Ingredients are routed as **generic** or **branded** based on evidence-based classification (a brand is only used when the structured food name explicitly contains it):
-
-- **Generic route:** cache → **BLS 4.0** (bundled) → **USDA FoodData Central** (bundled, generic datasets only) → Open Food Facts as a final database fallback → LLM (if enabled) as the absolute last resort. USDA precedes OFF because it is a generic-food database answering a generic question, while OFF is branded product-label data; OFF is only reached when both bundled databases fail.
-- **Branded route:** cache → Open Food Facts (ranked candidates, obvious mismatches like "ginger" vs "ginger ale" rejected) → BLS → the same bundled USDA database → LLM last.
-
-Direct LLM nutrient estimation is the **absolute last resort** on both routes — every real database (BLS, USDA, OFF) is tried first, and a database result is never accepted just because it exists: every candidate goes through identity/state/category/completeness/sanity checks before acceptance (see "Provider result acceptance" below). A database match is not automatically preferred over falling through to the next provider if it's clearly the wrong food.
-
-There is intentionally **no hand-authored local nutrition dataset** anywhere in this chain — a small built-in table of kcal/macro values would not be a trustworthy, reproducible nutrition source. A local dataset may still carry deterministic **unit/density/piece-weight metadata** (see `src/services/food-density.ts`) — e.g. "1 EL olive oil ≈ 13.6g" or "1 Stück egg ≈ 53g" are culinary/physical constants, not nutrition facts, and are fine to hand-author and document. That is separate from, and must never substitute for, an actual nutrition provider. If BLS/USDA/OFF are unavailable or produce no match and the LLM is disabled, a generic ingredient honestly resolves to nothing rather than a fabricated number.
-
-#### Provider result acceptance
-
-Every candidate from every provider goes through the same conceptual pipeline before being accepted: identity (name) similarity → preparation-state compatibility → category compatibility → nutrient completeness → nutrient sanity checks → confidence threshold. Any failure rejects the candidate and falls through to the next provider, logging a safe (non-sensitive) reason. Two reusable, provider-agnostic primitives back this (`src/services/providers/ranking.ts`):
-
-- **State conflict** — a candidate's known preparation state (raw/cooked/dried) conflicting with the query's known state is rejected outright (e.g. a "raw" query never accepts a "boiled"/"cooked" candidate). USDA's state is inferred at lookup time from its English description text (`inferStateFromName`); BLS's is inferred once at import time from its German names.
-- **Category conflict** (`categoryConflict`) — a strict raw-ingredient category (spice, herb, vegetable, egg, dairy, grain, ...) rejects a candidate whose name reads as a composite/manufactured product (sausage, soup, snack, baked good, beverage) — generalizing several real failure cases found in testing (a spice matching a sausage containing it, salt matching pretzel sticks, an herb matching a soup containing it, ginger matching ginger ale) under one mechanism instead of one-off exceptions.
-
-#### USDA FoodData Central (bundled, offline)
-
-USDA generic foods are a **bundled local SQLite database** at `resources/usda/usda-generic.sqlite`, built by `scripts/import_usda.py`. **There is no API key, no network call and no live FoodData Central search** — that path was removed, because its result window rather than its data was the problem:
-
-> A live `pageSize=25` search for `ground beef` returned **25 Branded rows out of 25**, leaving the generic route nothing at all after its Branded filter. `lean ground beef` returned 20 Branded and five generic rows, every one of them 70/30, 75/25 or 80/20 — the fattiest grades — while SR Legacy holds 97/3, 95/5, 93/7 and 90/10 raw the whole time.
-
-Locally there is no window: every generic record is a candidate on every lookup, and Branded crowding is **structurally impossible** because no Branded row is imported.
-
-| | |
+| Used for | Not used for |
 |---|---|
-| **Included** | Foundation Foods **2026-04-30** (469 records) · SR Legacy **2018-04** (7,793 records) — **8,262 total**, 2.34 MB |
-| **Excluded** | **Branded Foods** (428 MB of label data — the crowding source) and **FNDDS/Survey** (measured: +2 benchmark concepts for +5,432 rows, 2,710 of them prepared dishes, and ~65% larger candidate sets) |
-| **Licence** | Public domain / CC0 1.0 — see `resources/usda/NOTICE` |
-| **Provenance** | `provider: "usda-local"`, `providerId` = FDC id, `dataType` = `SR Legacy` or `Foundation` |
+| Normalizing and translating ingredient identities (one batched request per recipe, cached) | Calculating anything |
+| Estimating grams for units that cannot be converted deterministically | Overriding your structured quantities |
+| Choosing **between real records** that retrieval already found | Inventing a nutrient value when a real record exists |
 
-Ranking, gating and reranking are unchanged from the former API provider — only retrieval moved. Nutrients are mapped by USDA's stable nutrient IDs, never array position: energy uses **1008 → 2047 (Atwater General) → 2048 (Atwater Specific)** in that order and never averages or sums them, with the id that supplied each value stored in `energy_nutrient_id` (SR Legacy is uniformly 1008; Foundation genuinely mixes 1008 and 2047, and they are not interchangeable). Sodium and cholesterol are converted mg → g at import so units match every other provider.
+The semantic judge is **off by default** (`LLM_JUDGE_ENABLED`). When enabled, it is consulted only
+where the alternative is a generated number, it can only ever return an id from the records it was
+shown, and "ambiguous" or "none" are valid answers that leave the existing result untouched.
 
-**Known limitation — qualitative lean/mager against numeric grades.** `Rinderhackfleisch mager` says *lean*; it does not say 97/3, 95/5, 93/7, 90/10, 80/20, 75/25 or 70/30, and USDA holds all seven as separate raw records. The current ranker scores every one of them identically and all below the acceptance threshold, so USDA returns no candidate and BLS's identity-compatible record stands with its `reduced-fat` claim honestly unmet. Picking the leanest, the lowest-kcal, or a hardcoded "mager = 90/10" would invent a precision the cook never supplied, so resolving qualitative claims against numeric grades is deferred to a separate ranking-design change.
+## Language support
 
-**Updating to a newer Foundation release** (Foundation ships twice a year; SR Legacy is final and will not change):
+**German** — the primary language. Extensively production-tested, with BLS as a first-class local
+source and the main regression focus. German works particularly well because BLS is bundled, German
+food terminology has been the production and test focus throughout, and semantic normalization maps
+German ingredients onto the English canonical identities the other providers use.
 
-1. Download the new `FoodData_Central_foundation_food_csv_<date>.zip` from the [official downloads page](https://fdc.nal.usda.gov/download-datasets/).
-2. Update the expected row count in `DATASETS` in `scripts/import_usda.py` — the importer **fails loudly** on a mismatch rather than quietly importing a different corpus.
-3. Re-run the importer (see `resources/usda/NOTICE`); it rewrites both the database and `SOURCES.json` with fresh SHA-256 digests.
-4. Update `EXPECTED` in `tests/providers/usda-local-provider.test.ts` and re-run the suite. Bump `USDA_LOCAL_MATCH_ALGORITHM_VERSION` only if retrieval or ranking changed — the bundled `schema_version` already participates in the cache key, so a re-import invalidates cached USDA matches on its own.
+**English** — supported on a best-effort basis and partially regression-tested. Many common
+ingredients resolve correctly (`black beans`, `pasta`, `tomato paste`, `olive oil`, `onion`,
+`parmesan`, `lean ground beef`, `ground beef 5% fat`). It is **not yet at German parity**: some
+under-qualified terms can lose part of their identity during classification, and qualified
+retail-style terms such as `light mayonnaise` may stay flagged rather than receiving an exact
+record. See the open issues.
 
-#### BLS 4.0 (Bundeslebensmittelschlüssel)
+**Other languages** — may work through semantic normalization and international sources such as
+Open Food Facts, but have **not** been systematically validated.
 
-The generic route's primary provider is a bundled, compact SQLite extract of the official **BLS 4.0** German food composition database (7,140 foods, published 2025-12-15 by the Max Rubner-Institut), built by `scripts/import_bls.py` from the [official export](https://blsdb.de/download) — every stored value is a verbatim (or straightforwardly unit-converted) BLS figure, nothing is hand-authored. Matching prioritizes the raw **structured German** Mealie food name (never `originalText`) via exact normalized-name match first, then a conservative German-compound-aware fuzzy match (see `src/services/providers/bls-provider.ts` for the exact algorithm and why it deliberately isn't the OFF/USDA fuzzy matcher), with preparation-state (raw/cooked/dried) taken into account and a mismatching state rejected outright rather than guessed. BLS 4.0 has no total-trans-fat component, so `transFatContent` is always left unknown (never 0) for BLS-sourced matches.
+## Requirements
 
-**Attribution** (per the CC BY 4.0 license terms):
-> Max Rubner-Institut (2025): Bundeslebensmittelschlüssel (BLS), Version 4.0 - Deutsche Nährstoffdatenbank. Karlsruhe. DOI: [10.25826/Data20251217-134202-0](https://doi.org/10.25826/Data20251217-134202-0)
-
-`BLS_LOCAL_IMPORT_PATH`, if set, overrides the bundled database path — e.g. to point at a regenerated export after a future BLS update — without a code change; it's empty by default, which uses the bundled `resources/bls/bls-4.0.sqlite`.
-
-### Auto-Tagging
-
-Every estimated recipe gets up to two auto-tags applied in Mealie: one for calorie range and one for digestibility.
-
-**Calorie tags** (per serving):
-
-| Tag | Range (kcal) |
-|---|---|
-| `Calories:Light` | < 350 |
-| `Calories:Moderate` | 350 – 600 |
-| `Calories:Hearty` | 600 – 850 |
-| `Calories:Heavy` | > 850 |
-
-**Digestibility tags** (based on macronutrient ratios):
-
-| Tag | Criteria |
-|---|---|
-| `Digest:Easy` | fat < 30% of calories AND kcal ≤ 600 |
-| `Digest:Slow` | fat ≥ 40% of calories |
-| `Digest:Moderate` | anything in between (e.g. fat 30–40%, or low-fat but calorie-dense) |
-| `Digest:Unknown` | missing fat or calorie data |
-
-The digestibility heuristic relies on per-serving fat and calorie data — high fat indicates slow digestion, low fat with moderate calories indicates a lighter meal.
-
-Tags are created automatically in Mealie when first needed. On re-estimation, old auto-tags are replaced but user-applied tags are preserved. If a recipe already has nutrition data but is missing auto-tags (e.g. after upgrading), they are added without re-estimating.
+- A running Mealie instance (v2+) and an API token
+- Docker and Docker Compose
+- Optional: an OpenAI-compatible LLM endpoint and key
 
 ## Installation
 
-It's recommended to install it next to your Mealie instance using docker-compose.
+```bash
+git clone https://github.com/Owndot/mealie-nutrition-engine.git
+cd mealie-nutrition-engine
+cp .env.example .env
+$EDITOR .env          # at minimum: MEALIE_URL and MEALIE_API_TOKEN
+docker compose up -d nutrition-engine
+```
 
-### Prerequisites
+The published image can be used directly instead of building:
 
-- A Mealie service account with an API token (`Settings > Users > Create User`)
+```yaml
+services:
+  nutrition-engine:
+    image: ghcr.io/owndot/mealie-nutrition-engine:latest
+    environment:
+      MEALIE_URL: http://mealie:9000
+      MEALIE_API_TOKEN: ${MEALIE_API_TOKEN}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - nutrition-engine-data:/app/data
+    restart: unless-stopped
 
-1. Configure the estimator next to mealie
-   ```yaml
-   services:
-     mealie:
-       # mealie configuration
-     calorie-estimator:
-       image: timoreymann/mealie-calorie-estimator:latest
-       container_name: mealie-calorie-estimator
-       restart: unless-stopped
-       depends_on:
-         - mealie
-       environment:
-         MEALIE_URL: http://mealie:9000
-         MEALIE_API_TOKEN: ${MEALIE_API_TOKEN}
-         OFF_LANGUAGE: de
-         LLM_ENABLED: ${LLM_ENABLED:-false}
-         LLM_API_KEY: ${LLM_API_KEY:-}
-   ```
-2. Or run standalone
-   ```bash
-   docker compose up -d
-   ```
+volumes:
+  nutrition-engine-data:
+```
 
-### Environment Variables
+The engine must be able to reach Mealie, and Mealie must be able to reach the engine — put both on
+the same Docker network.
 
-| Variable | Default | Description |
+### Connect Mealie
+
+In Mealie: **Settings → Notifiers → Create**, with an Apprise URL pointing at the engine:
+
+```
+json://nutrition-engine:8000/webhook
+```
+
+Enable **Recipe Created** and **Recipe Updated**; leave the rest off.
+
+### Verify the installation
+
+```bash
+curl -s http://127.0.0.1:8000/health
+# {"status":"ok","timestamp":"..."}
+
+docker compose logs nutrition-engine | grep "server started"
+# ...,"usdaLocalEnabled":true,"usdaLocalDatasets":"Foundation ...; SR Legacy ...",
+#     "llmEnabled":false,"judgeEnabled":false,"foodOverrides":0,...
+```
+
+`usdaLocalEnabled: true` confirms the bundled databases loaded. Then force one recipe through:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/estimate/<recipe-slug>?force=true"
+```
+
+and check the recipe in Mealie for nutrition values and a `calorie_estimator_provenance` extra.
+
+## Configuration
+
+Every supported variable is documented in [`.env.example`](.env.example). Only two are required:
+
+| Variable | Required | Notes |
 |---|---|---|
-| `MEALIE_URL` | `http://mealie:9000` | Mealie instance URL |
-| `MEALIE_API_TOKEN` | — | **Required.** Default Mealie service account token. Used unless a per-household token matches |
-| `MEALIE_API_TOKEN_<HOUSEHOLD_ID>` | — | Optional per-household token override. Set e.g. `MEALIE_API_TOKEN_my_household` to use a different token for recipes in that household. Non-alphanumeric characters in the household ID are replaced with `_` for lookup (e.g. a UUID `f0d4ec80-a7ae-4315-8c43-a3e4ed0ca01f` becomes `MEALIE_API_TOKEN_f0d4ec80_a7ae_4315_8c43_a3e4ed0ca01f`) |
-| `OFF_LANGUAGE` | `de` | Open Food Facts search language(s) |
-| `OFF_SEARCH_BASE_URL` | `https://search.openfoodfacts.org` | Open Food Facts search API base URL |
-| `OFF_MAX_RETRIES` | `3` | Retries for transient OFF search errors (429/5xx) |
-| `OFF_RETRY_BACKOFF_MS` | `500` | Base backoff between retries (doubles each attempt) |
-| `USDA_LOCAL_DB_PATH` | — | Overrides the bundled USDA generic database path (`resources/usda/usda-generic.sqlite` when unset). **No USDA API key exists** — USDA is offline |
-| `BLS_LOCAL_IMPORT_PATH` | — | Overrides the bundled BLS 4.0 database path (`resources/bls/bls-4.0.sqlite` when unset) |
-| `LLM_ENABLED` | `false` | Enable the LLM: one whole-recipe batch normalization request, plus narrowly-scoped per-ingredient gram/nutrient fallback |
-| `LLM_API_KEY` | — | API key for OpenAI-compatible endpoint |
-| `LLM_BASE_URL` | `https://api.mistral.ai/v1` | LLM API base URL |
-| `LLM_ENDPOINT_URL` | `/chat/completions` | LLM API endpoint path (supports OpenAI-compatible providers) |
-| `LLM_MODEL` | `mistral-small-latest` | Model name |
-| `ESTIMATE_STRATEGY` | `all` | Estimation strategy: `all` (estimate every recipe) or `tagged` (only estimate recipes with the `ESTIMATE_TAG` tag) |
-| `ESTIMATE_TAG` | `estimate` | Tag name to check when `ESTIMATE_STRATEGY=tagged` |
-| `CACHE_DB_PATH` | `data/cache.db` | SQLite cache file path |
-| `CACHE_MATCH_TTL` | `604800` (7 days) | TTL in seconds for successful provider matches |
-| `CACHE_MISS_TTL` | `86400` (1 day) | TTL in seconds for negative/miss results (avoids repeat rate-limited lookups) |
-| `CACHE_LLM_TTL` | `43200` (12 hours) | TTL in seconds for LLM gram/nutrient estimates (least authoritative, shortest-lived) |
-| `PORT` | `8000` | Server port |
-| `LOG_LEVEL` | `info` | Pino log level |
+| `MEALIE_URL` | **yes** | e.g. `http://mealie:9000` |
+| `MEALIE_API_TOKEN` | **yes** | a dedicated service-account token |
+| `LLM_ENABLED`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | no | any OpenAI-compatible endpoint |
+| `LLM_JUDGE_ENABLED` | no | semantic judge, **off** by default |
+| `OVERRIDE_ADMIN_TOKEN` | no | enables the override API; unset means those routes do not exist |
+| `CACHE_DB_PATH`, `OVERRIDES_DB_PATH` | no | default to `data/` |
 
-See [`.env.example`](./.env.example) for the full list, including rate-limit and cache tuning.
+### Persistence and backups
 
-## Usage
+Both databases live in `/app/data`:
 
-1. Navigate to your Mealie instance
-2. Go to `Settings > User Settings > Notifiers`
-3. Click `Create`
-4. Fill out the form
-    - **Apprise URL**: `json://calorie-estimator:8000/webhook`
-    - **Events**: `Recipe Created`, `Recipe Updated`
-5. Create or update a recipe — nutrition is estimated and patched back automatically
-
-### Endpoints
-
-| Method | Path | Description |
+| File | Rebuildable? | Notes |
 |---|---|---|
-| `GET` | `/health` | Health check |
-| `POST` | `/webhook` | Apprise webhook for recipe created/updated events |
-| `POST` | `/estimate/:slug` | On-demand estimation for a single recipe. Query params: `force=true` bypasses the unchanged-ingredients skip and re-estimates (never overwrites manually-entered nutrition by itself); `overrideManual=true` (used together with `force=true`) is the separate, explicit confirmation required to overwrite a genuinely manual entry |
-| `POST` | `/backfill` | Estimate nutrition for all existing recipes (never forces, never overrides manual entries) |
+| `cache.db` | **yes** | provider matches, LLM classifications, judge decisions. Safe to delete; it refills. |
+| `overrides.db` | **no** | the records you deliberately chose. **Back this up.** |
 
-Recipe nutrition estimated by this service is marked with `extras.calorie_estimator_status` (`complete`, `partial`, or `withheld`) and `extras.calorie_estimator_provenance` (per-ingredient source/confidence), so estimator output is always distinguishable from a manually-entered value and from a low-confidence guess. `extras.calorie_estimator_nutrition_fingerprint` records a hash of the exact values the estimator last wrote; if a recipe's nutrition no longer matches that fingerprint on a later run (even though the ingredient hash is unchanged), it's treated as hand-edited and protected the same way a never-estimated manual entry is — not silently overwritten.
+Keep `/app/data` on a named volume or bind mount. Both survive container recreation.
 
-### Material nutritional attributes steer provider selection
+## User-confirmed overrides
 
-A candidate can be the right *food* and still be the wrong *product*. `mageres Rinderhackfleisch`
-is ground beef; a 16% fat record is not lean. `Mayo Light` is mayonnaise; a 750 kcal record is not
-light. These claims are treated as first-class, separately from food identity:
+When automatic resolution is ambiguous or knowingly incomplete, bind the ingredient to a real
+record once and the engine remembers it. An override is a **pointer**, never a copy of the numbers:
+the nutrients are reloaded from the provider every time, and a target that cannot be loaded falls
+back to normal resolution rather than serving something stale.
 
-- **Identity is the hard requirement.** Nothing here can promote a candidate the semantic gates
-  rejected — this only chooses between records that are already the right food. `lean ground beef`
-  never becomes an unrelated low-fat meat just because it is lean.
-- **A shortfall no longer ends the search.** A record that matches the identity but drops a stated
-  claim is remembered and the chain continues; a later provider that *satisfies* the claim wins
-  outright. So `Mayo Light` passes BLS's full-fat records for USDA's `Mayonnaise, light` — wherever
-  that record is reachable for the query.
-- **Replacing it takes positive evidence.** "Satisfies" means the replacement's own record name
-  states the claim (`light`, `mager`, `fettarm`, …). Absence of an objection is not evidence: an LLM
-  estimate has no record name, so the attribute check never runs on it and its empty
-  `unmetAttributes` means *never asked*, not *nothing wrong*. Production showed why this matters —
-  for `mageres Rinderhackfleisch` the chain reached an estimate of 250 kcal/100 g and was allowed to
-  prefer it over a 224 kcal record for being leaner. An estimate is still the normal last resort
-  when there is no database record to displace; it just cannot buy its way past one on a claim it
-  never demonstrated.
-- **So a claim can simply go unmet.** Measured, nothing in BLS or USDA is lean mince: BLS's is
-  224 kcal at 16.4% fat, USDA's family tops out *fattier* at 80/20, and BLS's one genuinely lean
-  record is `Tatar/Schabefleisch`, a different product. The 224 kcal record is then used **and
-  flagged** — `unmetAttributes` in provenance, confidence capped, and named as the recipe's reason
-  for doubt. An honest caveat beats an unverified number.
-- **Whatever is chosen says what it lacks.** `unmetAttributes` travels into provenance, caps
-  confidence, and is what recipe-level match quality explains.
+Set `OVERRIDE_ADMIN_TOKEN` to enable the API; every request needs `Authorization: Bearer <token>`.
 
-Explicit percentages (`Kochsahne 15%`, `Joghurt 1,5%`) survive from the raw Mealie text into
-provenance as `requestedFatPercent`, and a mismatched percentage is a hard conflict — a 15% cream
-never becomes a 30% one. Values are **never interpolated** between neighbouring records: BLS's
-nearest creams are a 10% coffee cream and a 20% *soured* Schmand, which are not the same product
-family, and false precision is worse than an honest estimate.
+```bash
+TOKEN=...   # OVERRIDE_ADMIN_TOKEN
 
-### Your own recipes as an ingredient source
+# What does this ingredient resolve to, and what key would an override use?
+curl -sX POST http://127.0.0.1:8000/overrides/preview \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"foodName":"Rinderhackfleisch mager","unitName":"g"}'
 
-A recipe that is itself an ingredient — a curry paste, a spice mix, a stock — is the one food a
-public database can never know. If an ingredient's name matches one of your own Mealie recipes
-**exactly**, its nutrition is derived from that recipe instead of guessed:
+# Bind it to a real record (bls | usda-local | off | mealie-recipe)
+curl -sX PUT http://127.0.0.1:8000/overrides \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"foodName":"Rinderhackfleisch mager","unitName":"g",
+       "provider":"off","providerId":"4313249214975"}'
 
-```
-total recipe nutrients ÷ finished yield in grams × the grams this recipe uses
+curl -s  http://127.0.0.1:8000/overrides                    -H "Authorization: Bearer $TOKEN"
+curl -sX DELETE http://127.0.0.1:8000/overrides/<id>        -H "Authorization: Bearer $TOKEN"
+curl -s "http://127.0.0.1:8000/overrides/suggestions?slug=<recipe-slug>" -H "Authorization: Bearer $TOKEN"
 ```
 
-It is deliberately the most conservative provider in the chain, and declines rather than guesses:
+`preview` shows both what the ingredient resolves to **now** and what it would resolve to
+**without** the override, so a binding is always made against the current behaviour. Full details in
+[`docs/OVERRIDES.md`](docs/OVERRIDES.md).
 
-- **Exact normalized-name match only.** `Tikka-Paste` finds the `Tikka-Paste` recipe; nothing merely
-  containing "Tikka" does.
-- **The source must state a yield in mass.** Mealie already models this (`recipeYieldQuantity` +
-  `recipeYield`), so no new metadata is invented. A recipe yielding "4 servings" is declined, and
-  cooked weight is never inferred from ingredient weights — evaporation makes that unreliable in
-  exactly the cases that matter.
-- **The source must already have nutrition.** This provider reads what Mealie holds; it never
-  triggers a nested estimation, which is what makes recursion impossible rather than merely guarded.
-- **Cycles are refused.** A recipe never resolves through itself or through an ancestor, and nesting
-  is depth-capped.
+> **Security.** `OVERRIDE_ADMIN_TOKEN` grants write access to how your nutrition is resolved. Use a
+> long random value, keep it out of version control, and do not expose port 8000 beyond your own
+> network — the examples bind to `127.0.0.1` deliberately.
 
-Provenance records `provider: "mealie-recipe"`, the `sourceRecipeSlug` and
-`matchReason: "exact-recipe-name"`. The consumer also records a fingerprint of the source's
-nutrition/servings/yield, so if the source changes, the dependent re-estimates at its next run
-rather than keeping a stale value — checked at the dependent, never cascaded, so no update storms.
+## Endpoints
 
-| variable | default | purpose |
+| Method | Path | Purpose |
 |---|---|---|
-| `MEALIE_RECIPE_SOURCE_ENABLED` | `true` | turn the whole feature off |
-| `MEALIE_RECIPE_INDEX_TTL` | `300` | seconds the recipe-name index is reused |
-| `MEALIE_RECIPE_MAX_DEPTH` | `1` | how deep recipe-in-recipe resolution may nest |
+| `GET` | `/health` | liveness |
+| `POST` | `/webhook` | Mealie notifier target |
+| `POST` | `/estimate/:slug?force=true` | recalculate one recipe |
+| `POST` | `/backfill` | recalculate in bulk |
+| `*` | `/overrides…` | override management (token required) |
 
-### LLM-assisted candidate reranking
+## Updating
 
-When retrieval is genuinely ambiguous, an LLM acts as a **semantic judge between database records**
-— never as a source of nutrition. The pipeline is:
-
-```
-ingredient -> deterministic retrieval -> hard semantic gates -> candidate set
-           -> [rerank, only when ambiguous] -> selected database record -> database nutrients
+```bash
+docker compose pull nutrition-engine && docker compose up -d nutrition-engine
 ```
 
-The gates run first and are not advisory: a candidate carrying a food-type, attribute,
-core-identity, specificity or category conflict is removed *before* the model sees anything, so it
-can only reorder what survived, or decline. Retrieval stays local — the bundled 7,140-row table is
-never sent anywhere; the model sees at most `LLM_RERANK_MAX_CANDIDATES` (default 8) records.
+Your data volume is untouched. If a release changes matching behaviour, the notes say so.
 
-A rerank happens only when one of these holds, and never for an exact name match:
+## Troubleshooting
 
-| trigger | meaning |
+| Symptom | Likely cause |
 |---|---|
-| `no-acceptable-candidate` | records passed every gate but none scored high enough to accept |
-| `material-rival` | a near-tied candidate with a *different identity* would change the calories materially |
-| `unanswered-attribute` | the ingredient stated canned/dried/ground and the winner ignores it while another candidate does not |
+| `getaddrinfo EAI_AGAIN mealie` | the containers are not on the same Docker network |
+| Recipes never update | the Mealie notifier is not enabled, or not pointed at `/webhook` |
+| `usdaLocalEnabled:false` at startup | the image was built without `resources/` — rebuild |
+| Nutrition looks wrong for one ingredient | read its `calorie_estimator_provenance` row; if `unmetAttributes` is non-empty the engine is telling you it could not satisfy a stated property — a good override candidate |
+| Judge never runs | `LLM_JUDGE_ENABLED` is off by default, and requires `LLM_ENABLED` + a key |
+| Override API returns 401/404 | `OVERRIDE_ADMIN_TOKEN` unset (404) or wrong (401) |
 
-**NONE is a first-class answer.** So is every failure: a timeout, a non-2xx, malformed JSON, a
-candidate number that was never offered, or a confidence below `LLM_RERANK_MIN_CONFIDENCE` all
-resolve to "carry on deterministically" — with the LLM disabled the pipeline behaves exactly as it
-does without this feature. Decisions are cached per ingredient *and* candidate set, so any change to
-retrieval invalidates the stored judgement automatically.
-
-Provenance records `llmReranked` and the model's one-line reason; `provider` and `providerId` still
-name the database row the nutrients came from.
-
-| variable | default | purpose |
-|---|---|---|
-| `LLM_RERANK_ENABLED` | `true` | requires `LLM_ENABLED` + `LLM_API_KEY` as well |
-| `LLM_RERANK_MAX_CANDIDATES` | `8` | clamped to 1-10 |
-| `LLM_RERANK_MIN_CONFIDENCE` | `0.6` | below this the answer is discarded |
-| `LLM_RERANK_TIMEOUT_MS` | `8000` | a hung rerank never holds up a recipe |
-
-### Broadening is not a fallback
-
-A lookup may accept a record that is *broader* than the query — Basmati rice resolves to the
-generic polished-rice record, because BLS does not model cultivars and nothing nutritional is lost
-by dropping the name. It will not accept one that is *narrower*: rice noodles are not pasta, sweet
-mustard is not mustard, and lupin flour is not flour.
-
-That holds even when the narrower record is the only one available. If BLS cannot answer a query
-without inventing the base ingredient, the lookup misses and the ingredient continues down the
-provider chain to Open Food Facts, USDA and finally an LLM estimate — which is reported honestly as
-a low-confidence match. A miss the fallback chain can answer is worth more than a confident wrong
-record.
-
-### Coverage and match quality are separate
-
-`calorie_estimator_status` reports **coverage**: how much of the recipe's known weight resolved to
-nutrition data at all. It says nothing about whether the records that were found are the right
-ones, and the two really do come apart — a recipe can resolve every single ingredient and still be
-built on a wrong record.
-
-Three additional keys report **match quality**, on their own axis. `calorie_estimator_status` keeps
-its existing values and meaning, so these are purely additive:
-
-| extra | meaning |
-|---|---|
-| `calorie_estimator_match_quality` | `high`, `mixed`, or `low` — confidence in the chosen records, weighted by each ingredient's share of the recipe's calories rather than by ingredient count |
-| `calorie_estimator_match_quality_reason` | present when the grade is not `high`; names the ingredient or the weighted figure responsible |
-| `calorie_estimator_low_confidence` | JSON array of matched ingredients that need a caveat — a low-confidence record, a dropped nutritional claim, or an estimated weight |
-| `calorie_estimator_provenance[].unmetAttributes` | nutritional claims the ingredient made that the chosen record does not answer |
-| `calorie_estimator_provenance[].requestedFatPercent` | the fat percentage the ingredient stated, if any |
-| `calorie_estimator_recipe_sources` | JSON map of source recipe slug → nutrition fingerprint, for ingredients drawn from your own recipes |
-
-Confidence is based on **semantic evidence**, not lexical similarity: a record that passed every
-hard gate and matched the classifier's core noun is confident even when its name carries extra
-words, because `Speisezwiebel` being longer than `Zwiebel` is a fact about German compounding, not
-doubt about identity. Conversely an LLM answering "0.9" never overrides an objective conflict.
-
-Weighting by calories is what makes the grade useful: a shaky match on a pinch of pepper should not
-move it, while a shaky match on 400 g of beans should dominate it. An ingredient contributing more
-than 20% of the recipe's energy from a low-confidence record cannot be averaged away by confident
-trimmings.
-
-## Motivation
-
-<!-- Add bit of context why the project has been created -->
-
-Mealie stores nutrition only when entered by hand. Maintaining that for every recipe is tedious, so this service fills the gap automatically from BLS 4.0, Open Food Facts, and USDA (and an optional LLM) while leaving manual entries untouched.
-
-## Contributing
-
-Contributions are welcome, whether it's:
-
-- Reporting a bug
-- Discussing the current state of the configuration
-- Submitting a fix
-- Proposing new features
+Set `LOG_LEVEL=debug` for per-ingredient resolution detail.
 
 ## Development
 
-### Requirements
-
-<!-- Delete the ones not required -->
-
-- [Node.js](https://nodejs.org/) 22+
-- [Docker](https://docs.docker.com/get-docker/)
-
-### Test
-
-<!-- Add testing instructions -->
-
-```sh
-docker compose --profile test up -d
-npm test
-```
-
-The test profile starts Mealie (SQLite), a mock Open Food Facts server, and the estimator.
-
-### Build
-
-<!-- Add building instructions -->
-
-```sh
+```bash
+npm install
+npm run dev          # watch mode
+npm test             # 870 tests
+npm run typecheck
 npm run build
 ```
+
+Tests run against the **real** bundled BLS and USDA databases — a matching change that breaks a real
+food fails the suite. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for provider order and
+gating, [`docs/CACHING.md`](docs/CACHING.md) for cache layers and TTLs.
+
+## Limitations
+
+- German is the validated language; English is best-effort (see above)
+- Open Food Facts is live data: products appear and disappear, and search results drift
+- LLM-estimated ingredients are marked `llm-nutrient` and are estimates, not measurements
+- Unknown is not zero — unresolved ingredients are withheld or flagged, never silently counted as 0
+- Nutrition is computed for whole recipes and divided by servings exactly once; per-portion accuracy
+  depends on Mealie's `recipeServings` being correct
+
+## Contributing
+
+Issues and pull requests are welcome. Conventional commit titles, and please keep the test suite
+green — including the regression tests that pin real foods to real records.
+
+## License and attribution
+
+Licensed under the **GNU General Public License v3.0 only** (`GPL-3.0-only`) — see [LICENSE](LICENSE).
+
+This project began as a fork of
+[timo-reymann/mealie-calorie-estimator](https://github.com/timo-reymann/mealie-calorie-estimator)
+and retains its licence and copyright. The nutrition engine has since been substantially rewritten
+and extended: multi-source resolution with semantic gating, bundled BLS and USDA databases, the
+provenance model, persistent caching, recipe composition, the semantic judge and user-confirmed
+overrides.
+
+Bundled data has its own terms: **BLS 4.0** (Max Rubner-Institut, CC BY 4.0) and **USDA FoodData
+Central** (public domain / CC0) — see `resources/bls/NOTICE` and `resources/usda/NOTICE`.
+Third-party dependency licences are listed in [NOTICE](NOTICE).
