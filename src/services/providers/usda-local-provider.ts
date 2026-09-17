@@ -243,7 +243,22 @@ type RankedUsda = RankedCandidate<RankableUsdaRecord> & { rerankConfidence?: num
 function retrieve(records: UsdaRecord[], queryText: string, core: string | null | undefined): UsdaRecord[] {
   const asked = [...tokenize(queryText), ...tokenize(core ?? "")]
     .filter((t) => t.length > 2 && !GENERIC_DESCRIPTOR_WORDS.has(t))
-  if (asked.length === 0) return records
+  // An empty constraint set means this provider was asked nothing it can act on — NOT that
+  // everything qualifies. Returning `records` here handed all 8,262 rows to ranking, which then
+  // scored them against a query that asked for nothing and answered confidently: "Ei" (German for
+  // egg, two characters, so both tokens fall below the length floor) resolved to "Sausage,
+  // Italian, pork, mild, cooked, pan-fried" at 322 kcal and confidence 0.8. The nonsense strings
+  // "Zz" and "Aa" likewise returned mozzarella and milk.
+  //
+  // Nothing downstream could catch it: no attribute was requested, so none can go unmet; the core
+  // gate compares against an empty core; and the sanity check tests whether numbers are possible,
+  // not whether the food is the right one. Italian sausage at 322 kcal is entirely plausible — for
+  // Italian sausage.
+  //
+  // So retrieval fails closed, exactly as it already does when constraints are present but match
+  // nothing (the `hits.length > 0 ? hits : []` below). USDA simply declines, and the chain
+  // continues to the next provider or to an honest unresolved.
+  if (asked.length === 0) return []
   // Retrieval must be AT LEAST as tolerant as the identity gate it feeds, or it decides identity
   // by spelling. Exact tokenSet membership was not: USDA files this family as "Beans, black,
   // mature seeds, raw" while production's classifier said "black bean" / core "bean", so the
