@@ -123,8 +123,10 @@ jobs:
             const passed = generate === 'success' && (!noticeOutdated || noticeAutoCommitted);
             const status = passed ? ':white_check_mark: passed' : ':x: failed';
 
-            const ghsBase = `https://ghs.timo-reymann.de/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}/artifacts`;
-            const noticeUrl = `${ghsBase}/license-notice/NOTICE_GENERATED`;
+            // GitHub's own artifact page, not the upstream maintainer's personal artifact-proxy
+            // service — a link this project neither controls nor should make its license-compliance
+            // reporting depend on. The artifact itself is unchanged; only the way to it is ours.
+            const noticeUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}#artifacts`;
 
             const sections = [
               `## License Compliance \u2014 ${status}`,
