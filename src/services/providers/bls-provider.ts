@@ -20,7 +20,7 @@ import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 import { sanityCheckNutrients } from "../sanity-check.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v23"
+const BLS_MATCH_ALGORITHM_VERSION = "v24"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every
@@ -580,6 +580,27 @@ function scoreCandidates(queryText: string, records: BlsFoodRecord[], category: 
  * first, and a candidate with *unknown* inferred state (BLS's name didn't say) is never treated as
  * a conflict either way.
  */
+/**
+ * Whether a match may be written to the persistent provider cache.
+ *
+ * The cache is read before any scoring, so anything stored here is replayed verbatim on every
+ * later request for this query. Storing a record the resolver will reject therefore does not
+ * merely waste a row — it makes the rejection permanent, and immune to any later improvement in
+ * matching. v1.0.1 cached "Obstbrand/Obstwasser" for "Wasser"; v1.0.2 fixed the selection that
+ * chose it and still replayed it from disk, because the fix was never reached.
+ *
+ * The resolver keeps the final word. This only decides what is allowed to persist.
+ */
+function cacheable(match: ProviderMatch, queryFoodName: string): boolean {
+  const check = sanityCheckNutrients(match.nutrients, queryFoodName)
+  if (check.ok) return true
+  logger.warn(
+    { provider: "bls", foodName: queryFoodName, record: match.productName, providerId: match.providerId, reason: check.reason },
+    "Refusing to cache a BLS match that is not nutritionally possible for this ingredient",
+  )
+  return false
+}
+
 function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minScore: number, queryAttrs = UNKNOWN_ATTRIBUTES, identityText = "", sanityName = ""): ScoredRecord | null {
   // Nutritional plausibility is part of SELECTION, not just a veto applied afterwards.
   //
@@ -810,6 +831,13 @@ export class BlsProvider implements NutrientProvider {
     if (cached) {
       const conflict = cachedMatchConflict(cached, ctx)
         ?? (degraded ? degradedCacheConflict(cached, data, queryTexts, query.state) : null)
+        // A cached record that cannot be true for this food is a poisoned entry, not a hit. It
+        // outranks every conflict rule above because it is the one failure that survives its own
+        // fix: the cache is consulted before any scoring, so an entry written by an older build
+        // is replayed forever and no amount of better ranking is ever reached. Re-score instead.
+        ?? (sanityCheckNutrients(cached.nutrients, query.foodName).ok
+          ? null
+          : `cached record "${cached.productName}" (${cached.providerId}) is not nutritionally possible for "${query.foodName}"`)
       if (!conflict) return cached
       // True cache miss for this context — fall through and re-score against the BLS table, so a
       // different BLS record that IS valid for this context stays reachable.
@@ -858,7 +886,10 @@ export class BlsProvider implements NutrientProvider {
           && !fatConflict(attrs.fatPercent, withKcal.nutrients.fatPer100g)
         if (stateOk && typeOk && attrOk) {
           const match = buildMatch(query, { record: withKcal, score: 100, mismatchReason: null, matchedViaEnglish: false }, true, undefined, identityText)
-          setCachedProviderMatch(this.name, queryKey, match)
+          // An exact NAME match still has to be nutritionally possible for the food asked for.
+          // This path returns before candidate selection, so it is the one remaining way an
+          // impossible record could be persisted and then replayed on every later request.
+          if (cacheable(match, query.foodName)) setCachedProviderMatch(this.name, queryKey, match)
           return match
         }
         // Exact name match but conflicting state/type (e.g. query wants "cooked", only a "raw"
@@ -923,7 +954,7 @@ export class BlsProvider implements NutrientProvider {
 
     if (chosen) {
       const match = buildMatch(query, chosen, false, reranked ?? undefined, identityText)
-      setCachedProviderMatch(this.name, queryKey, match)
+      if (cacheable(match, query.foodName)) setCachedProviderMatch(this.name, queryKey, match)
       return match
     }
 
