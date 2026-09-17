@@ -1,8 +1,23 @@
 import type { FoodState, FoodRoute, FoodType, ProviderMatch } from "../../types.js"
 import type { IdentityEvidence } from "../identity-evidence.js"
 import type { FoodAttributes } from "../../types.js"
+import type { JudgeCandidate } from "./judge/types.js"
 
 export interface ProviderQuery {
+  /**
+   * Optional read-only side channel: a provider that has already computed which candidates
+   * survived its HARD SEMANTIC GATES reports them here.
+   *
+   * This exists so the semantic judge can see the population the deterministic ranker discards on
+   * SCORE — the old RERANK_MIN_CANDIDATE_SCORE visibility problem, measured on the bundled corpus
+   * as eight of nine gate-surviving black-bean records sitting below the floor, both canned ones
+   * among them. Gates are NOT relaxed: a candidate a provider rejected outright never reaches the
+   * sink, because the question is whether a LOW SCORE should be fatal, not whether a semantic
+   * conflict should be.
+   *
+   * Absent for every ordinary lookup, and a provider that ignores it behaves exactly as before.
+   */
+  candidateSink?: (candidates: JudgeCandidate[]) => void
   /**
    * Nutritionally meaningful form/preservation/fat attributes. Participate in candidate validation
    * (formConflict/preservationConflict/fatConflict) and in cache identity, so a cached "ground

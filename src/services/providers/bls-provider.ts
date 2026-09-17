@@ -866,6 +866,30 @@ export class BlsProvider implements NutrientProvider {
       if (picked && !deterministic) deterministic = picked
     }
 
+    // Report the gate survivors to whoever asked (the semantic judge, when the chain is about to
+    // fall through to a fabricated estimate). Note WHERE this sits: after the gates, before
+    // FUZZY_MIN_SCORE and before pickBestCandidate — so a record this provider will not use on
+    // its own, purely because it scored low, is still visible as a real candidate. Nothing that
+    // failed a gate is ever in `survivors`.
+    if (query.candidateSink && survivors.size > 0) {
+      query.candidateSink([...survivors.values()]
+        .filter((c) => c.record.nutrients.kcalPer100g !== null)
+        .map((c) => ({
+          id: `bls:${c.record.blsCode}`,
+          provider: "bls",
+          providerId: c.record.blsCode,
+          name: c.record.nameDe,
+          dataType: null,
+          brand: null,
+          category: null,
+          state: c.record.inferredState,
+          form: c.record.attributes.form,
+          preservation: c.record.attributes.preservation,
+          nutrients: c.record.nutrients,
+          score: c.score,
+        })))
+    }
+
     // The deterministic answer stands unless this is genuinely an ambiguous case — see
     // shouldRerank(). When it is, the LLM judges between records RETRIEVAL already found and the
     // GATES already approved; it cannot reach anything else, and NONE leaves this line's outcome

@@ -64,19 +64,31 @@ export const config = {
     rerankTimeoutMs: parseInt(process.env.LLM_RERANK_TIMEOUT_MS || "8000", 10),
 
     /**
-     * The semantic candidate judge — OFF BY DEFAULT, and deliberately a separate switch from
-     * rerankEnabled. While this is false, askJudge() returns before touching the network, so the
-     * judge cannot spend a token or influence a resolution; eligibility is still computed and
-     * recorded in provenance (judgeTrigger), which is how the trigger can be validated against
-     * real recipes before any behaviour depends on it.
+     * The semantic candidate judge, deliberately a separate switch from rerankEnabled.
+     *
+     * ON by default, and safe to be: it is asked ONLY when the deterministic chain has already
+     * finished and its answer is a fabricated estimate or nothing at all, while real records
+     * survived every hard gate. An accepted database or recipe record is returned before a pool is
+     * even built, and AMBIGUOUS/NONE/invalid/timeout all leave the existing outcome untouched — so
+     * the worst case is the behaviour without it. Set LLM_JUDGE_ENABLED=false to return to the
+     * purely deterministic chain; askJudge() then returns before touching the network, and
+     * eligibility is still recorded in provenance as judgeTrigger.
      */
-    judgeEnabled: (process.env.LLM_JUDGE_ENABLED || "false").toLowerCase() === "true",
+    judgeEnabled: (process.env.LLM_JUDGE_ENABLED || "true").toLowerCase() === "true",
     /** Defaults to the main model; separable so the judge can be evaluated independently. */
     judgeModel: process.env.LLM_JUDGE_MODEL || process.env.LLM_MODEL || "mistral-small-latest",
     /** Small on purpose: retrieval stays local and the prompt stays cheap. */
     judgeMaxCandidates: Math.min(20, Math.max(1, parseInt(process.env.LLM_JUDGE_MAX_CANDIDATES || "12", 10))),
     /** A hung judge must never hold up a recipe — on timeout the deterministic result stands. */
     judgeTimeoutMs: parseInt(process.env.LLM_JUDGE_TIMEOUT_MS || "8000", 10),
+    /**
+     * Below this a SELECTION is discarded and the deterministic outcome stands, on the same terms
+     * and the same default as the reranker's. A bare "Öl" retrieves 37 gate-surviving records —
+     * three specific oils, a beer, assorted others — and a model picking among them with low
+     * stated confidence is guessing, not judging. Ambiguity is supposed to come back as AMBIGUOUS;
+     * this catches the case where it comes back as a half-hearted pick instead.
+     */
+    judgeMinConfidence: Math.min(1, Math.max(0, parseFloat(process.env.LLM_JUDGE_MIN_CONFIDENCE || "0.6"))),
   },
 
   // USDA FoodData Central generic foods, bundled at resources/usda/usda-generic.sqlite (built by

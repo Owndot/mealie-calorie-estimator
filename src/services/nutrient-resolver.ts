@@ -1,4 +1,10 @@
 import { getProviderChain } from "./providers/registry.js"
+import { config } from "../config.js"
+import { UNKNOWN_ATTRIBUTES } from "../types.js"
+import { unmetModifierFamilies } from "./providers/food-semantics.js"
+import { orderCandidates, poolFingerprint } from "./providers/judge/candidate-pool.js"
+import { askJudge, JUDGE_PROMPT_VERSION } from "./providers/judge/judge.js"
+import type { JudgeCandidate, JudgeVerdict } from "./providers/judge/types.js"
 import { sanityCheckNutrients } from "./sanity-check.js"
 import { statedModifierFamilies } from "./providers/food-semantics.js"
 import { logger } from "../utils/logger.js"
@@ -8,6 +14,16 @@ import type { FoodRoute, FallbackStatus, ProviderMatch } from "../types.js"
 export interface ResolvedNutrients {
   match: ProviderMatch
   fallbackStatus: FallbackStatus
+  /** Present only when the semantic judge was actually asked about this ingredient. */
+  judge?: {
+    trigger: string
+    verdict: JudgeVerdict | "invalid"
+    reason: string
+    candidates: number
+    poolFingerprint: string
+    model: string
+    promptVersion: string
+  }
 }
 
 const KNOWN_FALLBACK_STATUSES: FallbackStatus[] = ["mealie-recipe", "bls", "usda-local", "off", "llm-nutrient"]
@@ -77,7 +93,7 @@ function unansweredBy(match: ProviderMatch, unmet: string[]): string[] {
   return unmet.filter((family) => !stated.includes(family))
 }
 
-export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
+async function resolveDeterministic(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
   const chain = getProviderChain(route)
 
   // Highest-trust match that shares the identity but drops a stated nutritional claim. Kept in
@@ -149,4 +165,137 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
     )
   }
   return shortfall
+}
+
+
+/** Providers whose answer is a real record rather than a generated value. */
+const RECORD_PROVIDERS = new Set<FallbackStatus>(["mealie-recipe", "bls", "usda-local", "off"])
+
+/**
+ * The deterministic chain, with ONE strictly additive exception.
+ *
+ * The judge is asked exactly when there is nothing to protect: the whole chain has run and its
+ * answer is a fabricated estimate or nothing at all, while real records DID survive every hard
+ * semantic gate and were discarded only on score. That is the population the old
+ * RERANK_MIN_CANDIDATE_SCORE floor hid — measured on the bundled corpus, eight of nine
+ * gate-surviving black-bean records sat below it, both canned ones among them.
+ *
+ * Every other outcome leaves the chain exactly as it was:
+ *
+ *   an accepted record from any provider   -> returned untouched, no judge call, no pool built
+ *   AMBIGUOUS / NONE / invalid / timeout   -> the existing llm-nutrient or unresolved result stands
+ *   an id that is not in the pool          -> refused upstream in parseJudgeReply, treated as invalid
+ *
+ * So this function is MONOTONE: it can turn a fabricated number into a real record, and it cannot
+ * make any currently-accepted result worse. Replacing an accepted record, answering an unmet
+ * attribute, and the OFF proxy are deliberately NOT here.
+ */
+export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
+  if (!config.llm.judgeEnabled) return resolveDeterministic(query, route)
+
+  // The pool is collected DURING the chain, from providers that were going to compute it anyway.
+  // Nothing extra is retrieved and nothing is re-ranked.
+  const pool: JudgeCandidate[] = []
+  const deterministic = await resolveDeterministic(
+    { ...query, candidateSink: (candidates) => { pool.push(...candidates) } },
+    route,
+  )
+
+  // FAST PATH: a real record answered. It is kept exactly as it is, and the judge is never asked.
+  if (deterministic && RECORD_PROVIDERS.has(deterministic.fallbackStatus)) return deterministic
+
+  const trigger = pool.length > 0 ? "gate-suppressed-pool" : "no-database-record"
+  if (pool.length === 0) return deterministic
+
+  const ordered = orderCandidates(pool, config.llm.judgeMaxCandidates)
+  const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
+  const outcome = await askJudge({
+    structuredName: query.structuredName ?? query.foodName,
+    canonicalEnglish: query.foodName,
+    canonicalGerman: query.canonicalGerman ?? null,
+    coreFoodEnglish: query.coreFoodEnglish ?? null,
+    state: query.state,
+    form: attrs.form,
+    preservation: attrs.preservation,
+    fatPercent: attrs.fatPercent,
+    category: query.category ?? null,
+  }, ordered)
+
+  const provenance = {
+    trigger,
+    candidates: ordered.length,
+    poolFingerprint: poolFingerprint(ordered).slice(0, 16),
+    model: config.llm.judgeModel,
+    promptVersion: JUDGE_PROMPT_VERSION,
+  }
+
+  const decision = outcome.decision
+  if (!decision || decision.verdict !== "selected" || !decision.candidateId) {
+    // AMBIGUOUS, NONE, a discarded reply, a timeout or an error all land here, and all mean the
+    // same thing: nothing changes. "No record" is a correct and expected answer.
+    logger.info(
+      { foodName: query.foodName, trigger, verdict: decision?.verdict ?? "invalid", reason: outcome.invalidReason ?? decision?.reason },
+      "Semantic judge did not select a record — the deterministic outcome stands",
+    )
+    return deterministic === null ? null : {
+      ...deterministic,
+      judge: { ...provenance, verdict: decision?.verdict ?? "invalid", reason: decision?.reason ?? outcome.invalidReason ?? "" },
+    }
+  }
+
+  const picked = ordered.find((c) => c.id === decision.candidateId)
+  if (!picked) return deterministic
+
+  if (decision.confidence < config.llm.judgeMinConfidence) {
+    logger.info(
+      { foodName: query.foodName, record: picked.name, confidence: decision.confidence, floor: config.llm.judgeMinConfidence },
+      "Judge selection below the confidence floor — keeping the deterministic outcome",
+    )
+    return deterministic === null ? null : {
+      ...deterministic,
+      judge: { ...provenance, verdict: "selected", reason: `below confidence floor: ${decision.reason}` },
+    }
+  }
+
+  // The nutrients are the RECORD's, copied verbatim. The model supplied an id and nothing else.
+  const check = sanityCheckNutrients(picked.nutrients, query.foodName)
+  if (!check.ok) {
+    logger.info({ foodName: query.foodName, record: picked.name, reason: check.reason }, "Judge-selected record failed the sanity check — keeping the deterministic outcome")
+    return deterministic
+  }
+
+  const match: ProviderMatch = {
+    nutrients: picked.nutrients,
+    canonicalName: query.foodName,
+    brand: query.brand,
+    state: query.state,
+    provider: picked.provider,
+    providerId: picked.providerId,
+    productName: picked.name,
+    // Capped like the reranker's: a model-assisted SELECTION never earns a deterministic match's
+    // confidence, however sure the model says it is.
+    confidence: Math.min(0.75, decision.confidence),
+    dataType: picked.dataType,
+    matchReason: "judge-selected",
+    ...(unmetModifierFamilies(query.structuredName ?? query.foodName, picked.name).length > 0
+      ? { unmetAttributes: unmetModifierFamilies(query.structuredName ?? query.foodName, picked.name) }
+      : {}),
+  }
+
+  logger.info(
+    {
+      foodName: query.foodName, trigger, record: picked.name, provider: picked.provider,
+      providerId: picked.providerId, kcal: picked.nutrients.kcalPer100g,
+      insteadOf: deterministic?.fallbackStatus ?? "unresolved",
+      wasKcal: deterministic?.match.nutrients.kcalPer100g ?? null,
+      candidates: ordered.length, cached: outcome.cached ?? false,
+    },
+    "Semantic judge selected a real record in place of a fabricated estimate",
+  )
+
+  return {
+    match,
+    fallbackStatus: toFallbackStatus(picked.provider),
+    judge: { ...provenance, verdict: "selected", reason: decision.reason },
+  }
 }
