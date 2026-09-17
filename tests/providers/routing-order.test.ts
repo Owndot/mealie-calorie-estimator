@@ -129,10 +129,19 @@ describe("generic route — exact provider sequencing", () => {
     const result = await resolveNutrients(query(), "generic")
 
     expect(result?.fallbackStatus).toBe("llm-nutrient")
-    expect(blsLookup).toHaveBeenCalledTimes(1)
+    // The chain itself still runs each provider exactly once, in order. The two LOCAL databases
+    // are then consulted a SECOND time, in the semantic judge's diagnostic pool pass: a provider's
+    // negative cache short-circuits before anything is scored, so the gate survivors an
+    // already-missed ingredient has are otherwise never computed. That pass consults no cache,
+    // reranks nothing and issues no request.
+    expect(blsLookup).toHaveBeenCalledTimes(2)
+    expect(usdaLookup).toHaveBeenCalledTimes(2)
+    // OFF is NOT re-queried — it is a rate-limited network provider, and the pool pass is
+    // deliberately local-only.
     expect(offLookup).toHaveBeenCalledTimes(1)
-    expect(usdaLookup).toHaveBeenCalledTimes(1)
     expect(llmLookup).toHaveBeenCalledTimes(1)
+    expect(blsLookup.mock.calls[1][0]).toMatchObject({ poolOnly: true })
+    expect(usdaLookup.mock.calls[1][0]).toMatchObject({ poolOnly: true })
   })
 
   it("BLS, OFF, USDA all miss and the LLM is disabled -> unresolved, nothing is fabricated", async () => {
@@ -191,7 +200,10 @@ describe("branded route — exact provider sequencing", () => {
     const result = await resolveNutrients(query({ brand: "SomeBrand" }), "branded")
 
     expect(result?.fallbackStatus).toBe("llm-nutrient")
-    expect(blsLookup).toHaveBeenCalledTimes(1)
+    // Same contract on the branded route: the chain runs each provider once, then the local
+    // databases are re-consulted for the judge's candidate pool. OFF is not.
+    expect(blsLookup).toHaveBeenCalledTimes(2)
+    expect(blsLookup.mock.calls[1][0]).toMatchObject({ poolOnly: true })
     expect(offLookup).toHaveBeenCalledTimes(1)
     expect(llmLookup).toHaveBeenCalledTimes(1)
   })
