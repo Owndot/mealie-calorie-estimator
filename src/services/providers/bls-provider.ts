@@ -3,7 +3,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 import initSqlJs from "sql.js"
 import { config } from "../../config.js"
-import { rerankCandidates, rerankTrigger, attributeFit, identityKey, RERANK_MIN_CANDIDATE_SCORE, type TriggerCandidate } from "./candidate-rerank.js"
+import { rerankCandidates, rerankTrigger, attributeFit, identityKey, rerankPreservesIdentity, RERANK_MIN_CANDIDATE_SCORE, type TriggerCandidate } from "./candidate-rerank.js"
 import { logger } from "../../utils/logger.js"
 import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markProviderMiss, buildQueryKey, normalizeKey } from "../../utils/cache.js"
 import type { NutrientSet, ProviderMatch, FoodState, FoodType, FoodAttributes } from "../../types.js"
@@ -1040,16 +1040,18 @@ export class BlsProvider implements NutrientProvider {
       .slice(0, config.llm.rerankMaxCandidates)
     if (offered.length === 0) return null
 
+    const rerankQuery = {
+      provider: this.name,
+      structuredName: query.structuredName ?? query.foodName,
+      canonicalGerman: query.canonicalGerman ?? null,
+      canonicalEnglish: query.foodName,
+      coreFood: query.coreFoodGerman ?? null,
+      state: query.state,
+      attributes: attrs,
+    }
+
     const decision = await rerankCandidates(
-      {
-        provider: this.name,
-        structuredName: query.structuredName ?? query.foodName,
-        canonicalGerman: query.canonicalGerman ?? null,
-        canonicalEnglish: query.foodName,
-        coreFood: query.coreFoodGerman ?? null,
-        state: query.state,
-        attributes: attrs,
-      },
+      rerankQuery,
       offered.map((c) => ({
         providerId: c.record.blsCode,
         productName: c.record.nameDe,
@@ -1081,6 +1083,15 @@ export class BlsProvider implements NutrientProvider {
       logger.info(
         { foodName: query.foodName, kept: deterministic.record.nameDe, proposed: selected.record.nameDe },
         "BLS: rerank proposed a same-identity variant, keeping the deterministic winner",
+      )
+      return null
+    }
+
+    // ...and the same check in the other direction: a DIFFERENT identity is not self-justifying.
+    if (!rerankPreservesIdentity(rerankQuery, deterministic?.record ?? null, selected.record)) {
+      logger.info(
+        { foodName: query.foodName, kept: deterministic?.record.nameDe, proposed: selected.record.nameDe, reason: decision.reason },
+        "BLS: rerank would not preserve food identity, keeping the deterministic winner",
       )
       return null
     }
