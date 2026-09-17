@@ -273,3 +273,67 @@ describe("the store itself", () => {
     expect(r!.match.matchReason).not.toBe("user-confirmed-override")
   })
 })
+
+// ---------------------------------------------------------------------------------------------
+
+describe("the management API accepts the request shapes real clients send", () => {
+  it("treats an empty application/json body as {}", async () => {
+    // A DELETE carrying Content-Type: application/json and no body is a real client shape — a
+    // wrapper that sets the header once for every request has nothing to put in a DELETE body.
+    // Fastify's default parser rejects it as an empty JSON document; the route installs its own.
+    const { default: Fastify } = await import("fastify")
+    const app = Fastify()
+    const { overrideRoutes } = await import("../src/routes/overrides.js")
+
+    const previous = config.overrides.adminToken
+    config.overrides.adminToken = "test-token"
+    try {
+      await app.register(overrideRoutes)
+      const saved = setOverride({
+        identity: identity("lean ground beef"), exampleName: "Rinderhackfleisch mager",
+        provider: "usda-local", providerId: "171790", recordName: "x",
+      })
+
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/overrides/${saved.id}`,
+        headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+        payload: "",
+      })
+      expect(res.statusCode).toBe(200)
+      expect(JSON.parse(res.body).deleted).toBe(saved.id)
+      expect(getOverrideById(saved.id)).toBeUndefined()
+
+      // …and a malformed body is still a 400, not silently ignored.
+      const bad = await app.inject({
+        method: "PUT", url: "/overrides",
+        headers: { authorization: "Bearer test-token", "content-type": "application/json" },
+        payload: "{not json",
+      })
+      expect(bad.statusCode).toBe(400)
+    } finally {
+      config.overrides.adminToken = previous
+      await app.close()
+    }
+  })
+
+  it("refuses every request without a valid bearer token", async () => {
+    const { default: Fastify } = await import("fastify")
+    const app = Fastify()
+    const { overrideRoutes } = await import("../src/routes/overrides.js")
+    const previous = config.overrides.adminToken
+    config.overrides.adminToken = "test-token"
+    try {
+      await app.register(overrideRoutes)
+      for (const headers of [{}, { authorization: "Bearer wrong" }, { authorization: "Basic test-token" }]) {
+        const res = await app.inject({ method: "GET", url: "/overrides", headers })
+        expect(res.statusCode).toBe(401)
+      }
+      const ok = await app.inject({ method: "GET", url: "/overrides", headers: { authorization: "Bearer test-token" } })
+      expect(ok.statusCode).toBe(200)
+    } finally {
+      config.overrides.adminToken = previous
+      await app.close()
+    }
+  })
+})
