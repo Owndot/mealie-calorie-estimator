@@ -161,7 +161,24 @@ export async function initCache(): Promise<void> {
     updated_at INTEGER NOT NULL
   )`)
 
+  // One row per INGREDIENT classification, not per recipe batch, so two recipes sharing an
+  // ingredient share its interpretation. Its own table and its own key version, deliberately
+  // uncoupled from the BLS/USDA/OFF nutrition caches: what a food IS and what a database says
+  // about it are different questions with different invalidation reasons.
+  //
+  // This exists because classification was measurably unstable. Ten consecutive estimates of one
+  // unchanged recipe classified "300 g Nudeln" as cooked eight times and raw twice, moving the
+  // recipe between 2004 and 2604 kcal. Sampling variance is now removed at the source
+  // (temperature 0) and refused downstream (reconcileState); this makes the interpretation stick,
+  // so a recipe re-estimated tomorrow reads its ingredients the same way it did today.
+  db.run(`CREATE TABLE IF NOT EXISTS llm_classification_cache (
+    lookup_key TEXT PRIMARY KEY,
+    classification TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
   const now = Date.now()
+  db.run("DELETE FROM llm_classification_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
   db.run("DELETE FROM llm_judge_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
   db.run("DELETE FROM provider_match_cache WHERE updated_at < ?", [now - config.cache.matchTtlMs])
   db.run("DELETE FROM provider_miss_cache WHERE updated_at < ?", [now - config.cache.missTtlMs])
@@ -456,6 +473,49 @@ export function setCachedRerank(lookupKey: string, decision: CachedRerank): void
   scheduleSave()
 }
 
+/**
+ * A stored ingredient classification, as opaque JSON — cache.ts stays a leaf and does not need to
+ * know the classification's shape. The caller owns the key (see llm-normalizer.ts), which is what
+ * makes a prompt or model change invalidate these rows safely instead of silently reusing an
+ * interpretation the current classifier would not produce.
+ */
+export function getCachedClassification(lookupKey: string): unknown | undefined {
+  // Classification sits on the critical path for every recipe, so a cache that is not ready must
+  // read as a miss rather than take estimation down with it.
+  if (!isInitialized) return undefined
+  const stmt = db.prepare("SELECT classification, updated_at FROM llm_classification_cache WHERE lookup_key = ?")
+  try {
+    stmt.bind([lookupKey])
+    if (!stmt.step()) return undefined
+    const row = stmt.getAsObject() as Record<string, unknown>
+    if (isExpired(Number(row.updated_at), config.cache.llmTtlMs)) {
+      db.run("DELETE FROM llm_classification_cache WHERE lookup_key = ?", [lookupKey])
+      scheduleSave()
+      return undefined
+    }
+    try {
+      return JSON.parse(String(row.classification))
+    } catch {
+      // A row we cannot parse is a row we cannot trust: drop it and re-classify.
+      db.run("DELETE FROM llm_classification_cache WHERE lookup_key = ?", [lookupKey])
+      scheduleSave()
+      return undefined
+    }
+  } finally {
+    stmt.free()
+  }
+}
+
+export function setCachedClassification(lookupKey: string, classification: unknown): void {
+  if (!isInitialized) return
+  db.run(
+    `INSERT INTO llm_classification_cache (lookup_key, classification, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(lookup_key) DO UPDATE SET classification = excluded.classification, updated_at = excluded.updated_at`,
+    [lookupKey, JSON.stringify(classification), Date.now()],
+  )
+  scheduleSave()
+}
+
 /** One stored judge verdict. Mirrors JudgeDecision without importing it, so cache.ts stays a leaf. */
 export interface CachedJudgeDecision {
   verdict: "selected" | "ambiguous" | "none"
@@ -516,6 +576,7 @@ export function clearLlmCache(): void {
   db.run("DELETE FROM llm_estimate_cache")
   db.run("DELETE FROM llm_rerank_cache")
   db.run("DELETE FROM llm_judge_cache")
+  db.run("DELETE FROM llm_classification_cache")
   db.run("DELETE FROM llm_nutrient_cache")
   scheduleSave()
 }

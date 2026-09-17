@@ -1,4 +1,4 @@
-import type { FoodAttributes, FoodForm, FoodPreservation } from "../../types.js"
+import type { FoodAttributes, FoodForm, FoodPreservation, FoodState } from "../../types.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
 /**
@@ -458,6 +458,72 @@ export function derivedProductConflict(queryText: string, _coreText: string | nu
   if (offered.size === 0) return true
   // Every class the query named must be answerable by something the candidate names.
   return ![...asked].some((a) => [...offered].some((o) => classesCompatible(a, o)))
+}
+
+/**
+ * PREPARATION words the ingredient text actually states, as separate tokens (German adjective
+ * endings included). Exact-token matching only — deliberately NOT the compound-head rule the
+ * marker tables use, because a compound head would read "Bratwurst" as fried and "Backpulver" as
+ * baked. A preparation is claimed by a word, not by a syllable.
+ */
+const PREPARATION_MARKERS: [FoodState, string[]][] = [
+  ["cooked", [
+    "gekocht", "gegart", "vorgekocht", "vorgegart", "gebraten", "angebraten", "gebacken",
+    "gegrillt", "gedaempft", "gedunstet", "geduenstet", "geschmort", "blanchiert", "pochiert",
+    "geroestet", "frittiert",
+    "cooked", "boiled", "precooked", "prepared", "baked", "fried", "roasted", "grilled",
+    "steamed", "braised", "poached", "blanched", "sauteed",
+  ]],
+  ["raw", ["roh", "raw", "uncooked"]],
+  ["dried", ["getrocknet", "gedoerrt", "gedorrt", "dried", "dehydrated"]],
+]
+
+/**
+ * The preparation state the TEXT states, or "unknown" when it states none.
+ *
+ * This is the evidence half of the classification-stability rule. An unqualified "300 g Nudeln"
+ * states no preparation at all, and the quantity therefore refers to the state the ingredient was
+ * MEASURED in — the state it is bought and enters the recipe in — never the state a later
+ * instruction turns it into. Measured in production: ten consecutive estimates of one unchanged
+ * recipe returned "cooked" eight times and "raw" twice for that exact ingredient, moving the
+ * recipe between 2004 and 2604 kcal, because nothing downstream checked the claim against the
+ * words actually present.
+ */
+export function statedPreparation(text: string): FoodState {
+  const tokens = semanticTokens(text)
+  for (const [state, markers] of PREPARATION_MARKERS) {
+    const hit = tokens.some((t) => markers.some((m) => ADJECTIVE_ENDINGS.some((e) => t === m + e)))
+    if (hit) return state
+  }
+  return "unknown"
+}
+
+/**
+ * States that are a TRANSFORMATION of the ingredient rather than the state it is bought in.
+ * Claiming one without textual support invents a fact — and invents it inconsistently, which is
+ * what made the same recipe oscillate by 600 kcal.
+ */
+const TRANSFORMED_STATES: ReadonlySet<FoodState> = new Set<FoodState>(["cooked", "dried"])
+
+/**
+ * Reconciles a classifier's `state` claim with what the ingredient text actually supports.
+ *
+ * Priority, exactly as specified:
+ *   1. an explicit preparation in the text wins outright — "gekochter Reis" is cooked, "Bohnen
+ *      aus der Dose" keeps its canned preservation, "getrocknete Tomaten" are dried;
+ *   2. otherwise an untransformed claim ("raw") passes through, because the normal input state of
+ *      an unqualified ingredient is the one it is purchased and measured in;
+ *   3. a TRANSFORMED claim with no textual support is refused and degraded to "unknown", which is
+ *      permissive downstream and reaches the dry/raw record for exactly the foods this matters
+ *      for (pasta, rice, pulses) without needing to know anything about them.
+ *
+ * No food is named anywhere in this rule: it reads the ingredient's own words and the shape of
+ * the claim, so it generalises to whatever the next unqualified ingredient happens to be.
+ */
+export function reconcileState(claimed: FoodState, text: string): FoodState {
+  const stated = statedPreparation(text)
+  if (stated !== "unknown") return stated
+  return TRANSFORMED_STATES.has(claimed) ? "unknown" : claimed
 }
 
 /** Below this a prefix is too short to be reliable evidence of a source food by containment. */

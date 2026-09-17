@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto"
 import { config } from "../config.js"
+import { getCachedClassification, setCachedClassification, normalizeKey as normalizeIdentityText } from "../utils/cache.js"
 import { logger } from "../utils/logger.js"
 import { callLlm, type CallOutcome } from "./llm-client.js"
 import type { FoodState, FoodType, FoodForm, FoodPreservation, IngredientClassification } from "../types.js"
-import { inferAttributesFromName } from "./providers/food-semantics.js"
+import { inferAttributesFromName, reconcileState } from "./providers/food-semantics.js"
 
 export interface NormalizerInput {
   index: number
@@ -320,7 +322,7 @@ Return ONLY a JSON array, one object per ingredient, in this exact shape, no exp
  * calls remain allowed elsewhere only for gram estimation of unresolved units and the final
  * per-ingredient nutrient fallback — never for this classification step.
  */
-export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<IngredientClassification[]> {
+async function classifyWithLlm(inputs: NormalizerInput[]): Promise<IngredientClassification[]> {
   if (inputs.length === 0) return []
 
   if (!config.llm.enabled || !config.llm.apiKey) {
@@ -330,7 +332,11 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
   const prompt = buildPrompt(inputs)
 
   const attemptOnce = async (p: string, attempt: number): Promise<{ items: RawItem[]; failures: ItemFailure[] }> => {
-    const call = await callLlm(p, { purpose: "batch-normalization", attempt })
+    // temperature 0: this is a classification, not a generation, and sampling variance here is
+    // not creativity but a different answer to the same question. Measured before this change:
+    // ten consecutive estimates of one unchanged recipe classified "300 g Nudeln" as cooked eight
+    // times and raw twice, a 600 kcal swing on the whole recipe.
+    const call = await callLlm(p, { purpose: "batch-normalization", attempt, temperature: 0 })
     if (!call.ok) return { items: [], failures: [] } // already logged with its specific phase
 
     const outcome = parseAndValidate(call.content, inputs.length)
@@ -419,7 +425,11 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
       canonicalGerman: (item.canonicalGerman as string).trim() || input.foodName.trim(),
       canonicalEnglish: (item.canonicalEnglish as string).trim() || input.foodName.trim(),
       brand,
-      state: item.state as FoodState,
+      // The model's state claim is checked against the words the ingredient actually contains,
+      // never taken on trust — see reconcileState(). An unqualified ingredient's quantity refers
+      // to the state it was MEASURED in, and a later instruction that cooks it cannot change that
+      // retroactively (the classifier is never shown the instructions in the first place).
+      state: reconcileState(item.state as FoodState, `${input.foodName} ${(item.canonicalGerman as string) ?? ""}`),
       attributes: resolveAttributes(item as unknown as Record<string, unknown>,
         input.foodName, (item.canonicalGerman as string) ?? ""),
       category: (item.category as string | null) ?? null,
@@ -430,4 +440,108 @@ export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<I
       llmClassified: true,
     }
   })
+}
+
+/**
+ * Bumped whenever buildPrompt() or the assembly below changes what a classification MEANS. It is
+ * part of the cache key, so a change here retires stored interpretations instead of silently
+ * serving ones the current classifier would no longer produce.
+ */
+const CLASSIFICATION_PROMPT_VERSION = "1"
+
+/** Bumped for a change in the stored VALUE's shape, independently of the prompt. */
+const CLASSIFICATION_CACHE_VERSION = "c1"
+
+/**
+ * The key is exactly the semantic input the classifier is given, and nothing else.
+ *
+ * buildPrompt() renders only `name` and `unit` — the amount never reaches the model and the recipe
+ * instructions are never sent at all, so neither can change the interpretation and neither is
+ * keyed. (That is also why a later "Nudeln kochen" step cannot retroactively cook an ingredient:
+ * the classifier has never seen it.) The prompt version and the model complete the key, so a
+ * change to either is a different question rather than a stale answer.
+ */
+export function classificationCacheKey(input: NormalizerInput): string {
+  return createHash("sha256").update([
+    CLASSIFICATION_CACHE_VERSION,
+    CLASSIFICATION_PROMPT_VERSION,
+    config.llm.model,
+    normalizeIdentityText(input.foodName),
+    (input.unitName ?? "").trim().toLowerCase(),
+  ].join("|")).digest("hex")
+}
+
+/** A stored row must still look like a classification before it is trusted. */
+function isStoredClassification(v: unknown): v is Omit<IngredientClassification, "index"> {
+  if (typeof v !== "object" || v === null) return false
+  const o = v as Record<string, unknown>
+  return typeof o.canonicalGerman === "string"
+    && typeof o.canonicalEnglish === "string"
+    && typeof o.state === "string"
+    && typeof o.foodType === "string"
+    && typeof o.attributes === "object" && o.attributes !== null
+}
+
+/**
+ * ONE whole-recipe classification request, now served from a persistent per-ingredient cache
+ * first.
+ *
+ * Classification was measurably unstable: ten consecutive estimates of one unchanged recipe
+ * classified "300 g Nudeln" as cooked eight times and raw twice, moving the recipe between 2004
+ * and 2604 kcal. Three independent changes address that, and this is the third — temperature 0
+ * removes the sampling variance at the source, reconcileState() refuses an unevidenced
+ * transformation downstream, and caching makes the surviving interpretation STICK, so a recipe
+ * re-estimated tomorrow reads its ingredients the way it did today.
+ *
+ * Only cache MISSES are sent to the model, renumbered contiguously so the batch's own index
+ * validation stays meaningful, then mapped back. A fully-cached recipe issues no request at all.
+ * Deterministic fallbacks are never stored: a degraded result is not an interpretation.
+ */
+export async function normalizeIngredients(inputs: NormalizerInput[]): Promise<IngredientClassification[]> {
+  if (inputs.length === 0) return []
+  if (!config.llm.enabled || !config.llm.apiKey) return inputs.map(deterministicClassification)
+
+  const cached = new Map<number, IngredientClassification>()
+  for (const input of inputs) {
+    const stored = getCachedClassification(classificationCacheKey(input))
+    if (isStoredClassification(stored)) {
+      cached.set(input.index, { ...stored, index: input.index, fromCache: true })
+    }
+  }
+
+  const misses = inputs.filter((i) => !cached.has(i.index))
+  if (misses.length === 0) {
+    logger.info(
+      { count: inputs.length, cacheHits: inputs.length, cacheMisses: 0, llmRequests: 0 },
+      "Ingredient classification served entirely from cache — no classifier request issued",
+    )
+    return inputs.map((i) => cached.get(i.index)!)
+  }
+
+  // Contiguous indices for the sub-batch: parseAndValidate() rejects an index outside
+  // 0..length-1, so sending original indices with gaps would invalidate every item.
+  const renumbered = misses.map((m, position) => ({ ...m, index: position }))
+  const fresh = await classifyWithLlm(renumbered)
+
+  logger.info(
+    { count: inputs.length, cacheHits: cached.size, cacheMisses: misses.length, llmRequests: 1 },
+    "Ingredient classification: cache consulted before the classifier",
+  )
+
+  const out: IngredientClassification[] = []
+  for (const input of inputs) {
+    const hit = cached.get(input.index)
+    if (hit) { out.push(hit); continue }
+
+    const position = misses.findIndex((m) => m.index === input.index)
+    const classified = { ...fresh[position], index: input.index }
+    // A deterministic fallback is what we produce when classification FAILED; storing it would
+    // make one bad minute permanent.
+    if (classified.llmClassified) {
+      const { index: _index, fromCache: _fromCache, ...storable } = classified
+      setCachedClassification(classificationCacheKey(input), storable)
+    }
+    out.push(classified)
+  }
+  return out
 }
