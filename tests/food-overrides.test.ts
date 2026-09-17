@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest"
 import { config } from "../src/config.js"
-import { initCache, __clearProviderCachesForTests, clearLlmCache } from "../src/utils/cache.js"
+import { initCache, __clearProviderCachesForTests, __clearOffProductCacheForTests, clearLlmCache } from "../src/utils/cache.js"
 import {
   __resetOverridesForTests, buildOverrideKey, overrideId, setOverride, deleteOverride,
   listOverrides, getOverrideById, findOverride, OVERRIDE_KEY_VERSION, type OverrideIdentity,
 } from "../src/services/food-overrides.js"
 import { resolveNutrients } from "../src/services/nutrient-resolver.js"
+import { loadOverrideTarget } from "../src/services/providers/override-provider.js"
 import { buildResolverQuery } from "../src/services/resolver-query.js"
 import { normalizeIngredients } from "../src/services/llm-normalizer.js"
 import { UNKNOWN_ATTRIBUTES, type FoodAttributes } from "../src/types.js"
@@ -439,5 +440,139 @@ describe("preview reproduces production, and can show the automatic result under
     await productionResolve("Tomate")
     await productionResolve("Tomate", true)
     expect(listOverrides()).toHaveLength(before)
+  })
+})
+
+// ---------------------------------------------------------------------------------------------
+
+describe("an OFF-backed override survives a transient outage", () => {
+  const BARCODE = "4313249214975"
+  const PRODUCT = {
+    status: 1,
+    product: {
+      code: BARCODE, product_name: "Mageres Rinderhackfleisch zum Braten", brands: "Edeka",
+      categories_tags: ["en:meats"],
+      nutriments: { "energy-kcal_100g": 163, fat_100g: 8.9, proteins_100g: 20.6, carbohydrates_100g: 0.1 },
+    },
+  }
+
+  let barcodeFetches = 0
+
+  /** `off` decides what the product endpoint does; everything else behaves normally. */
+  function stubOff(off: () => Response | Promise<Response>) {
+    barcodeFetches = 0
+    vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
+      const u = String(url)
+      if (u.includes("/api/v2/product/")) { barcodeFetches++; return off() }
+      return new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } })
+    }))
+  }
+
+  const ok = () => new Response(JSON.stringify(PRODUCT), { status: 200, headers: { "content-type": "application/json" } })
+
+  beforeEach(() => {
+    __clearOffProductCacheForTests()
+    setOverride({
+      identity: identity("lean ground beef"), exampleName: "Rinderhackfleisch mager",
+      provider: "off", providerId: BARCODE, recordName: "Mageres Rinderhackfleisch zum Braten",
+    })
+  })
+
+  it("1 & 2. loads the record once, then serves it from cache within the TTL", async () => {
+    stubOff(ok)
+    for (let i = 0; i < 4; i++) {
+      __clearProviderCachesForTests()
+      const r = await resolve(LEAN_BEEF)
+      expect(r!.match.providerId).toBe(BARCODE)
+      expect(r!.match.nutrients.kcalPer100g).toBe(163)
+    }
+    // Cached by BARCODE, so repeated resolutions of the same override cost one request.
+    expect(barcodeFetches).toBe(1)
+  })
+
+  it("3 & 4. a transient failure with a recent cached record still resolves the override", async () => {
+    stubOff(ok)
+    await resolve(LEAN_BEEF)                       // warm the cache
+    expect(barcodeFetches).toBe(1)
+
+    // Age the cached row past the fresh TTL, so the next resolution must re-fetch…
+    const previousTtl = config.openFoodFacts.productTtlMs
+    config.openFoodFacts.productTtlMs = 0
+    try {
+      // …and let that re-fetch fail the way a real outage does.
+      stubOff(() => new Response("upstream unavailable", { status: 503 }))
+      __clearProviderCachesForTests()
+      const r = await resolve(LEAN_BEEF)
+      expect(barcodeFetches).toBeGreaterThan(0)
+      // The user's decision stands: the recipe does NOT quietly revert to the BLS record.
+      expect(r!.fallbackStatus).toBe("off")
+      expect(r!.match.providerId).toBe(BARCODE)
+      expect(r!.match.nutrients.kcalPer100g).toBe(163)
+      expect(r!.match.matchReason).toBe("user-confirmed-override")
+    } finally {
+      config.openFoodFacts.productTtlMs = previousTtl
+    }
+  })
+
+  it("5a. beyond the stale window, a persistent failure falls back safely", async () => {
+    stubOff(ok)
+    await resolve(LEAN_BEEF)
+
+    const ttl = config.openFoodFacts.productTtlMs
+    const grace = config.openFoodFacts.productStaleGraceMs
+    config.openFoodFacts.productTtlMs = 0
+    config.openFoodFacts.productStaleGraceMs = 0
+    try {
+      stubOff(() => new Response("upstream unavailable", { status: 503 }))
+      __clearProviderCachesForTests()
+      const r = await resolve(LEAN_BEEF)
+      // No record recent enough to stand in: back to ordinary resolution, flag intact.
+      expect(r!.fallbackStatus).toBe("bls")
+      expect(r!.match.matchReason).not.toBe("user-confirmed-override")
+      expect(r!.match.unmetAttributes).toEqual(["reduced-fat"])
+    } finally {
+      config.openFoodFacts.productTtlMs = ttl
+      config.openFoodFacts.productStaleGraceMs = grace
+    }
+  })
+
+  it("5b. an AUTHORITATIVE absence breaks the override immediately, however fresh the cache", async () => {
+    stubOff(ok)
+    await resolve(LEAN_BEEF)
+
+    const previousTtl = config.openFoodFacts.productTtlMs
+    config.openFoodFacts.productTtlMs = 0
+    try {
+      // OFF says the product is gone. A cached copy must not keep a deleted product alive, and
+      // the grace window is deliberately not consulted.
+      stubOff(() => new Response(JSON.stringify({ status: 0 }), { status: 200, headers: { "content-type": "application/json" } }))
+      __clearProviderCachesForTests()
+      const r = await resolve(LEAN_BEEF)
+      expect(r!.fallbackStatus).toBe("bls")
+      expect(r!.match.unmetAttributes).toEqual(["reduced-fat"])
+    } finally {
+      config.openFoodFacts.productTtlMs = previousTtl
+    }
+  })
+
+  it("6. a local-database override never touches the network", async () => {
+    setOverride({
+      identity: identity("lean ground beef"), exampleName: "Rinderhackfleisch mager",
+      provider: "usda-local", providerId: "171790", recordName: "Beef, ground, 95% lean meat / 5% fat, raw",
+    })
+    stubOff(() => { throw new Error("a usda-local override must not fetch OFF") })
+    __clearProviderCachesForTests()
+    const r = await resolve(LEAN_BEEF)
+    expect(r!.match.providerId).toBe("171790")
+    expect(barcodeFetches).toBe(0)
+  })
+
+  it("7. two loads of the same target in one preview cost one fetch", async () => {
+    stubOff(ok)
+    const o = getOverrideById(overrideId(buildOverrideKey(identity("lean ground beef"))))!
+    // Exactly what preview does: describe() for activeOverride, then the resolution itself.
+    await loadOverrideTarget(o)
+    await loadOverrideTarget(o)
+    expect(barcodeFetches).toBe(1)
   })
 })
