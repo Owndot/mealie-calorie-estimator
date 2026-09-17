@@ -96,7 +96,19 @@ export function propertyUnderInvestigation(
     return {
       kind: "reduced-fat",
       description: "a qualitative reduced-fat / lean / light claim",
-      expressedBy: (c) => hasWord(c.name, REDUCED_FAT_WORDS),
+      // Two exclusions, both measured rather than assumed:
+      //
+      //   a NUMERIC GRADE does not answer a qualitative claim. "90% lean meat / 10% fat" states a
+      //   number the ingredient never gave, and treating it as evidence for "mager" is exactly the
+      //   invented precision this is supposed to avoid. It stays in the shortlist as a candidate;
+      //   it just does not count as the property being expressed.
+      //
+      //   "lean" in USDA's ANATOMICAL sense is not a claim. "Beef, round, tip round, separable
+      //   lean and fat" describes which part of the carcass was analysed — a component, not a
+      //   leanness assertion. Measured: without this, 386 of 691 beef records "asserted" leanness.
+      expressedBy: (c) => hasWord(c.name, REDUCED_FAT_WORDS)
+        && statedPercentages(c.name).length === 0
+        && !/\blean\s+(and|only)\b/i.test(c.name),
     }
   }
   if (attributes.preservation !== "unknown") {

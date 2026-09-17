@@ -154,11 +154,22 @@ export function offProxyJustified(
   if (propertyKind === "none") {
     return { justified: false, why: "no unresolved property — OFF adds nothing" }
   }
+  // A QUALITATIVE claim is a property of the product as sold, and generic composition databases
+  // systematically do not carry marketing claims — BLS and USDA describe what a food IS, not how
+  // it is labelled. A retail product is therefore the only source that can evidence "mager" or
+  // "light" at all, so it is always worth consulting. This is a statement about the data sources,
+  // not about any particular food.
+  if (propertyKind === "reduced-fat") {
+    return { justified: true, why: "a qualitative claim is a label property; generic databases do not carry labels" }
+  }
+  // A NUMERIC claim is something a composition database can express directly, and USDA files fat
+  // grades as records of their own. If one states the number, OFF adds a network round trip and
+  // nothing else.
   if (localPropertyBearing.length > 0) {
     return {
       justified: false,
-      why: `${localPropertyBearing.length} local record(s) already state the property (e.g. "${localPropertyBearing[0].name}")`,
+      why: `${localPropertyBearing.length} local record(s) state the number (e.g. "${localPropertyBearing[0].name}")`,
     }
   }
-  return { justified: true, why: "no local record states the property; a retail label is the only available evidence" }
+  return { justified: true, why: "no local record states the requested number; a retail label is the only available evidence" }
 }
