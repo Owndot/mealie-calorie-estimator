@@ -113,6 +113,25 @@ export async function overrideRoutes(app: FastifyInstance): Promise<void> {
     return
   }
 
+  /**
+   * A DELETE carrying `Content-Type: application/json` and no body is rejected by Fastify's
+   * default parser as an empty JSON document. That is a real client shape, not a malformed one:
+   * a wrapper or client that sets the header once for every request has nothing to put in a
+   * DELETE body. Found immediately, by the scoped admin wrapper on the first live delete.
+   */
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => {
+    const text = typeof body === "string" ? body.trim() : ""
+    if (text.length === 0) return done(null, {})
+    try {
+      done(null, JSON.parse(text))
+    } catch {
+      // Unparseable input is the CALLER's mistake. Without an explicit status Fastify reports it
+      // as a 500, which would send someone hunting a server fault over a stray comma.
+      const err = Object.assign(new Error("Body is not valid JSON"), { statusCode: 400 })
+      done(err, undefined)
+    }
+  })
+
   app.addHook("onRequest", async (req, reply) => {
     if (!req.url.startsWith("/overrides")) return
     if (!authorized(req)) {
