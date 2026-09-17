@@ -4,7 +4,17 @@ const inputFile = process.argv[2];
 const outputFile = process.argv[3];
 
 const licenses = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
-const entries = Object.entries(licenses).sort(([a], [b]) => a.localeCompare(b));
+
+// This NOTICE reproduces the licenses of EXTERNAL packages, so the project itself does not belong
+// in it. It also cannot describe itself correctly here: license-checker reports any package marked
+// `private` as UNLICENSED, so the root entry would state that this GPL-3.0-only project carries no
+// license at all — in the very file distributed to make licensing clear. The project's own license
+// is LICENSE, and its own terms are in package.json.
+const rootName = JSON.parse(fs.readFileSync(`${__dirname}/../package.json`, 'utf8')).name;
+
+const entries = Object.entries(licenses)
+  .filter(([key]) => key.substring(0, key.lastIndexOf('@')) !== rootName)
+  .sort(([a], [b]) => a.localeCompare(b));
 
 const lines = [
   'This software includes external packages and source code.',
