@@ -9,7 +9,7 @@ import { buildQueryKey, setCachedProviderMatch } from "../../src/utils/cache.js"
 
 /** Mirrors USDA_MATCH_ALGORITHM_VERSION; a bump here must be mirrored, which is the point. */
 // Mirrors usda-local-provider.ts: algorithm version + the bundled data's schema_version.
-const USDA_CACHE_VERSION = "v2/1"
+const USDA_CACHE_VERSION = "v3/1"
 import type { MealieRecipe, MealieIngredient } from "../../src/types.js"
 
 /**

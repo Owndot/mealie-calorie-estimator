@@ -327,14 +327,14 @@ describe("cached provenance round-trips for usda-local", () => {
     const first = await usdaLocalProvider.lookup(q)
     expect(first?.providerId).toBe("111")
     expect(getCachedProviderMatch("usda-local",
-      buildQueryKey("v2/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=versioncheck food", null))?.providerId).toBe("111")
+      buildQueryKey("v3/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=versioncheck food", null))?.providerId).toBe("111")
 
     // The same query text under a DIFFERENT core classification is a different question, and must
     // not be answered from the row above. Reconciling a production discrepancy showed why: the
     // core both gates the match and sets its confidence, so a match found under one core was
     // being replayed, at its stored confidence, for a lookup whose core could not have produced it.
     expect(getCachedProviderMatch("usda-local",
-      buildQueryKey("v2/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=", null))).toBeUndefined()
+      buildQueryKey("v3/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=", null))).toBeUndefined()
   })
 })
 
