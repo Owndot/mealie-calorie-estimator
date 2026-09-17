@@ -115,38 +115,64 @@ function extractNutrients(n: OffNutriments): NutrientSet {
  * estimator puts on OFF, which is not a cost a new feature gets to impose unilaterally. Only the
  * base URL differs, because OFF serves products and search from different hosts.
  */
-export async function loadOffProductByBarcode(barcode: string): Promise<{ name: string; brand: string | null; nutrients: NutrientSet; foodType: FoodType } | null> {
+export interface OffProductRecord {
+  name: string
+  brand: string | null
+  nutrients: NutrientSet
+  foodType: FoodType
+}
+
+/**
+ * The outcome of a barcode load, with TRANSIENT failure distinguished from AUTHORITATIVE absence.
+ *
+ * That distinction is the whole point: a 5xx, a rate-limit or a dropped connection says nothing
+ * about the product and must not be allowed to silently change a recipe, while OFF answering
+ * "no such product" is a real fact that a cached copy must not be used to paper over.
+ */
+export type OffProductOutcome =
+  | { status: "ok"; product: OffProductRecord }
+  | { status: "not-found" }
+  | { status: "transient"; reason: string }
+
+/**
+ * Loads one OFF product by barcode, for a user-confirmed override's target.
+ *
+ * Shares this module's SINGLE rate-limit budget, retry policy and User-Agent with search — two
+ * independent buckets against the same service would quietly double the request rate this
+ * estimator puts on OFF, which is not a cost a new feature gets to impose unilaterally. Only the
+ * base URL differs, because OFF serves products and search from different hosts.
+ */
+export async function loadOffProductByBarcode(barcode: string): Promise<OffProductOutcome> {
   const params = new URLSearchParams({ fields: OFF_PROXY_FIELDS })
   const url = `${config.openFoodFacts.productBaseUrl}/api/v2/product/${encodeURIComponent(barcode)}?${params}`
 
   await waitForRateLimit(RateLimitType.Search)
   const res = await fetchWithRetry(url, barcode)
-  if (!res || !res.ok) {
-    logger.warn({ barcode, status: res?.status ?? null }, "OFF product lookup failed")
-    return null
-  }
+  if (!res) return { status: "transient", reason: "no response after retries" }
+  // 404 is OFF stating the product does not exist. Every other error status is about OFF, not
+  // about the product.
+  if (res.status === 404) return { status: "not-found" }
+  if (!res.ok) return { status: "transient", reason: `http ${res.status}` }
 
   let body: { status?: number; product?: Record<string, unknown> }
   try {
     body = (await res.json()) as typeof body
   } catch {
-    logger.warn({ barcode }, "OFF product lookup returned unparseable JSON")
-    return null
+    return { status: "transient", reason: "unparseable JSON" }
   }
-  const product = body.product
-  if (!product || body.status === 0) return null
+  // OFF's own "not found" marker on a 200 response.
+  if (body.status === 0 || !body.product) return { status: "not-found" }
 
+  const product = body.product
   const name = typeof product.product_name === "string" ? product.product_name.trim() : ""
-  if (!name) return null
   const nutrients = extractNutrients((product.nutriments ?? {}) as OffNutriments)
-  // No energy means no usable nutrition — the caller must fall back rather than serve a blank.
-  if (nutrients.kcalPer100g === null) return null
+  // A product with no name or no energy cannot answer a nutrition question. That is a property of
+  // the record itself, so it is authoritative rather than transient.
+  if (!name || nutrients.kcalPer100g === null) return { status: "not-found" }
 
   return {
-    name,
-    brand: normalizeOffBrand(product.brands),
-    nutrients,
-    foodType: offFoodType(product.categories_tags),
+    status: "ok",
+    product: { name, brand: normalizeOffBrand(product.brands), nutrients, foodType: offFoodType(product.categories_tags) },
   }
 }
 

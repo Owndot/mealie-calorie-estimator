@@ -3,7 +3,9 @@ import { sanityCheckNutrients } from "../sanity-check.js"
 import { findOverride, overridesReady, type FoodOverride } from "../food-overrides.js"
 import { loadBlsRecordByCode } from "./bls-provider.js"
 import { loadUsdaRecordById } from "./usda-local-provider.js"
-import { loadOffProductByBarcode } from "./off-provider.js"
+import { config } from "../../config.js"
+import { getCachedOffProduct, setCachedOffProduct } from "../../utils/cache.js"
+import { loadOffProductByBarcode, type OffProductRecord } from "./off-provider.js"
 import { UNKNOWN_ATTRIBUTES, type ProviderMatch } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 
@@ -54,10 +56,8 @@ export async function loadOverrideTarget(override: FoodOverride): Promise<Overri
         const r = await loadUsdaRecordById(override.providerId)
         return r && { name: r.name, nutrients: r.nutrients, brand: null, dataType: r.dataType, foodType: r.foodType }
       }
-      case "off": {
-        const r = await loadOffProductByBarcode(override.providerId)
-        return r && { name: r.name, nutrients: r.nutrients, brand: r.brand, dataType: "OFF product", foodType: r.foodType }
-      }
+      case "off":
+        return loadOffTargetWithCache(override.providerId)
       default:
         // A provider this build does not know how to reload. Refusing is the only safe answer:
         // the alternative is inventing what the person meant.
@@ -67,6 +67,59 @@ export async function loadOverrideTarget(override: FoodOverride): Promise<Overri
     logger.warn({ err, provider: override.provider, providerId: override.providerId }, "Food override target reload threw")
     return null
   }
+}
+
+/**
+ * Loads an OFF-backed target under an explicit freshness policy.
+ *
+ * A user deliberately chose this record, so a transient OFF failure must not silently return the
+ * recipe to the value the override exists to replace. Three horizons, and the distinction between
+ * them is what makes this correct rather than merely cached:
+ *
+ *   age < productTtlMs                     serve from cache, no request at all
+ *   age >= TTL, refetch succeeds           refresh and serve
+ *   age >= TTL, refetch fails TRANSIENTLY  serve the cached record while within the grace window,
+ *                                          because the failure says nothing about the product
+ *   OFF says NOT FOUND                     broken immediately — a deleted product must not be
+ *                                          preserved by a stale copy, whatever its age
+ *   beyond TTL + grace with no success     broken; a record cannot be trusted indefinitely
+ *
+ * Cached by BARCODE — the real provider identity — so two ingredients bound to the same product
+ * share one record and one request.
+ */
+async function loadOffTargetWithCache(barcode: string): Promise<OverrideTarget | null> {
+  const toTarget = (p: OffProductRecord): OverrideTarget =>
+    ({ name: p.name, nutrients: p.nutrients, brand: p.brand, dataType: "OFF product", foodType: p.foodType })
+
+  const cached = getCachedOffProduct<OffProductRecord>(barcode)
+  if (cached && cached.ageMs < config.openFoodFacts.productTtlMs) return toTarget(cached.product)
+
+  const outcome = await loadOffProductByBarcode(barcode)
+  if (outcome.status === "ok") {
+    setCachedOffProduct(barcode, outcome.product)
+    return toTarget(outcome.product)
+  }
+
+  if (outcome.status === "not-found") {
+    // Authoritative: OFF says this product is gone. A cached copy must not keep it alive.
+    logger.warn({ barcode }, "OFF override target no longer exists — the override is broken")
+    return null
+  }
+
+  const graceMs = config.openFoodFacts.productTtlMs + config.openFoodFacts.productStaleGraceMs
+  if (cached && cached.ageMs < graceMs) {
+    logger.warn(
+      { barcode, reason: outcome.reason, ageMs: cached.ageMs, graceMs },
+      "OFF temporarily unavailable — serving the cached record rather than dropping a user-confirmed override",
+    )
+    return toTarget(cached.product)
+  }
+
+  logger.warn(
+    { barcode, reason: outcome.reason, ageMs: cached?.ageMs ?? null, graceMs },
+    "OFF override target could not be loaded and no record is recent enough to stand in",
+  )
+  return null
 }
 
 export class OverrideProvider implements NutrientProvider {

@@ -47,6 +47,21 @@ export const config = {
     searchRateLimit: parseInt(process.env.OFF_SEARCH_RATE_LIMIT || "10", 10),
     maxRetries: parseInt(process.env.OFF_MAX_RETRIES || "3", 10),
     retryBackoffMs: parseInt(process.env.OFF_RETRY_BACKOFF_MS || "500", 10),
+    /**
+     * How long a barcode record fetched for a user-confirmed override stays fresh. Product
+     * composition changes rarely, so a daily re-check keeps the override current while putting
+     * one request per override per day on OFF.
+     */
+    productTtlMs: parseInt(process.env.OFF_PRODUCT_TTL || "86400", 10) * 1000,
+    /**
+     * How long past that a cached record may still answer when OFF is TRANSIENTLY unavailable.
+     *
+     * The point is correctness, not speed: a user deliberately chose this record, and a network
+     * blip must not silently return their recipe to the value the override exists to replace.
+     * Bounded, because a record cannot be trusted forever without re-checking — and deliberately
+     * NOT used for an authoritative absence, where OFF has actually said the product is gone.
+     */
+    productStaleGraceMs: parseInt(process.env.OFF_PRODUCT_STALE_GRACE || "604800", 10) * 1000,
     userAgent: process.env.OFF_USER_AGENT || `mealie-calorie-estimator/${version} (mail@timo-reymann.de)`,
   },
 

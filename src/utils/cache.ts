@@ -177,7 +177,18 @@ export async function initCache(): Promise<void> {
     updated_at INTEGER NOT NULL
   )`)
 
+  // OFF product records fetched for a user-confirmed override. Rows are NOT swept on read: the
+  // caller needs a row's age to decide between "fresh", "stale but usable because OFF is down"
+  // and "too old to trust", which a delete-on-expiry cache cannot express. Disposable and fully
+  // reloadable, so it belongs here rather than in overrides.db, which stays pointer-only.
+  db.run(`CREATE TABLE IF NOT EXISTS off_product_cache (
+    barcode    TEXT PRIMARY KEY,
+    product    TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`)
+
   const now = Date.now()
+  db.run("DELETE FROM off_product_cache WHERE updated_at < ?", [now - (config.openFoodFacts.productTtlMs + config.openFoodFacts.productStaleGraceMs)])
   db.run("DELETE FROM llm_classification_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
   db.run("DELETE FROM llm_judge_cache WHERE updated_at < ?", [now - config.cache.llmTtlMs])
   db.run("DELETE FROM provider_match_cache WHERE updated_at < ?", [now - config.cache.matchTtlMs])
@@ -513,6 +524,48 @@ export function setCachedClassification(lookupKey: string, classification: unkno
      ON CONFLICT(lookup_key) DO UPDATE SET classification = excluded.classification, updated_at = excluded.updated_at`,
     [lookupKey, JSON.stringify(classification), Date.now()],
   )
+  scheduleSave()
+}
+
+/** A cached OFF product plus its age, so the caller can apply its own freshness policy. */
+export interface CachedOffProduct<T> {
+  product: T
+  ageMs: number
+}
+
+export function getCachedOffProduct<T>(barcode: string): CachedOffProduct<T> | undefined {
+  if (!isInitialized) return undefined
+  const stmt = db.prepare("SELECT product, updated_at FROM off_product_cache WHERE barcode = ?")
+  try {
+    stmt.bind([barcode])
+    if (!stmt.step()) return undefined
+    const row = stmt.getAsObject() as Record<string, unknown>
+    try {
+      return { product: JSON.parse(String(row.product)) as T, ageMs: Date.now() - Number(row.updated_at) }
+    } catch {
+      db.run("DELETE FROM off_product_cache WHERE barcode = ?", [barcode])
+      scheduleSave()
+      return undefined
+    }
+  } finally {
+    stmt.free()
+  }
+}
+
+export function setCachedOffProduct(barcode: string, product: unknown): void {
+  if (!isInitialized) return
+  db.run(
+    `INSERT INTO off_product_cache (barcode, product, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(barcode) DO UPDATE SET product = excluded.product, updated_at = excluded.updated_at`,
+    [barcode, JSON.stringify(product), Date.now()],
+  )
+  scheduleSave()
+}
+
+/** Test seam: forget every cached barcode record. */
+export function __clearOffProductCacheForTests(): void {
+  if (!isInitialized) return
+  db.run("DELETE FROM off_product_cache")
   scheduleSave()
 }
 
