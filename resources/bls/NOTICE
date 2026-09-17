@@ -1,0 +1,43 @@
+Bundeslebensmittelschlüssel (BLS) 4.0 — bundled German food composition data
+============================================================================
+
+Source
+  Max Rubner-Institut (MRI), Bundesforschungsinstitut für Ernährung und Lebensmittel.
+  "Bundeslebensmittelschlüssel (BLS), Version 4.0" (2025-12-15).
+  Download: https://blsdb.de/download (BLS_4_0_2025_DE.zip)
+
+Licence
+  CC BY 4.0 (Creative Commons Attribution 4.0 International).
+  https://creativecommons.org/licenses/by/4.0/
+  Attribution is a condition of this licence, and is given below.
+
+Required attribution (reproduced verbatim, per the licence terms)
+  Max Rubner-Institut (2025): Bundeslebensmittelschlüssel (BLS), Version 4.0 -
+  Deutsche Nährstoffdatenbank. Karlsruhe. DOI: 10.25826/Data20251217-134202-0
+
+  The same string is stored in the `attribution` row of the bundled database's `bls_meta`
+  table, so it travels with the data rather than only with this file.
+
+Included in bls-4.0.sqlite
+  bls_foods            7,140 records
+    of which flagged   2,992 as ingredient_preferred — the raw/base INGREDIENT subset, as
+                       opposed to prepared menu components and cooking-state variants. The
+                       flag comes from ingredient-codes-2992.txt in this directory; that
+                       file documents how the selection was made and why the flag is used
+                       only by the degraded-mode matching policy.
+
+  There is exactly ONE runtime BLS database. The flag marks rows within it; it does not
+  describe a second, smaller database.
+
+What was transformed
+  Only the fields this service needs are imported: BLS code, German name, English name and
+  11 nutrient columns, out of the full 418-column / 138-nutrient official export.
+
+  Every stored number is either a verbatim BLS 4.0 figure or null — null exactly where BLS
+  itself reports no value. Sodium and cholesterol are divided by 1000 (mg -> g) so units
+  match every other provider. Nothing is estimated, averaged, interpolated or hand-authored.
+
+Regeneration
+      python3 scripts/import_bls.py BLS_4_0_Daten_2025_DE.xlsx
+
+  The importer reproduces this attribution in its own header and writes it into bls_meta.
