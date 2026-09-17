@@ -3,7 +3,10 @@ version: "3.9"
 x-nutrition-env: &nutrition-env
   MEALIE_URL: ${MEALIE_URL:-http://mealie:9000}
   OFF_LANGUAGE: ${OFF_LANGUAGE:-en}
-  OFF_USER_AGENT: ${OFF_USER_AGENT:-mealie-nutrition-engine/1.0.0 (+https://github.com/Owndot/mealie-nutrition-engine)}
+  # Passed through empty on purpose: the service then builds its own User-Agent from the package
+  # version, so it cannot drift. A default stated here would have pinned "1.0.0" forever, since
+  # compose always supplies the variable and the built-in default would never be reached.
+  OFF_USER_AGENT: ${OFF_USER_AGENT:-}
   LLM_ENABLED: ${LLM_ENABLED:-false}
   LLM_API_KEY: ${LLM_API_KEY:-}
   LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
