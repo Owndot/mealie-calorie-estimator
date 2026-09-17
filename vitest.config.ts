@@ -2,10 +2,13 @@ import { defineConfig } from "vitest/config"
 
 export default defineConfig({
   test: {
-    // Per-FILE cache isolation. CACHE_DB_PATH is deliberately NOT set here: a single static path
-    // is shared by every file (which Vitest runs in parallel), which made the suite order- and
-    // history-dependent. See tests/setup/isolated-cache.ts.
-    setupFiles: ["./tests/setup/isolated-cache.ts"],
+    // Per-FILE isolation of BOTH persistent databases. CACHE_DB_PATH and OVERRIDES_DB_PATH are
+    // deliberately NOT set here: a single static path is shared by every file (which Vitest runs
+    // in parallel), which made the suite order- and history-dependent. Each setup file instead
+    // derives its own path and must set the variable before src/config.ts is imported, since
+    // config.ts reads both at import time. See tests/setup/isolated-cache.ts and
+    // tests/setup/isolated-overrides.ts; tests/setup-isolation.test.ts fails if either is removed.
+    setupFiles: ["./tests/setup/isolated-cache.ts", "./tests/setup/isolated-overrides.ts"],
     env: {
       MEALIE_API_TOKEN: "test-token",
       OFF_LANGUAGE: "de",
