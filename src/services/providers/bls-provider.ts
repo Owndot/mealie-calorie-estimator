@@ -786,7 +786,7 @@ export class BlsProvider implements NutrientProvider {
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 
-    const cached = query.poolOnly ? undefined : getCachedProviderMatch(this.name, queryKey)
+    const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
       const conflict = cachedMatchConflict(cached, ctx)
         ?? (degraded ? degradedCacheConflict(cached, data, queryTexts, query.state) : null)
@@ -795,7 +795,7 @@ export class BlsProvider implements NutrientProvider {
       // different BLS record that IS valid for this context stays reachable.
       logger.info({ foodName: query.foodName, reason: conflict }, "BLS: cached match incompatible with this query's context, re-querying")
     }
-    if (!query.poolOnly && isProviderMiss(this.name, missKey)) return null
+    if (isProviderMiss(this.name, missKey)) return null
 
     // A candidate that narrows the query to a SUB-VARIETY it never named is refused outright, with
     // no relaxed second pass to fall back on.
@@ -889,10 +889,6 @@ export class BlsProvider implements NutrientProvider {
           score: c.score,
         })))
     }
-
-    // A diagnostic pass stops here: the survivors have been reported and nothing else may happen —
-    // no rerank (which would spend a second LLM call), no cache write, no miss marker.
-    if (query.poolOnly) return null
 
     // The deterministic answer stands unless this is genuinely an ambiguous case — see
     // shouldRerank(). When it is, the LLM judges between records RETRIEVAL already found and the

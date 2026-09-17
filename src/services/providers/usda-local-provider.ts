@@ -288,13 +288,13 @@ export class UsdaLocalProvider implements NutrientProvider {
     }
     const missKey = `${queryKey}|ctx=${matchingContextKey(ctx)}`
 
-    const cached = query.poolOnly ? undefined : getCachedProviderMatch(this.name, queryKey)
+    const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
       const conflict = cachedMatchConflict(cached, ctx)
       if (!conflict) return cached
       logger.info({ foodName: query.foodName, reason: conflict }, "USDA local: cached match incompatible with this query's context, re-ranking")
     }
-    if (!query.poolOnly && isProviderMiss(this.name, missKey)) return null
+    if (isProviderMiss(this.name, missKey)) return null
 
     const candidates = retrieve(data.records, query.foodName, strictCore)
     if (candidates.length === 0) {
@@ -350,9 +350,6 @@ export class UsdaLocalProvider implements NutrientProvider {
         }))
       }
     }
-
-    // See ProviderQuery.poolOnly: report and stop, with no rerank and no cache effect.
-    if (query.poolOnly) return null
 
     const reranked = await this.maybeRerank(query, ranked, attrs, strictCore)
     const top: RankedUsda | undefined = reranked ?? ranked[0]

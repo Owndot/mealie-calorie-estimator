@@ -191,36 +191,18 @@ const RECORD_PROVIDERS = new Set<FallbackStatus>(["mealie-recipe", "bls", "usda-
  * attribute, and the OFF proxy are deliberately NOT here.
  */
 export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
-  // If the judge cannot actually be asked, do not pay for the pool pass either.
-  if (!config.llm.judgeEnabled || !config.llm.enabled || !config.llm.apiKey) {
-    return resolveDeterministic(query, route)
-  }
+  if (!config.llm.judgeEnabled) return resolveDeterministic(query, route)
 
-  const deterministic = await resolveDeterministic(query, route)
-
-  // FAST PATH: a real record answered. It is kept exactly as it is, the pool is never built, and
-  // the judge is never asked. This is what makes the whole change free for the common case.
-  if (deterministic && RECORD_PROVIDERS.has(deterministic.fallbackStatus)) return deterministic
-
-  // Only now, for an ingredient the whole chain could not answer, collect what the LOCAL databases
-  // had. It has to be a separate pass: a provider's negative cache short-circuits before anything
-  // is scored, so once an ingredient is a known miss its survivors are never computed again —
-  // measured in production as the judge being invoked for precisely zero ingredients. The pass
-  // consults no cache, reranks nothing and issues no request (see ProviderQuery.poolOnly).
+  // The pool is collected DURING the chain, from providers that were going to compute it anyway.
+  // Nothing extra is retrieved and nothing is re-ranked.
   const pool: JudgeCandidate[] = []
-  const poolQuery = {
-    ...query,
-    poolOnly: true,
-    candidateSink: (candidates: JudgeCandidate[]) => { pool.push(...candidates) },
-  }
-  for (const provider of getProviderChain(route)) {
-    if (provider.name !== "bls" && provider.name !== "usda-local") continue
-    try {
-      await provider.lookup(poolQuery)
-    } catch (err) {
-      logger.warn({ err, provider: provider.name, foodName: query.foodName }, "Judge candidate collection failed")
-    }
-  }
+  const deterministic = await resolveDeterministic(
+    { ...query, candidateSink: (candidates) => { pool.push(...candidates) } },
+    route,
+  )
+
+  // FAST PATH: a real record answered. It is kept exactly as it is, and the judge is never asked.
+  if (deterministic && RECORD_PROVIDERS.has(deterministic.fallbackStatus)) return deterministic
 
   const trigger = pool.length > 0 ? "gate-suppressed-pool" : "no-database-record"
   if (pool.length === 0) return deterministic
