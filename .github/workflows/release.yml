@@ -39,6 +39,8 @@ jobs:
   verify:
     name: Verify
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -63,23 +65,39 @@ jobs:
       - name: Build
         run: npm run build
 
-      # A tag that disagrees with package.json is a release nobody can reproduce from the source
-      # tree. Catch it before anything is published, not after.
-      - name: Tag matches package.json version
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Resolves the ONE version this run is about, and is the reason a rehearsal is worth running.
+      #
+      # On a tag push the version is the tag, and a tag disagreeing with package.json is a release
+      # nobody can reproduce from the source tree — so that is a hard failure, caught before
+      # anything is published rather than after.
+      #
+      # On a dry run there is no tag yet, so package.json states what the next tag WILL be. Handing
+      # that version on to the publish job is what lets the rehearsal compute the real image tags;
+      # without it the semver patterns resolve to nothing and the run silently proves only that the
+      # Dockerfile builds.
+      - name: Resolve version
+        id: version
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
           PKG_VERSION="$(node -p "require('./package.json').version")"
-          echo "tag=$TAG_VERSION package.json=$PKG_VERSION"
-          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
-            exit 1
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            echo "tag=$TAG_VERSION package.json=$PKG_VERSION"
+            if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+              exit 1
+            fi
+            echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Rehearsing the release of v$PKG_VERSION (from package.json; no tag pushed)"
+            echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           fi
 
   publish:
     name: Publish image and release
     needs: verify
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,15 +111,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # `value:` makes the semver patterns read the version resolved above instead of the ref. On a
+      # tag push the two are identical; on a dry run it is the difference between rehearsing the
+      # real tag set and generating nothing at all.
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=semver,pattern={{version}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
+      # A rehearsal that generated no tags would have proved only that the Dockerfile builds, which
+      # is what CI already proves on every PR. Fail loudly instead.
+      - name: Tags were actually computed
+        run: |
+          echo "${{ steps.meta.outputs.tags }}"
+          test -n "${{ steps.meta.outputs.tags }}" || {
+            echo "::error::No image tags were generated for version '${VERSION}'"
+            exit 1
+          }
 
       # On a dry run the image is still BUILT — a release rehearsal that skips the build proves
       # nothing — it is simply not pushed.
