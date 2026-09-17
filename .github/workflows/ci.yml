@@ -1,16 +1,20 @@
 name: CI
 
-# Pull requests only, against ANY base branch.
+# Every pull request, against ANY base branch, plus `main` itself.
 #
 # Before this existed, a PR was effectively unvalidated: the sole GitHub Actions workflow
 # (ort.yml) is license compliance scoped to `base: main`, so stacked or feature-to-feature PRs ran
-# nothing at all, and CircleCI's unit-test job does not report a check back to this repository.
+# nothing at all, and the inherited CircleCI pipeline never reported a check back to this fork.
 #
-# Deliberately scoped to `pull_request`. Release and publish behaviour lives in CircleCI
-# (semantic-release on `main`, publish-docker-image on tags) and is left untouched: nothing here
-# triggers on a push to `main` or on a tag, and nothing here logs in to a registry or pushes an
-# image.
+# `main` is included because a PR is validated against a MERGE PREVIEW, not against the commit that
+# actually lands: two independently green PRs can merge into a red `main`. It is also what makes the
+# README badge a statement about the released branch rather than about whichever branch ran last.
+#
+# Publishing lives in release.yml and only ever on a tag. Nothing here logs in to a registry or
+# pushes an image.
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
