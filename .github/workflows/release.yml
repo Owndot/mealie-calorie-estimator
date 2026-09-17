@@ -119,10 +119,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # `latest` is the flavor's business, not a tag entry: with the default `latest=auto`,
+          # type=semver adds it for any non-prerelease version — including on a dispatch, where an
+          # `enable=false` raw entry does nothing to stop it. Stating it here is what actually keeps
+          # `latest` pointing at released tags only.
+          flavor: latest=${{ github.ref_type == 'tag' }}
           tags: |
             type=semver,pattern={{version}},value=${{ env.VERSION }}
             type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
 
       # A rehearsal that generated no tags would have proved only that the Dockerfile builds, which
       # is what CI already proves on every PR. Fail loudly instead.
