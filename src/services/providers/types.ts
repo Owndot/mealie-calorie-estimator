@@ -19,6 +19,18 @@ export interface ProviderQuery {
    */
   candidateSink?: (candidates: JudgeCandidate[]) => void
   /**
+   * Diagnostic pass: report gate survivors to `candidateSink` and return null, without consulting
+   * any cache and without reranking.
+   *
+   * Necessary because a provider's NEGATIVE cache short-circuits before candidates are scored at
+   * all — so once an ingredient is a known miss, the survivors it would have found are never
+   * computed again. Measured in production: the judge was never invoked for a single ingredient,
+   * because every one of them was already a cached miss. This pass runs only for an ingredient the
+   * whole chain failed to answer, and only against the two local databases, so it costs an
+   * in-memory rank and no request.
+   */
+  poolOnly?: boolean
+  /**
    * Nutritionally meaningful form/preservation/fat attributes. Participate in candidate validation
    * (formConflict/preservationConflict/fatConflict) and in cache identity, so a cached "ground
    * ginger" can never be served to a "fresh ginger" query. "unknown" values stay permissive.
