@@ -107,6 +107,47 @@ function extractNutrients(n: OffNutriments): NutrientSet {
  * day) every time OFF has a rate-limit flood or blip, silently starving unrelated foods of
  * branded nutrition long after OFF recovers.
  */
+/** The barcode is needed as a provider id; the ordinary provider path never uses it. */
+const OFF_PROXY_FIELDS = ["code", "product_name", "brands", "nutriments", "categories_tags"].join(",")
+
+export interface OffProxyHit {
+  code?: string
+  product_name?: string
+  brands?: string[] | string
+  categories_tags?: string[]
+  nutriments?: Record<string, number | undefined>
+}
+
+/**
+ * A search for the semantic judge's VERIFIED PROXY route, sharing this module's rate limiter,
+ * retry/backoff and User-Agent rather than opening a second, unthrottled path to OFF. It returns
+ * raw hits: the judge's own strict pre-filter decides what is usable, and that filter is
+ * deliberately stricter than this provider's, because a proxy stands in for a generic ingredient
+ * rather than answering a branded query.
+ */
+export async function searchOffProxyHits(query: string): Promise<OffProxyHit[]> {
+  const params = new URLSearchParams({
+    q: query,
+    langs: config.openFoodFacts.language,
+    page_size: String(SEARCH_PAGE_SIZE * 2),
+    fields: OFF_PROXY_FIELDS,
+  })
+
+  await waitForRateLimit(RateLimitType.Search)
+  const res = await fetchWithRetry(`${config.openFoodFacts.searchBaseUrl}/search?${params}`, query)
+  if (!res || !res.ok) {
+    logger.warn({ query, status: res?.status ?? null }, "OFF proxy search failed")
+    return []
+  }
+  try {
+    const data = (await res.json()) as { hits?: OffProxyHit[] }
+    return Array.isArray(data.hits) ? data.hits : []
+  } catch {
+    logger.warn({ query }, "OFF proxy search returned unparseable JSON")
+    return []
+  }
+}
+
 async function searchCandidates(query: string): Promise<OffProduct[] | null> {
   const params = new URLSearchParams({
     q: query,

@@ -66,15 +66,18 @@ export const config = {
     /**
      * The semantic candidate judge, deliberately a separate switch from rerankEnabled.
      *
-     * ON by default, and safe to be: it is asked ONLY when the deterministic chain has already
-     * finished and its answer is a fabricated estimate or nothing at all, while real records
-     * survived every hard gate. An accepted database or recipe record is returned before a pool is
-     * even built, and AMBIGUOUS/NONE/invalid/timeout all leave the existing outcome untouched — so
-     * the worst case is the behaviour without it. Set LLM_JUDGE_ENABLED=false to return to the
-     * purely deterministic chain; askJudge() then returns before touching the network, and
+     * OFF by default: a deployment opts in explicitly rather than inheriting model-assisted
+     * behaviour from a code change it did not ask for.
+     *
+     * It is safe to enable, and the reason is structural rather than a matter of trust: the judge
+     * is asked ONLY when the deterministic chain has already finished and its answer is a
+     * fabricated estimate or nothing at all, while real records survived every hard gate. An
+     * accepted database or recipe record is returned before a pool is even built, and
+     * AMBIGUOUS/NONE/invalid/timeout all leave the existing outcome untouched — so the worst case
+     * is the behaviour without it. While false, askJudge() returns before touching the network and
      * eligibility is still recorded in provenance as judgeTrigger.
      */
-    judgeEnabled: (process.env.LLM_JUDGE_ENABLED || "true").toLowerCase() === "true",
+    judgeEnabled: (process.env.LLM_JUDGE_ENABLED || "false").toLowerCase() === "true",
     /** Defaults to the main model; separable so the judge can be evaluated independently. */
     judgeModel: process.env.LLM_JUDGE_MODEL || process.env.LLM_MODEL || "mistral-small-latest",
     /** Small on purpose: retrieval stays local and the prompt stays cheap. */

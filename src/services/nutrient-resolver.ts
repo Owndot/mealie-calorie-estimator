@@ -2,7 +2,9 @@ import { getProviderChain } from "./providers/registry.js"
 import { config } from "../config.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
 import { unmetModifierFamilies } from "./providers/food-semantics.js"
-import { orderCandidates, poolFingerprint } from "./providers/judge/candidate-pool.js"
+import { poolFingerprint } from "./providers/judge/candidate-pool.js"
+import { buildShortlist } from "./providers/judge/shortlist.js"
+import { searchOff, filterOffHits, offProxyJustified } from "./providers/judge/off-proxy.js"
 import { askJudge, JUDGE_PROMPT_VERSION } from "./providers/judge/judge.js"
 import type { JudgeCandidate, JudgeVerdict } from "./providers/judge/types.js"
 import { sanityCheckNutrients } from "./sanity-check.js"
@@ -222,11 +224,40 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
     }
   }
 
-  const trigger = pool.length > 0 ? "gate-suppressed-pool" : "no-database-record"
-  if (pool.length === 0) return deterministic
-
-  const ordered = orderCandidates(pool, config.llm.judgeMaxCandidates)
   const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
+  const structuredName = query.structuredName ?? query.foodName
+
+  // What is actually unresolved about this ingredient, and whether the LOCAL databases can express
+  // it. A generic composition database describes what a food IS, never how it is LABELLED, so a
+  // qualitative claim ("mager", "light") is only ever evidenced by a retail product — while an
+  // explicit number is something USDA files as a record of its own, and consulting OFF for it
+  // would buy a network round trip and nothing else.
+  const localShortlist = buildShortlist(pool, structuredName, attrs, config.llm.judgeMaxCandidates)
+  const routing = offProxyJustified(localShortlist.propertyBearing, localShortlist.property.kind)
+
+  let retail: JudgeCandidate[] = []
+  if (routing.justified) {
+    try {
+      const hits = await searchOff(structuredName)
+      const filtered = filterOffHits(hits, [query.coreFoodGerman ?? null, query.coreFoodEnglish ?? null], attrs)
+      retail = filtered.kept
+      logger.debug(
+        { foodName: query.foodName, property: localShortlist.property.kind, rawHits: filtered.rawHits, kept: retail.length, dropped: filtered.dropped },
+        "Judge OFF proxy: strict filter applied",
+      )
+    } catch (err) {
+      // A proxy search that fails changes nothing: the local pool still stands.
+      logger.warn({ err, foodName: query.foodName }, "Judge OFF proxy search failed")
+    }
+  }
+
+  const trigger = pool.length > 0 ? "gate-suppressed-pool" : "no-database-record"
+  if (pool.length === 0 && retail.length === 0) return deterministic
+
+  // Rebuilt WITH the retail survivors, so they hold places of their own rather than competing on a
+  // deterministic score they do not have.
+  const ordered = buildShortlist(pool, structuredName, attrs, config.llm.judgeMaxCandidates, retail).offered
+  if (ordered.length === 0) return deterministic
   const outcome = await askJudge({
     structuredName: query.structuredName ?? query.foodName,
     canonicalEnglish: query.foodName,
@@ -246,6 +277,25 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
     model: config.llm.judgeModel,
     promptVersion: JUDGE_PROMPT_VERSION,
   }
+
+  logger.info(
+    {
+      foodName: query.foodName,
+      trigger,
+      property: localShortlist.property.kind,
+      candidates: ordered.length,
+      retailOffered: ordered.filter((c) => c.provider === "off").length,
+      offQueried: routing.justified,
+      verdict: outcome.decision?.verdict ?? "invalid",
+      cached: outcome.cached ?? false,
+      latencyMs: outcome.latencyMs,
+      promptTokens: outcome.promptTokens,
+      completionTokens: outcome.completionTokens,
+      model: config.llm.judgeModel,
+      promptVersion: JUDGE_PROMPT_VERSION,
+    },
+    "Semantic judge usage",
+  )
 
   const decision = outcome.decision
   if (!decision || decision.verdict !== "selected" || !decision.candidateId) {
