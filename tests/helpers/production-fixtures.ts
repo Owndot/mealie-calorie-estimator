@@ -226,13 +226,42 @@ export const TIKKA_PASTE: ProductionRecipe = {
     ["Garam Masala", "llm-nutrient", null, 4, 0.35],
   ],
   fixtureDeviations: {
+    // Same RECORDS and same grams as production; only the confidence moves, because the curated
+    // pointers (Korianderkörner -> USDA 170922, Kurkuma -> USDA 172231) now survive AI
+    // classification instead of being dropped by it. Production reached both records anyway
+    // through ordinary fuzzy matching at 0.7/0.8; they are now reported as what they are, a
+    // reviewed mapping at VOCABULARY_CONFIDENCE. No nutrient value and no total changes.
+    Korianderkörner: {
+      confidence: 0.85,
+      why: "curated pointer now survives AI classification; same record, was fuzzy/0.7",
+    },
+    Kreuzkümmelsamen: {
+      confidence: 0.85,
+      why: "curated pointer now survives AI classification; same record, was fuzzy/0.7",
+    },
+    Kurkuma: {
+      confidence: 0.85,
+      why: "curated pointer now survives AI classification; same record, was fuzzy/0.8",
+    },
+    // Production recorded a FABRICATED value here, for the same reason as Paprikapulver in the
+    // Big-Mac fixture: with AI enabled the curated Pflanzenöl -> USDA 172370 pointer was discarded
+    // before the resolver saw it. USDA's refined soybean oil is 884 kcal/100 g, which is exactly
+    // what the estimate modelled, so the reconciliation arithmetic above is unaffected — one of
+    // the five modelled per-100 g values is simply now a cited record instead.
+    Pflanzenöl: {
+      provider: "usda-local",
+      record: "Oil, vegetable, soybean, refined",
+      confidence: 0.85,
+      why: "curated vocabulary pointer now survives AI classification; was llm-nutrient/0.35",
+    },
     // IMPROVEMENT from the local USDA database. Production reached the live API and got nothing
     // usable, so an LLM estimate answered; SR Legacy holds "Spices, chili powder" (171319) and the
     // local corpus exposes it. Same 282 kcal either way, so the recipe total does not move — what
     // changes is that the figure is now a cited database record instead of an estimate.
     Chilipulver: {
-      provider: "usda-local", record: "Spices, chili powder", confidence: 0.8,
-      why: "USDA 171319 is reachable locally; the live API result window never surfaced it",
+      provider: "usda-local", record: "Spices, chili powder", confidence: 0.85,
+      why: "USDA 171319 is reachable locally; the live API result window never surfaced it. "
+        + "Confidence 0.8 -> 0.85 because the curated pointer now survives AI classification",
     },
     // Same RECORD as production ("Peppers, hot chili, red, raw"), reached differently. Production
     // accepted it deterministically (matchReason "fuzzy", confidence 0.7). Against the USDA page
@@ -312,6 +341,15 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
     ["Tomatenmark", "bls", "Tomatenmark", 70, 0.92],
     ["Kochsahne 15%", "llm-nutrient", null, 500, 0.35],
   ],
+  fixtureDeviations: {
+    // Same record and grams as production; the curated Kurkuma -> USDA 172231 pointer now
+    // survives AI classification, so the confidence reports a reviewed mapping rather than a
+    // fuzzy match. No nutrient value and no total changes.
+    Kurkuma: {
+      confidence: 0.85,
+      why: "curated pointer now survives AI classification; same record, was fuzzy/0.8",
+    },
+  },
 }
 
 /**
@@ -451,6 +489,18 @@ export const BIG_MAC_SALAT: ProductionRecipe = {
       provider: "bls",
       record: "Mayonnaise (Fertigprodukt)",
       why: "modelled canonicalGerman puts the two BLS mayonnaise records 52.5 points apart, outside RERANK_BAND",
+    },
+    // Production recorded a FABRICATED value here: with AI enabled, the curated pointer
+    // Paprikapulver -> USDA 171329 was discarded before the resolver saw it, nothing else matched,
+    // and llm-nutrient filled the gap at confidence 0.35. The pointer now survives AI
+    // classification, so the same 282 kcal/100 g comes from the database record that publishes it.
+    // The recipe total is unchanged — the estimate happened to model this spice correctly — but
+    // the provenance is no longer a guess.
+    Paprikapulver: {
+      provider: "usda-local",
+      record: "Spices, paprika",
+      confidence: 0.85,
+      why: "curated vocabulary pointer now survives AI classification; was llm-nutrient/0.35",
     },
   },
 }
