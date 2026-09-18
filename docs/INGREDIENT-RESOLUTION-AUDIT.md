@@ -195,3 +195,165 @@ classifications that contradict a preferred record's state/type and confirm thos
 OFF exact labels require a recognized explicit brand and matching label text; spelling variants,
 unlabelled products and API failures can still remain unresolved. Manual-owned recipes require
 a separate intentional decision before their existing nutrition is overwritten.
+
+---
+
+# Follow-up — OFF as a last resort, 2026-09-18 (v1.3.1 production audit)
+
+The v1.3.1 deployment moved real-world resolution from 89.8 % to **93.8 %** (226 ingredient rows,
+14 unresolved). This follow-up addresses what the deployed run then exposed.
+
+**Correction to the first reading of that audit.** Its two reported anomalies were stale: it was
+taken while asynchronous `POST /estimate/:slug?force=true` jobs were still running. Verified
+production, re-read after every job had completed, resolves both correctly:
+
+| Reported as | Verified v1.3.1 production |
+|---|---|
+| `rote Chilischoten getrocknet` → USDA 169373 (sweet, freeze-dried) — WRONG | USDA **168570** `Peppers, hot chile, sun-dried`, `recipe-vocabulary:recipe_default`, confidence 0.85 |
+| `Koriander frisch` unresolved in `tikka-paste` | USDA **169997** `Coriander (cilantro) leaves, raw`, `recipe-vocabulary:exact_phrase`, confidence 0.85 |
+
+Neither is a current v1.3.1 failure, and neither required a code change. This matches what probing
+`main` had already shown — no code path produced the wrong chili record — and it retires the
+"inconsistent across recipes" symptom entirely. `tikka-paste`'s remaining misses are
+`rosa Pfefferkörner` and `Garam Masala`.
+
+## What the production audit actually showed
+
+Every curated mapping from the previous round resolves correctly **in deterministic mode**,
+verified against the real bundled databases: dried hot chili → USDA 168570, fresh coriander →
+169997, paprika spice → 171329, curry blend → 170924, Gouda grade → BLS M402600, cottage cheese →
+M711300, bouillon → R821000. The failures are therefore not missing mappings.
+
+## Root causes
+
+1. **A reworded ingredient drops its curated pointer — latent, not observed.** This was
+   originally attributed to `Koriander frisch`; that attribution is withdrawn, because verified
+   production resolves it correctly. The defect itself is real and is demonstrated by
+   construction: `buildResolverQuery("Koriander frisch", { canonicalGerman: "Koriandergrün", … })`
+   discards the reviewed pointer and the ingredient goes unresolved. Classification is per RECIPE,
+   so the same ingredient is worded differently from batch to batch and the gate is reachable by
+   ordinary model variation. A rename is now a contradiction only when the two words share a HEAD
+   and state different specifiers (`Gerstenmehl` vs the curated `Weizenmehl`); sharing leading
+   material (`Koriandergrün`/`Korianderblätter`) is agreement. Kept as hardening against a
+   reachable failure, not as a fix for a measured one.
+
+2. **OFF was never asked about branded or specialty foods.** The judge's OFF route was justified
+   only for an unresolved *property* claim ("mager", "7 %"). An ingredient with no property claim
+   and no local record answered `propertyKind: "none"` and stopped — so `Leerdammer Leger`,
+   `Hoisin-Sauce`, `Reisessig`, `Proteinpulver`, `Garam Masala` and `Utskho Suneli` never reached
+   the one source that stocks them. OFF is now justified on a second, independent ground: nothing
+   answered at all.
+
+3. **Identity came from the wrong text.** The OFF filter required the *English core* in the
+   product name. `Leerdammer Leger`'s inferred core is `cheese`, which a cheese label has no
+   reason to print. The last-resort filter takes identity from the structured name instead.
+
+4. **Two ingredients never reached a provider.** `1 Stück Gemüsebrühwürfel` and
+   `2 Scheiben Leerdammer Leger` converted to **no grams**, so the estimator dropped them before
+   resolution and reported them exactly like a failed match — the bouillon cube's curated BLS
+   mapping could never be used. `Scheibe` and `Würfel` were not routed to the piece-weight table
+   at all, which also made the long-standing yeast `Würfel` weight unreachable.
+
+## The last-resort OFF route
+
+```
+mealie-recipe → override → BLS → USDA → OFF (strict, branded/generic rules unchanged)
+                                        → [nothing resolved]
+                                           → broad OFF retrieval on the structured name
+                                           → deterministic filter
+                                           → LLM judge selects a REAL candidate, or NO_SAFE_MATCH
+                                           → unresolved
+```
+
+Justified only when no real record resolved **and** no local record already states a requested
+number. It deliberately does not require an empty local pool: a `Leerdammer Leger` query retrieves
+plenty of generic cheese, none of which is Leerdammer.
+
+What the filter stops caring about: brand, manufacturer, packaging size, capitalization,
+punctuation, language, and the broad `en:plant-based-foods-and-beverages` category that the
+property proxy excludes.
+
+What it still enforces: the product must report energy; the ingredient's **most distinctive word**
+must appear on the label (which is what keeps `Hoisin-Sauce` away from a plain soy sauce on the
+shared word `sauce`); never-an-ingredient categories are barred; a stated fat percentage must
+match within tolerance.
+
+Acceptance is the judge's, never the filter's. The model receives real candidates and returns an
+**id** — every nutrient is the chosen record's own, the barcode is the `providerId`, and
+`NO_SAFE_MATCH` leaves the ingredient unresolved. With no judge available the route is not taken,
+because it has no deterministic acceptance of its own. All of this holds with
+`LLM_NUTRIENT_ENABLED=false`; selecting a real record and inventing one are different
+capabilities, which is why they are different flags.
+
+## Disposition of the 15 production misses
+
+| Ingredient | Category | Expected after this change |
+|---|---|---|
+| `Gemüsebrühwürfel`-class cube weights | F — no gram conversion | `Stück`/`Würfel` now 10 g; the curated BLS R821000 becomes reachable |
+| `Leerdammer Leger` | C/F — OFF never asked **and** no slice weight | `Scheibe` now 20 g; OFF last resort offers the real barcode 4388860276916 |
+| `Hoisin-Sauce` | C/D — OFF never asked | Judge selects a real hoisin product, or declines |
+| `Reisessig` | C/D | Rice-vinegar products exist in OFF; judge decides |
+| `Proteinpulver` | C/D, with reservations | Composition varies widely between products; the judge may well decline, and that is correct |
+| `Garam Masala` | C/D | Real blends exist in OFF; no generic record to fabricate |
+| `Utskho Suneli` | C/D or E | Specialty blend; likely remains unresolved |
+| `italienische Gewürzmischung` | C/D or E | Generic blend; judge may decline |
+| `Erythrit` | C/D | Real products exist; no bundled record |
+| `Koriander` (bare, ×2) | **E — intentionally unresolved** | Leaf (23 kcal) vs seed (298 kcal) is a 13× difference the wording does not settle |
+| `rosa Pfefferkörner` | E, possibly C | No verified pink-peppercorn record; black pepper is not a substitute |
+| `Gemüsebrühe` | E/F — classification-dependent | Liquid broth is `composite_dish` in BLS; resolves when classified correctly |
+| `Gewürzpaste für Gemüsebrühe` | E | A homemade paste; needs its own recipe or an override |
+
+Categories: **C** resolvable through OFF, **D** through retrieval + judge, **E** legitimately
+unresolved, **F** a control-flow or conversion bug.
+
+`Koriander frisch` was on this list and has been removed: verified production resolves it to USDA
+169997. `rote Chilischoten getrocknet` was never an unresolved row — it was the reported wrong
+match, and verified production has it on USDA 168570.
+
+`Koriander` staying unresolved is the design working. Nothing in the wording says leaf or seed,
+and guessing would be a 13× error.
+
+## Status of the two reported anomalies — both CLOSED, both stale
+
+- **`rote Chilischoten getrocknet` → USDA 169373.** Never reproducible on `main`: probed
+  deterministically and with five plausible classifier shapes, including ones dropping "chili"
+  from the English name, every path returned USDA 168570 through the curated pointer, and an
+  existing test asserts 169373 is excluded from the judge pool. Verified production now agrees.
+  **Stale audit read. No code change was made or needed.**
+- **`Koriander frisch` inconsistent across recipes.** Verified production resolves it to USDA
+  169997 in every recipe including `tikka-paste`. **Stale audit read.** The rename gate it
+  prompted is a genuine latent defect and the hardening is kept, but it fixes no measured
+  production failure — see root cause 1.
+
+The lesson is procedural rather than technical: `POST /estimate/:slug?force=true` is asynchronous,
+and provenance read before the jobs finish describes the previous release. Any future audit should
+confirm completion before the extras are read.
+
+## `knoblauch-hahnchen-reis-bowl` — verified intentional
+
+Confirmed from its production extras:
+
+```
+calorie_estimator_manual: true
+calorie_estimator_note:   Manual — preserved existing calorie entry
+calorie_estimator_unmatched: []
+calorie_estimator_hash:   present
+```
+
+This is manual-protection working exactly as designed: nutrition already owned by a person is
+never overwritten, and the manual acknowledgement deliberately writes no estimator provenance.
+Absent provenance here is the correct outcome, not a resolution failure, and the behaviour must
+stay unchanged. The supplied export of `huhnchen-in-cremiger-tomaten-sahnesauce` carries the same
+three extras and is the same case.
+
+**No code change.** Nothing in this PR touches the manual-protection path.
+
+## Validation
+
+`npm run typecheck`, `npm run build` and the full suite pass: **63 files / 1,229 tests**
+(1,203 before). Docker is unavailable in this environment; repository CI ran the image build and
+smoke test on this branch and both passed.
+
+Verified production findings dated after the asynchronous jobs completed are incorporated above.
+They required **no functional code change**: the two anomalies were stale reads and the
+missing-provenance recipe is intentional. Only documentation and test commentary were corrected.

@@ -5,7 +5,7 @@ import { foodTypeConflict, findMismatch } from "./providers/ranking.js"
 import { inferAttributesFromName, formConflict, preservationConflict, freshVsProcessedFormConflict, fatConflict, unmetModifierFamilies } from "./providers/food-semantics.js"
 import { poolFingerprint } from "./providers/judge/candidate-pool.js"
 import { buildShortlist } from "./providers/judge/shortlist.js"
-import { searchOff, filterOffHits, offProxyJustified } from "./providers/judge/off-proxy.js"
+import { searchOff, filterOffHits, offProxyJustified, offLastResortJustified } from "./providers/judge/off-proxy.js"
 import { askJudge, JUDGE_PROMPT_VERSION } from "./providers/judge/judge.js"
 import type { JudgeCandidate, JudgeVerdict } from "./providers/judge/types.js"
 import { sanityCheckNutrients } from "./sanity-check.js"
@@ -340,19 +340,35 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
   const localShortlist = buildShortlist(pool, structuredName, attrs, config.llm.judgeMaxCandidates)
   const routing = offProxyJustified(localShortlist.propertyBearing, localShortlist.property.kind)
 
+  // OFF is consulted on two different grounds, and they are deliberately separate questions.
+  //
+  //   PROXY      — the local databases hold the food but cannot express a property it claims
+  //                ("mager", "light"). Strict filter, English core, narrow category allowance.
+  //   LAST RESORT — nothing answered at all. The choice is OFF or nothing, so identity comes from
+  //                the ingredient's own words and only never-an-ingredient categories are barred.
+  //
+  // Both end in the same place: the judge SELECTS among real records, or nothing changes.
+  const lastResort = offLastResortJustified(
+    deterministic !== null && RECORD_PROVIDERS.has(deterministic.fallbackStatus),
+    localShortlist.propertyBearing,
+  )
   let retail: JudgeCandidate[] = []
-  if (routing.justified) {
+  const offRoute = routing.justified ? "proxy" : (lastResort.justified ? "last-resort" : null)
+  if (offRoute) {
     try {
       const hits = await searchOff(structuredName)
-      const filtered = filterOffHits(hits, [query.coreFoodGerman ?? null, query.coreFoodEnglish ?? null], attrs)
+      const filtered = filterOffHits(
+        hits, [query.coreFoodGerman ?? null, query.coreFoodEnglish ?? null], attrs,
+        offRoute === "last-resort" ? { lastResort: true, identityText: structuredName } : {},
+      )
       retail = filtered.kept
       logger.debug(
-        { foodName: query.foodName, property: localShortlist.property.kind, rawHits: filtered.rawHits, kept: retail.length, dropped: filtered.dropped },
-        "Judge OFF proxy: strict filter applied",
+        { foodName: query.foodName, route: offRoute, property: localShortlist.property.kind, rawHits: filtered.rawHits, kept: retail.length, dropped: filtered.dropped },
+        "Judge OFF candidates: filter applied",
       )
     } catch (err) {
-      // A proxy search that fails changes nothing: the local pool still stands.
-      logger.warn({ err, foodName: query.foodName }, "Judge OFF proxy search failed")
+      // A search that fails changes nothing: the local pool still stands.
+      logger.warn({ err, foodName: query.foodName, route: offRoute }, "Judge OFF search failed")
     }
   }
 
