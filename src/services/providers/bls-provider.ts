@@ -20,7 +20,7 @@ import { UNKNOWN_ATTRIBUTES } from "../../types.js"
 import { sanityCheckNutrients } from "../sanity-check.js"
 
 /** See the queryKey comment in BlsProvider.lookup() — bump on any nameScore matching-behavior change. */
-const BLS_MATCH_ALGORITHM_VERSION = "v24"
+const BLS_MATCH_ALGORITHM_VERSION = "v25"
 
 /**
  * BLS-specific tokenizer — deliberately NOT ranking.ts's shared tokenize(), which turns every

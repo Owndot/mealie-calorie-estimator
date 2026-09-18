@@ -78,6 +78,7 @@ export interface OffSearchResult {
 }
 
 export interface OffProduct {
+  code?: string
   product_name: string
   // The real search-a-licious /search API returns this as a string array (e.g.
   // ["Nutella","Ferrero"], sometimes with empty-string elements) — verified against a live

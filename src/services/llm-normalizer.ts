@@ -4,7 +4,7 @@ import { getCachedClassification, setCachedClassification, normalizeKey as norma
 import { logger } from "../utils/logger.js"
 import { callLlm, type CallOutcome } from "./llm-client.js"
 import type { FoodState, FoodType, FoodForm, FoodPreservation, IngredientClassification } from "../types.js"
-import { inferAttributesFromName, reconcileState } from "./providers/food-semantics.js"
+import { inferAttributesFromName, reconcileAttributes, reconcileState } from "./providers/food-semantics.js"
 
 export interface NormalizerInput {
   index: number
@@ -34,7 +34,7 @@ function resolveAttributes(o: Record<string, unknown>, structuredName: string, c
     : inferred.preservation
   const raw = o.fatPercent
   const fatPercent = typeof raw === "number" && Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : null
-  return { form, preservation, fatPercent }
+  return reconcileAttributes(structuredName, { form, preservation, fatPercent })
 }
 
 function deterministicClassification(input: NormalizerInput): IngredientClassification {
@@ -292,7 +292,7 @@ For each ingredient, return:
 - coreFoodGerman: the CORE food-identity noun within canonicalGerman — the base food itself, with every descriptive MODIFIER (color, origin/style, state/preparation, brand) stripped away. This is the single most important field: a database candidate whose name contains none of this word's tokens will be HARD-REJECTED, no matter how well it otherwise matches on a shared adjective. Never include a modifier here — only the base noun(s). Examples: "Zwiebel" for "rote Zwiebel" (modifier "rote" excluded), "Gewürzmischung" for "italienische Gewürzmischung" (modifier "italienische" excluded — NOT "italienische Gewürzmischung", NOT "Italian"), "Basilikum" for "getrockneter Basilikum" (modifier "getrocknet" excluded), "Paprika" for "grüne Paprika" (modifier "grüne" excluded), "Brühe" for "Gemüsebrühe" (the compound's head noun — "Gemüse" is the modifier), "Knoblauch" for "Knoblauchzehe"/"Knoblauchpulver" (the food is garlic; "-zehe"/"-pulver" describe the FORM, not a different food). If canonicalGerman IS just the base food with no modifiers (e.g. "Tomate", "Ei", "Salz"), coreFoodGerman equals canonicalGerman. null only if genuinely unclear.
 - form: EXACTLY one of "whole", "ground", "powder", "leaf", "seed", "flakes", "paste", "unknown" — the food's physical form. Use "unknown" unless the given name actually supports a specific form; do NOT infer a form from what a recipe probably means. "Ingwer" alone is "unknown" (it is not automatically the dried ground spice), "Ingwer frisch"/"frischer Ingwer" is "whole", "gemahlener Koriander" is "ground", "Korianderblätter" is "leaf", "Koriandersamen" is "seed", "Knoblauchpulver" is "powder", "Chiliflocken" is "flakes", "Tomatenmark" is "paste".
 - preservation: EXACTLY one of "fresh", "dried", "canned", "frozen", "unknown" — how the food was kept. Again only when the name supports it: "aus der Dose"/"Konserve" is "canned", "getrocknet" is "dried", "frisch" is "fresh", "TK"/"tiefgefroren" is "frozen", otherwise "unknown".
-- fatPercent: the fat content in g/100 g when the name states one, as a NUMBER ("Kochsahne 15%" -> 15, "Schlagsahne 30 % Fett" -> 30, "Milch 3,5%" -> 3.5), otherwise null. Never guess a typical value for a food that does not state one.
+- fatPercent: the fat content in g/100 g when the name states one, as a NUMBER ("Kochsahne 15%" -> 15, "Schlagsahne 30 % Fett" -> 30, "Milch 3,5%" -> 3.5), otherwise null. Fat in dry matter ("Fett i. Tr.", "F.i.T.", "fat in dry matter") is NOT g/100 g: return null and preserve the grade in the canonical names. Never guess a typical value for a food that does not state one.
 - coreFoodEnglish: the same core identity in English, following the identical rule — e.g. "onion", "seasoning" (NOT "Italian seasoning"), "basil", "bell pepper", "broth", "garlic". null only if genuinely unclear.
 
 foodType definitions:
@@ -447,7 +447,7 @@ async function classifyWithLlm(inputs: NormalizerInput[]): Promise<IngredientCla
  * part of the cache key, so a change here retires stored interpretations instead of silently
  * serving ones the current classifier would no longer produce.
  */
-const CLASSIFICATION_PROMPT_VERSION = "1"
+const CLASSIFICATION_PROMPT_VERSION = "2"
 
 /** Bumped for a change in the stored VALUE's shape, independently of the prompt. */
 const CLASSIFICATION_CACHE_VERSION = "c1"

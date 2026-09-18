@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterEach } from "vitest"
 import fs from "node:fs"
 import path from "node:path"
+import os from "node:os"
 import { fileURLToPath } from "node:url"
 import initSqlJs from "sql.js"
 import { config } from "../../src/config.js"
@@ -178,7 +179,7 @@ describe("the provider serves the bundled database", () => {
     db.run("CREATE TABLE usda_foods (fdc_id INTEGER PRIMARY KEY, data_type TEXT, description TEXT, description_normalized TEXT, category TEXT, energy_nutrient_id INTEGER, kcal REAL, protein REAL, carbs REAL, fat REAL, saturated_fat REAL, trans_fat REAL, fiber REAL, sugar REAL, sodium REAL, cholesterol REAL)")
     db.run("CREATE TABLE usda_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     db.run("INSERT INTO usda_meta VALUES ('schema_version', '999')")
-    const dir = fs.mkdtempSync(path.join(REPO, "..", "usda-bad-"))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "usda-bad-"))
     const file = path.join(dir, "bad.sqlite")
     fs.writeFileSync(file, Buffer.from(db.export()))
     db.close()
@@ -328,14 +329,14 @@ describe("cached provenance round-trips for usda-local", () => {
     const first = await usdaLocalProvider.lookup(q)
     expect(first?.providerId).toBe("111")
     expect(getCachedProviderMatch("usda-local",
-      buildQueryKey("v3/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=versioncheck food", null))?.providerId).toBe("111")
+      buildQueryKey("v4/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=versioncheck food", null))?.providerId).toBe("111")
 
     // The same query text under a DIFFERENT core classification is a different question, and must
     // not be answered from the row above. Reconciling a production discrepancy showed why: the
     // core both gates the match and sets its confidence, so a match found under one core was
     // being replayed, at its stored confidence, for a lookup whose core could not have produced it.
     expect(getCachedProviderMatch("usda-local",
-      buildQueryKey("v3/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=", null))).toBeUndefined()
+      buildQueryKey("v4/1:Versioncheck food|unknown|generic|unknown/unknown/-|core=", null))).toBeUndefined()
   })
 })
 

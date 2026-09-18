@@ -323,3 +323,74 @@ describe("OffProvider — an incompatible cached entry is a true cache miss, not
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 })
+
+describe("product audit regressions", () => {
+  it("requests and preserves the barcode instead of using the product name as a record ID", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hits: [{
+      code: "audit-barcode", product_name: "Audit protein powder", brands: ["AuditBrand"],
+      nutriments: { "energy-kcal_100g": 380, "fat_100g": 5 },
+    }] })))
+    const match = await new OffProvider().lookup(providerQuery({
+      foodName: "Audit protein powder", brand: "AuditBrand", route: "branded", coreFoodEnglish: "protein powder",
+    }))
+    expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get("fields")?.split(",")).toContain("code")
+    expect(match).toMatchObject({ providerId: "audit-barcode", productName: "Audit protein powder" })
+  })
+
+  it("does not fabricate a record ID when OFF omitted the barcode", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([{ product_name: "Barcode missing audit", nutriments: MILK_NUTRIMENTS }]))
+    expect((await new OffProvider().lookup(query("Barcode missing audit")))?.providerId).toBeNull()
+  })
+
+  it("checks measured fat on ordinary OFF search, not just the judge proxy", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([
+      { product_name: "Audit cooking cream 7%", brands: "AuditBrand", nutriments: { "energy-kcal_100g": 300, "fat_100g": 30 } },
+      { product_name: "Audit cooking cream", brands: "AuditBrand", nutriments: { "energy-kcal_100g": 110, "fat_100g": 7 } },
+    ]))
+    const match = await new OffProvider().lookup(providerQuery({
+      foodName: "Audit cooking cream 7%", brand: "AuditBrand", route: "branded",
+      attributes: { form: "unknown", preservation: "unknown", fatPercent: 7 },
+    }))
+    expect(match?.nutrients.fatPer100g).toBe(7)
+  })
+
+  it.each(["Protein powder", "Hoisin sauce", "Spice paste for vegetable broth"])("%s does not borrow arbitrary branded nutrition", async (foodName) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([
+      { product_name: foodName, brands: "UnspecifiedBrand", nutriments: MILK_NUTRIMENTS },
+    ]))
+    expect(await new OffProvider().lookup(providerQuery({ foodName, route: "generic", coreFoodEnglish: foodName }))).toBeNull()
+  })
+})
+
+it("an exact evidenced branded label identifies the product even without the English core", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hits: [
+    { code: "3073781138634", product_name: "Leerdammer Original", brands: ["Leerdammer"], nutriments: { "energy-kcal_100g": 352, "fat_100g": 27 } },
+    { code: "4388860276916", product_name: "Leerdammer Leger", brands: ["Leerdammer"], nutriments: { "energy-kcal_100g": 262, "fat_100g": 17 } },
+  ] })))
+  const q = providerQuery({
+    foodName: "Leerdammer Leger", structuredName: "Leerdammer Leger", brand: "Leerdammer", route: "branded", coreFoodEnglish: "cheese",
+  })
+  const provider = new OffProvider()
+  expect(await provider.lookup(q)).toMatchObject({ providerId: "4388860276916", productName: "Leerdammer Leger" })
+  expect(await provider.lookup(q)).toMatchObject({ providerId: "4388860276916" })
+  expect(fetchMock).toHaveBeenCalledOnce()
+})
+
+it("an exact branded-name match cannot bypass the measured-fat gate", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([
+    { product_name: "ExactBrand cream 7%", brands: "ExactBrand", nutriments: { "energy-kcal_100g": 300, "fat_100g": 30 } },
+  ]))
+  expect(await new OffProvider().lookup(providerQuery({
+    foodName: "cooking cream", structuredName: "ExactBrand cream 7%", brand: "ExactBrand", route: "branded", coreFoodEnglish: "cream",
+    attributes: { form: "unknown", preservation: "unknown", fatPercent: 7 },
+  }))).toBeNull()
+})
+
+it("a different branded variant cannot exploit the exact-name exception", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(hitsResponse([
+    { product_name: "Leerdammer Original", brands: "Leerdammer", nutriments: { "energy-kcal_100g": 352 } },
+  ]))
+  expect(await new OffProvider().lookup(providerQuery({
+    foodName: "Leerdammer Leger variant control", structuredName: "Leerdammer Leger", brand: "Leerdammer", route: "branded", coreFoodEnglish: "cheese",
+  }))).toBeNull()
+})

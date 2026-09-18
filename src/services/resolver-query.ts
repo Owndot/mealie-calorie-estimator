@@ -4,6 +4,7 @@ import type { ProviderQuery } from "./providers/types.js"
 import { lookupVocabulary } from "./vocabulary/recipe-vocabulary.js"
 import { coreIdentityConflict } from "./providers/ranking.js"
 import type { VocabularyMatch } from "./vocabulary/types.js"
+import { reconcileAttributes } from "./providers/food-semantics.js"
 
 /**
  * Turns one classified ingredient into the query the resolver actually receives.
@@ -51,7 +52,7 @@ export function buildResolverQuery(
   const foodType = classification?.foodType ?? "unknown"
   const coreFoodGerman = classification?.coreFoodGerman ?? null
   const coreFoodEnglish = classification?.coreFoodEnglish ?? null
-  const classifierAttributes = classification?.attributes ?? UNKNOWN_ATTRIBUTES
+  const classifierAttributes = reconcileAttributes(structuredName, classification?.attributes ?? UNKNOWN_ATTRIBUTES)
 
   // A vocabulary row carries two different KINDS of thing, and they get different precedence.
   //

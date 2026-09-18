@@ -23,7 +23,7 @@ Mealie webhook
 | 3 | `bls` | a German identity matches BLS 4.0 |
 | 4 | `usda-local` | a generic identity matches Foundation / SR Legacy |
 | 5 | `off` | a branded product matches, or a verified proxy is justified |
-| 6 | `llm-nutrient` | nothing else could answer |
+| 6 | `llm-nutrient` | nothing else could answer, and `LLM_ENABLED` + API key + `LLM_NUTRIENT_ENABLED` allow generation |
 
 Your own recipes come first because a homemade paste is the one food no public database can know.
 Overrides come second — after your recipes, before anything automatic — because a recipe is *live*
@@ -109,14 +109,17 @@ attributes the phrase states, `spelling_variant` is a misspelling someone actual
 
 A `preferred` target names a provider and record id — never copied nutrients. It is re-loaded live,
 sanity-checked, and checked using existing state, form, preservation, measured fat and food-type
-conflict rules. A supported core in the record's language must match (German compound rules for
-BLS, English token rules for USDA); stated modifier families must not go unmet. Failure drops the
+conflict rules. A reviewed pointer supplies the identity link; it is not re-derived from the classifier's
+free-text core. Stated modifier families and explicit identity conflicts must still pass. Failure drops the
 preference and normal resolution continues. Recipes and user overrides retain priority, as does
 OFF on the branded route.
 
-A genuine classifier result (`llmClassified`, or an existing core in either language) makes the
-vocabulary observation-only: it cannot add identity, attributes, state, ambiguity gates or a
-preferred target. This includes a successful classifier that deliberately left its core unknown.
+A genuine classifier result (`llmClassified`, or an existing core in either language) suppresses
+vocabulary enrichment of identity, attributes and state. Reviewed preferred targets and ambiguity
+assertions remain active. A classifier that renames the food can invalidate a preference, while
+a curated ambiguity guard still stands. Explicit form and preservation words in the original
+ingredient remain authoritative over classifier attributes. Cheese fat in dry matter is a grade,
+not grams of fat per 100 g; conflicting named grades are rejected separately.
 
 Vocabulary attributes accept only `state` (`raw`, `cooked`, `dried`, `unknown`), `form` and
 `preservation` from the existing runtime enums, and finite `fatPercent` in [0, 100] or null.
@@ -146,10 +149,16 @@ Tomaten in Öl), `type` (Mehl Type 405), `colour` (rote Paprika and Spitzpaprika
 targets and any existing name-based checks, not invented semantic axes. `state: roasted` for
 gerösteter Sesam became `cooked`, the runtime's existing preparation class for roasting; the
 preferred Sesam record itself has unknown state, so it does not independently verify roasting.
-Crème fraîche's canonical identity uses the target's spelling `Creme fraiche` so the existing core
-gate can verify it without changing accent normalization or adding another alias.
+Crème fraîche's canonical identity uses the target's spelling `Creme fraiche`, keeping ordinary
+retrieval compatible without changing accent normalization or adding another alias.
 
-Sized by measurement. The 84 entries are the terms a 22-recipe corpus showed resolving wrongly or
-not at all. An independent 117-recipe corpus matched only 10% of its ingredient occurrences against
+Sized by measurement. The original 84 entries were terms a 22-recipe corpus showed resolving wrongly or
+not at all. The production audit adds 12 reviewed aliases; see [INGREDIENT-RESOLUTION-AUDIT.md](INGREDIENT-RESOLUTION-AUDIT.md). An independent 117-recipe corpus matched only 10% of its ingredient occurrences against
 these aliases, so this is a mechanism to extend one measured failure at a time, not a vocabulary
 project.
+
+Ordinary OFF search retains the product barcode as its provider ID and checks measured fat. An
+exact full branded ingredient name may identify a label that omits its translated generic core
+(e.g. a cheese label without the word "cheese"). This requires an explicit brand in the ingredient,
+keeps state/form/type/fat gates, and does not permit a different product variant or arbitrary brand
+to substitute for a generic ingredient. The full structured name participates in its cache key.
