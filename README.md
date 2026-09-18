@@ -38,6 +38,64 @@ Some ambiguity cannot be resolved honestly at all. Asked which of four genuine l
 recipe means, the right machine answer is "I don't know". **User-confirmed overrides** exist for
 exactly that: you choose the real record once, and the engine remembers it.
 
+## Product modes
+
+The engine runs in three configurations. Nutrient values always come from a real database record
+whenever one is selected — the mode changes how well ingredients are *understood*, not where the
+numbers come from.
+
+### Deterministic — no API key required
+
+Runs entirely on the bundled data. No LLM, no external AI service, nothing to sign up for, fully
+self-hostable and offline apart from Open Food Facts lookups for branded products.
+
+- BLS 4.0, USDA and Open Food Facts remain the nutrient sources.
+- The [Recipe Vocabulary](#recipe-vocabulary) covers known German and English language gaps —
+  "Kurkuma" reaching the turmeric record, "Petersilie" meaning the leaf rather than the root.
+- Resolution is deliberately conservative: where identity cannot be established safely the
+  ingredient is left unresolved rather than matched to a plausible but different food. An
+  ingredient you can see was skipped is recoverable; a confidently wrong one is not.
+
+### AI-assisted — recommended for best matching accuracy
+
+Optional. Set `LLM_ENABLED=true` with an API key for any OpenAI-compatible endpoint.
+
+An LLM assists with *interpretation*, not with arithmetic: normalizing and translating ingredient
+names, reading preparation states, and choosing between database records retrieval already found.
+It does not normally replace a database record — when a record is selected, that record is still
+the nutrient source. This handles free-text ingredient names, unusual phrasing and ambiguous
+matches noticeably better than deterministic mode.
+
+### LLM nutrient estimation — optional last resort
+
+Distinct from AI-assisted *matching*. When no database record can be found for an ingredient at
+all, the engine may generate an estimated nutrient value rather than leave the recipe incomplete.
+
+Those values are **generated, not measured**, and stay identifiable: the ingredient is recorded as
+`llm-nutrient`, and the recipe reports its evidence as `estimated` or `mixed` with the share of
+calories that were generated. See [Automatic tagging](#automatic-tagging) and the provenance
+extras.
+
+## Recipe Vocabulary
+
+```
+ingredient -> normalization -> recipe vocabulary -> resolver -> BLS / USDA / OFF
+```
+
+A small curated map from what people write in recipes to what the databases call it, used before
+the resolver runs.
+
+- **Curated and sparse.** It is not an attempt to enumerate food — it exists to prevent known
+  identity failures, and each entry was added because a real recipe corpus showed that term
+  resolving wrongly or not at all.
+- **Language-aware.** Separate German and English vocabularies.
+- **Exact matching in 1.2.** A term either matches a curated entry or continues through the normal
+  resolver unchanged; there is no fuzzy or typo matching yet.
+- **It records uncertainty too.** Genuinely ambiguous words such as `Bohnen` are marked as such, so
+  the engine declines to guess instead of picking whichever bean sorts first.
+
+Unknown vocabulary behaves exactly as it did before.
+
 ## Features
 
 **Automatic, once connected**
@@ -60,8 +118,9 @@ exactly that: you choose the real record once, and the engine remembers it.
 - **Backfill** every existing recipe in one request.
 - **Your own Mealie recipes as a nutrition source** — a homemade curry paste resolves from the
   recipe you already wrote (on by default).
-- **LLM assistance** for normalizing ingredient names and estimating awkward units — off by
-  default, and never used to produce a nutrient value when a real record exists.
+- **LLM assistance** for normalizing ingredient names, reading preparation states and choosing
+  between real records — off by default, recommended for best matching accuracy, and never used to
+  produce a nutrient value when a real record exists. See [Product modes](#product-modes).
 - **User-confirmed overrides** for genuinely ambiguous foods: bind one ingredient to one real
   record, once.
 
@@ -97,6 +156,10 @@ Consulted in this order. Each is silent unless it has something for the ingredie
 | 4 | **USDA FoodData Central** | Foundation + SR Legacy, 8,262 generic records, bundled | generic foods, especially where BLS has no entry |
 | 5 | **Open Food Facts** | branded retail products, queried live | branded ingredients, and as a *verified proxy* for a property no generic database carries |
 | 6 | **LLM estimate** | a generated value | last resort, clearly marked as such |
+
+The [Recipe Vocabulary](#recipe-vocabulary) sits *before* this chain. It supplies identity, never
+nutrients: it can tell the resolver that "Kurkuma" means turmeric, and the record still comes from
+the table above.
 
 Both reference databases are **bundled in the image**: no API key, no network call, no rate limit,
 and the same data every time. Open Food Facts is used selectively rather than as a general
@@ -226,7 +289,7 @@ variable is documented in [`.env.example`](.env.example).
 | `MEALIE_API_TOKEN` | **yes** | a dedicated service-account token |
 | `OFF_LANGUAGE` | no | Open Food Facts search language, default `de` |
 | `ESTIMATE_STRATEGY` | no | `all` (default) or `tagged` — see [Optional and advanced](#optional-and-advanced) |
-| `LLM_ENABLED`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | no | any OpenAI-compatible endpoint; **off** by default |
+| `LLM_ENABLED`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | no | any OpenAI-compatible endpoint; **off** by default. Leave unset to run deterministically with no API key — see [Product modes](#product-modes) |
 | `LLM_JUDGE_ENABLED` | no | semantic judge, **off** by default |
 | `OVERRIDE_ADMIN_TOKEN` | no | enables the override API; unset means those routes do not exist |
 | `CACHE_DB_PATH`, `OVERRIDES_DB_PATH` | no | default to `data/` |
@@ -344,6 +407,10 @@ Set `LOG_LEVEL=debug` for per-ingredient resolution detail.
 ## Limitations
 
 - German is the validated language; English is best-effort (see above)
+- Deterministic and AI-assisted modes do not match equally well: deterministic mode resolves fewer
+  ingredients and declines more often by design. No LLM is required to run the engine
+- Recipe Vocabulary matching is exact in 1.2 — fuzzy/typo matching and composite-food handling
+  (spice blends, prepared pastes) are not included
 - Open Food Facts is live data: products appear and disappear, and search results drift
 - LLM-estimated ingredients are marked `llm-nutrient` and are estimates, not measurements
 - Unknown is not zero — unresolved ingredients are withheld or flagged, never silently counted as 0
@@ -354,7 +421,7 @@ Set `LOG_LEVEL=debug` for per-ingredient resolution detail.
 
 | Document | Covers |
 |---|---|
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | pipeline, provider order, semantic gates, provenance |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | pipeline, provider order, semantic gates, provenance, recipe vocabulary |
 | [`docs/OVERRIDES.md`](docs/OVERRIDES.md) | the override API in full, key design, backups |
 | [`docs/CACHING.md`](docs/CACHING.md) | cache layers, TTLs, invalidation |
 | [`docs/RELEASING.md`](docs/RELEASING.md) | how a version is cut |
