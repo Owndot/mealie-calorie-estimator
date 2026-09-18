@@ -31,7 +31,15 @@ export default defineConfig({
     // 7,140 names. That fits locally and did not on a slower CI runner, which failed the build on
     // timing rather than on any assertion. Raised rather than mocked — these tests are valuable
     // precisely because they run against the real data.
-    testTimeout: 20000,
+    //
+    // Raised again 20s -> 40s once 20s stopped having usable margin. The evidence was a control
+    // run of CI on UNCHANGED main: "sums contributions exactly and divides by servings exactly
+    // once" — one `it` that resolves three whole recipes — took 9.5s one morning and 16.4s the
+    // same afternoon, 82% of the budget, with total suite time going 213s -> 374s. Nothing in the
+    // repository changed between those runs; the hosted runners were simply ~1.75x slower. A limit
+    // that main itself clears only by a few seconds fails whichever branch happens to run on a
+    // slow machine, which is a coin toss reported as a test failure.
+    testTimeout: 40000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
