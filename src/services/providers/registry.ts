@@ -49,10 +49,16 @@ function buildBrandedProviders(): NutrientProvider[] {
  * (each provider checks its own cache first internally). The LLM nutrient estimate is always
  * last, on both routes, and only included when LLM_ENABLED + LLM_API_KEY are set — direct LLM
  * nutrient estimation is the absolute last resort, never a substitute for a real database match.
+ *
+ * LLM_NUTRIENT_ENABLED can switch that last tier off on its own, leaving classification,
+ * translation, gram estimation, reranking and the judge untouched: those end on a record some
+ * database publishes, this one does not. With it false the chain simply ends after OFF, and an
+ * ingredient nothing could resolve stays unresolved — which is a visible gap rather than a
+ * `complete` recipe carrying invented calories.
  */
 export function getProviderChain(route: FoodRoute): NutrientProvider[] {
   const chain = route === "branded" ? buildBrandedProviders() : buildGenericProviders()
-  if (config.llm.enabled && config.llm.apiKey) {
+  if (config.llm.enabled && config.llm.apiKey && config.llm.nutrientEnabled) {
     return [...chain, llmNutrientProvider]
   }
   return chain

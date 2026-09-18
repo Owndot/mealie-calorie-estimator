@@ -75,6 +75,24 @@ export const config = {
     apiKey: process.env.LLM_API_KEY || "",
     model: process.env.LLM_MODEL || "mistral-small-latest",
     rateLimit: parseInt(process.env.LLM_RATE_LIMIT || "30", 10),
+
+    /**
+     * Direct per-100 g nutrient GENERATION — the llm-nutrient provider, last on both routes.
+     *
+     * Its own switch because it is the one LLM capability that invents numbers rather than
+     * choosing among numbers somebody else measured. Classification, translation, gram estimation,
+     * reranking and the judge all end on a record a database publishes; this ends on a value with
+     * no source, reported at confidence 0.35 with providerId and productName null.
+     *
+     * That difference matters for coverage, not just provenance: a generated value makes an
+     * ingredient count as resolved, so an unresolved ingredient becomes a `complete` recipe whose
+     * calories are partly invented. A deployment that would rather see the gap can now say so
+     * without giving up the model's help everywhere else.
+     *
+     * Defaults TRUE, so LLM_ENABLED alone behaves exactly as it did before this flag existed.
+     * Still requires LLM_ENABLED + LLM_API_KEY, like every other LLM capability.
+     */
+    nutrientEnabled: (process.env.LLM_NUTRIENT_ENABLED || "true").toLowerCase() === "true",
     // Candidate reranking: the LLM as a semantic judge between DATABASE records that retrieval
     // already found, never as a source of nutrition. Requires LLM_ENABLED + LLM_API_KEY as well;
     // this flag only controls whether the reranking step is offered at all.
