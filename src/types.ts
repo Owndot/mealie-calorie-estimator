@@ -102,6 +102,8 @@ export interface OffNutriments {
   "sugars_100g": number | null
   "sodium_100g": number | null
   "cholesterol_100g": number | null
+  /** Sugar alcohols. Reported by OFF for sweeteners and "sugar-free" products; absent elsewhere. */
+  "polyols_100g"?: number | null
 }
 
 export interface AppriseWebhookPayload {
@@ -133,6 +135,17 @@ export interface NutrientSet {
   sugarPer100g: number | null
   sodiumPer100g: number | null
   cholesterolPer100g: number | null
+  /**
+   * Sugar alcohols, in g/100 g, when the source reports them separately — Open Food Facts does,
+   * as `polyols_100g`; BLS and USDA do not, and leave this absent.
+   *
+   * Never written to Mealie: it exists so the energy sanity check can tell a food whose carbohydrate
+   * is ordinary sugar from one whose carbohydrate is erythritol. The two carry the same grams and
+   * wildly different calories, and assuming 4 kcal/g for both rejected a genuine 0 kcal record.
+   *
+   * Optional rather than nullable so the providers that cannot report it need no change.
+   */
+  polyolsPer100g?: number | null
 }
 
 /** Preparation state of a resolved food, used for provider matching only — never derived from originalText. */

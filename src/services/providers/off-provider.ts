@@ -89,6 +89,9 @@ function extractNutrients(n: OffNutriments): NutrientSet {
     kcalPer100g: n["energy-kcal_100g"] ?? null,
     proteinPer100g: n["proteins_100g"] ?? null,
     carbsPer100g: n["carbohydrates_100g"] ?? null,
+    // OFF declares sugar alcohols separately; the energy sanity check needs them to tell 100 g of
+    // sugar from 100 g of erythritol.
+    polyolsPer100g: n["polyols_100g"] ?? null,
     fatPer100g: fat,
     saturatedFatPer100g: saturated,
     transFatPer100g: trans,
