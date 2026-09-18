@@ -266,7 +266,7 @@ export function germanStem(token: string): string {
 }
 
 /** Regular plural/inflection endings a German noun picks up: Erbse -> Erbsen, Tomate -> Tomaten. */
-const PLURAL_ENDINGS = ["n", "en", "e", "s"]
+export const PLURAL_ENDINGS = ["n", "en", "e", "s"]
 
 /**
  * Minimum length of the SHORTER form before a plural ending is allowed to join two words.

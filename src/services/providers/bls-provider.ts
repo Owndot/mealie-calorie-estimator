@@ -9,7 +9,7 @@ import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markPro
 import type { NutrientSet, ProviderMatch, FoodState, FoodType, FoodAttributes } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS, specificityConflict, sharesFullQueryIdentity, unmetModifierPenalty, UNMET_MODIFIER_WEIGHT } from "./ranking.js"
-import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches, germanStem, standalonePlantPart, unmetModifierFamilies, type PlantPart } from "./food-semantics.js"
+import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches, germanStem, standalonePlantPart, unmetModifierFamilies, PLURAL_ENDINGS, type PlantPart } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
 import {
@@ -692,12 +692,54 @@ function pickBestCandidate(sorted: ScoredRecord[], queryState: FoodState, minSco
  * matched "Salzstangen"), so these records are reachable only as rerank candidates, and only after
  * the same hard gates every other candidate passes.
  */
+/**
+ * Below this a DERIVED needle is too short to be evidence rather than accident — "Minze" would
+ * otherwise yield "minz" and pull in every Pfefferminz* product. The BASE needle is deliberately
+ * exempt: four-letter cores like "Mehl" and "Salz" are real foods and must keep the recall they
+ * already have.
+ */
+const MIN_DERIVED_NEEDLE_LENGTH = 5
+
+/**
+ * The needles recall searches for: the core as written, plus the singular/plural forms of it.
+ *
+ * Recall matched by raw substring containment on the core's own surface form, and German plural
+ * cores therefore could not reach BLS's singular compounds — the table stores "Kidneybohne reif",
+ * so a query core of "Bohnen" missed the entire kidney/garden/lima/mung family and the recall pool
+ * for beans was 46 records of which 37 were composite dishes and none was a plain bean. The same
+ * held for "Zwiebeln" -> "Speisezwiebel", "Linsen" -> "Linse reif", "Kichererbsen" -> "Kichererbse".
+ *
+ * The morphology tolerance already existed one layer up: germanStem()'s own comment records that
+ * "Kidneybohnen" and "Kidneybohne" are the same food. Scoring knew it; retrieval did not, and
+ * retrieval runs first, so no amount of scoring or reranking could reach what was never offered.
+ *
+ * A candidate form is only accepted when germanTokenMatches() — the same rule the scorer uses —
+ * agrees it is the same word, so this invents no new morphology. Additive by construction: the
+ * base needle always survives, so the pool can only grow, never shrink.
+ */
+function recallNeedles(core: string): string[] {
+  const base = normalizeGermanText(core).replace(/[^\p{L}\p{N}]/gu, "")
+  if (base.length < MIN_RECALL_CORE_LENGTH) return []
+
+  const derived = new Set<string>()
+  for (const ending of PLURAL_ENDINGS) {
+    if (base.endsWith(ending) && base.length - ending.length >= MIN_DERIVED_NEEDLE_LENGTH) {
+      derived.add(base.slice(0, -ending.length))
+    }
+    derived.add(base + ending)
+  }
+  return [base, ...[...derived].filter((v) =>
+    v !== base && v.length >= MIN_DERIVED_NEEDLE_LENGTH && germanTokenMatches(v, base))]
+}
+
 function recallCandidates(query: ProviderQuery, data: BlsData, attrs: FoodAttributes): ScoredRecord[] {
   const core = (query.coreFoodGerman ?? query.structuredName ?? "").trim()
-  const needle = normalizeGermanText(core).replace(/[^\p{L}\p{N}]/gu, "")
-  if (needle.length < MIN_RECALL_CORE_LENGTH) return []
+  const needles = recallNeedles(core)
+  if (needles.length === 0) return []
 
-  const hits = data.records.filter((r) => r.nameDeNormalized.includes(needle))
+  // The cap is still measured on the same thing it always was: raw substring hits, before scoring
+  // and before the gates. Widening the needles cannot be allowed to push a working core over it.
+  const hits = data.records.filter((r) => needles.some((n) => r.nameDeNormalized.includes(n)))
   if (hits.length === 0 || hits.length > MAX_RECALL_HITS) return []
 
   return scoreCandidates(
