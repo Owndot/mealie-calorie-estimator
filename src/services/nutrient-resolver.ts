@@ -1,7 +1,7 @@
 import { getProviderChain } from "./providers/registry.js"
 import { config } from "../config.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
-import { coreIdentityConflict, foodTypeConflict } from "./providers/ranking.js"
+import { foodTypeConflict } from "./providers/ranking.js"
 import { inferAttributesFromName, formConflict, preservationConflict, freshVsProcessedFormConflict, fatConflict, unmetModifierFamilies } from "./providers/food-semantics.js"
 import { poolFingerprint } from "./providers/judge/candidate-pool.js"
 import { buildShortlist } from "./providers/judge/shortlist.js"
@@ -134,11 +134,22 @@ async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedN
   }
   const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
   const recordAttrs = inferAttributesFromName(record.name)
-  // Core names are language-specific. A German alias pointing to USDA is a reviewed translation;
-  // without an English core the existing identity gate cannot independently verify that link.
-  const core = preferred.provider === "bls" ? query.coreFoodGerman : query.coreFoodEnglish
+  // Only REAL contradicting evidence may veto a reviewed pointer: an attribute the ingredient
+  // actually states and the record actually denies.
+  //
+  // coreIdentityConflict deliberately does NOT participate. It exists to stop fuzzy RETRIEVAL
+  // wandering off the queried food — it asks "does this candidate's name contain the core I
+  // searched for?", which is the right question for a record the scorer found and the wrong one
+  // for a record a human chose. A curated pointer IS the assertion that this alias means this
+  // record, so re-deriving that link from the classifier's free-text core only lets the classifier
+  // overrule the reviewer. Measured: "Basmatireis" -> BLS C352000 "Reis poliert, roh" is a
+  // reviewed mapping, and with a classifier core of "Basmatireis" the compound gate rejected it
+  // (the cultivar is absent from the record name) while all six other checks passed — so enabling
+  // AI dropped a 351 kcal database record in favour of a fabricated estimate.
+  //
+  // Unchanged everywhere else: the gate still guards every ordinary provider match. This is
+  // narrowly about validating a pointer a human already reviewed.
   const conflict = foodTypeConflict(query.foodType, record.foodType)
-    || coreIdentityConflict(core, record.name, preferred.provider === "bls" ? "compound" : "token")
     || formConflict(attrs.form, recordAttrs.form)
     || freshVsProcessedFormConflict(attrs.preservation, recordAttrs.form)
     || preservationConflict(attrs.preservation, recordAttrs.preservation)

@@ -274,13 +274,24 @@ describe("classifier precedence and decision provenance", () => {
     classified({ coreFoodGerman: null, coreFoodEnglish: null }),
     classified({ llmClassified: false }),
     classified({ llmClassified: false, coreFoodGerman: null }),
-  ])("does not fill any semantics when classifier support exists: %j", (classification) => {
+  ])("does not fill ENRICHMENT when classifier support exists: %j", (classification) => {
+    // Enrichment only — identity text, attributes, state. The classifier owns these and the
+    // vocabulary must not overwrite them. Assertions are a different thing entirely; see below.
     const built = buildResolverQuery("Cooked Puy Lentils", classification)
     expect(built.query.state).toBe("unknown")
     expect(built.query.coreFoodGerman).toBe(classification.coreFoodGerman)
     expect(built.query.vocabulary).toMatchObject({ semanticsApplied: false })
-    expect(built.query.vocabulary?.preferred).toBeUndefined()
-    expect(buildResolverQuery("Bohnen", classification).query.vocabulary?.ambiguous).toBeUndefined()
+  })
+
+  it.each([
+    classified({ coreFoodGerman: null, coreFoodEnglish: null }),
+    classified({ llmClassified: false }),
+    classified({ llmClassified: false, coreFoodGerman: null }),
+    classified({ canonicalGerman: "Bohnen", canonicalEnglish: "beans", coreFoodGerman: "Bohnen", coreFoodEnglish: "beans" }),
+  ])("keeps the ambiguity ASSERTION whatever the classifier produced: %j", (classification) => {
+    // The inverse of the case above, and the reason the two are now separate tests: a curated
+    // refusal to guess is not enrichment and is never filled in by a classifier's confidence.
+    expect(buildResolverQuery("Bohnen", classification).query.vocabulary?.ambiguous).toBe(true)
   })
 
   it.each(["mealie-recipe", "food-override"])("%s wins before a vocabulary preference, and provenance says so", async (provider) => {
@@ -328,7 +339,11 @@ describe("preferred target compatibility uses the existing semantic gates", () =
     { name: "preservation", query: { attributes: { ...UNKNOWN_ATTRIBUTES, preservation: "fresh" } }, recordName: "Vollmilch getrocknet" },
     { name: "fresh versus processed form", query: { attributes: { ...UNKNOWN_ATTRIBUTES, preservation: "fresh" } }, recordName: "Vollmilch Pulver" },
     { name: "measured fat", query: { attributes: { ...UNKNOWN_ATTRIBUTES, fatPercent: 20 } } },
-    { name: "German core", query: { coreFoodGerman: "Gerste" } },
+    // "German core" was here. It is deliberately gone: coreIdentityConflict no longer validates a
+    // curated pointer, because a classifier's free-text core is not evidence about a reviewed
+    // mapping — it was what dropped "Basmatireis" -> C352000 whenever AI was enabled. The
+    // classifier can still reject a pointer by RENAMING the food; that is covered separately by
+    // "a classifier's barley interpretation of Mehl cannot select the wheat default".
     { name: "food type", query: { foodType: "simple" }, recordType: "composite_dish" },
     { name: "qualitative modifier shortfall", query: { structuredName: "fettarme Milch" } },
   ]
@@ -342,11 +357,20 @@ describe("preferred target compatibility uses the existing semantic gates", () =
     expect(next).toHaveBeenCalledOnce()
   })
 
-  it("enforces English core identity on a USDA target", async () => {
+  it("a mismatched English core alone no longer rejects a USDA target", async () => {
+    // Was "enforces English core identity on a USDA target". The same change as the removed
+    // "German core" case, on the USDA side: a core the classifier invented does not get to
+    // overrule a reviewed pointer. "Ei" -> USDA 171287 is that pointer, and it now stands.
+    // What still rejects it is real contradicting evidence — state, form, preservation, fat,
+    // food type, modifier shortfall — each covered by the cases above, plus a rename by the
+    // classifier, covered by the Mehl test.
     const built = buildResolverQuery("Ei", undefined)
     built.query.coreFoodEnglish = "beef"
-    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "usda-local", lookup: vi.fn().mockResolvedValue(null) }])
-    expect(await resolveNutrients(built.query, built.route)).toBeNull()
+    const next = vi.fn().mockResolvedValue(null)
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "usda-local", lookup: next }])
+    const resolved = await resolveNutrients(built.query, built.route)
+    expect(resolved?.match.providerId).toBe("171287")
+    expect(resolved?.match.matchReason).toMatch(/^recipe-vocabulary:/)
   })
 
   it("checks USDA form and preservation metadata too", async () => {
@@ -375,4 +399,184 @@ it("keeps unknown record metadata permissive rather than claiming verification",
   built.query.attributes = { form: "whole", preservation: "fresh", fatPercent: 3.5 }
   const result = await resolveNutrients(built.query, built.route)
   expect(result?.vocabularyPreferredSelected).toBe(true)
+})
+
+/**
+ * THE PARITY INVARIANT.
+ *
+ * Enabling AI must never make a curated ingredient LESS safe. The vocabulary's two assertion
+ * kinds — a reviewed `preferred` pointer and a reviewed `ambiguous` refusal — were both gated on
+ * "did a classifier run", which meant turning the classifier on silently deleted them. Measured
+ * before this was fixed, with the vocabulary loaded and every row intact:
+ *
+ *   Basmatireis    deterministic -> BLS C352000 (351 kcal) | AI -> UNRESOLVED -> fabricated estimate
+ *   Bohnen         deterministic -> withheld (28-344 kcal) | AI -> "Beans, cannellini, dry" at 345
+ *   rote Paprika   deterministic -> G543100 (red)          | AI -> G541100 (green)
+ *
+ * AI may still change the outcome — but only by contributing evidence: a stated state, form,
+ * preservation or fat class that the record contradicts, or by renaming the food outright. A core
+ * it invented for its own retrieval is not evidence about a mapping a human reviewed.
+ */
+describe("curated assertions survive AI classification", () => {
+  const ai = (name: string, english: string, overrides: Partial<IngredientClassification> = {}): IngredientClassification => ({
+    index: 0, canonicalGerman: name, canonicalEnglish: english,
+    coreFoodGerman: name, coreFoodEnglish: english, brand: null, category: null,
+    state: "unknown", attributes: UNKNOWN_ATTRIBUTES, foodType: "simple",
+    route: "generic", llmClassified: true, ...overrides,
+  })
+
+  /** Resolves `name` exactly as production would, with the classifier's answer stubbed. */
+  async function resolveWithClassifier(name: string, classification: IngredientClassification) {
+    vi.spyOn(normalizer, "normalizeIngredients").mockResolvedValue([classification])
+    return resolve(name)
+  }
+
+  it("Basmatireis reaches the curated record in BOTH modes, not a fabricated estimate", async () => {
+    const deterministic = await resolve("Basmatireis")
+    expect(deterministic.id).toBe("C352000")
+    expect(deterministic.product).toBe("Reis poliert, roh")
+
+    // The shape observed in production: the classifier kept the cultivar as the core. The
+    // compound gate then found "Basmatireis" absent from "Reis poliert, roh" and dropped a
+    // reviewed pointer to a 351 kcal record.
+    const cultivar = await resolveWithClassifier("Basmatireis", ai("Basmatireis", "Basmati rice"))
+    expect(cultivar.id, "AI must not be worse than deterministic").toBe("C352000")
+    expect(cultivar.reason).toMatch(/^recipe-vocabulary:/)
+  })
+
+  /**
+   * THE SPELLING INVARIANT — the reason the guard is a semantic check and not string equality.
+   *
+   * The model does not write a food the same way twice. Measured on the recorded corpus it
+   * rewrites canonicalGerman for 6 of 60 ingredients: plurals ("Röstzwiebel" -> "Röstzwiebeln"),
+   * word order ("mageres Rinderhackfleisch" -> "Rinderhackfleisch, mager"), expanded
+   * abbreviations ("Kidneybohnen a. d. Dose" -> "Kidneybohnen aus der Dose"). None of those is a
+   * different food, and none may cost the ingredient its curated record.
+   *
+   * "Basmati-Reis" is the spelling the RECORDED production classification actually uses. Under
+   * plain string inequality it suppressed the pointer and the ingredient landed on C359000 —
+   * PARBOILED rice, a different product at 333 kcal — so the fix was defeated by a hyphen.
+   */
+  it.each([
+    ["Basmatireis", "identical"],
+    ["Basmati-Reis", "hyphenated — the RECORDED production spelling"],
+    ["Basmati Reis", "spaced"],
+    ["Reis", "generalised to the row's own curated identity"],
+    ["Basmati-Reis, roh", "hyphenated with a state word"],
+  ])("Basmatireis keeps the curated target when the model writes it as %j (%s)", async (canonicalGerman) => {
+    const r = await resolveWithClassifier("Basmatireis",
+      ai("Basmatireis", "Basmati rice", { canonicalGerman, coreFoodGerman: "Reis", coreFoodEnglish: "rice", state: "raw", category: "grain" }))
+    expect(r.id, `resolved to ${r.product}`).toBe("C352000")
+    expect(r.reason).toBe("recipe-vocabulary:recipe_default")
+    expect(r.id, "C359000 is parboiled rice — a different product at 333 kcal").not.toBe("C359000")
+    expect(r.kcal).toBe(351)
+  })
+
+  it("uses the exact recorded production classification object", async () => {
+    // Not a convenient synthetic shape: these are the five fields the corpus recorded for
+    // basmati, reproduced verbatim (production-fixtures.ts, KIDNEY_CURRY index 6).
+    const r = await resolveWithClassifier("Basmatireis", ai("Basmatireis", "Basmati rice", {
+      canonicalGerman: "Basmati-Reis", canonicalEnglish: "Basmati rice",
+      coreFoodGerman: "Reis", coreFoodEnglish: "rice", state: "raw", category: "grain",
+    }))
+    expect(r.id).toBe("C352000")
+    expect(r.reason).toBe("recipe-vocabulary:recipe_default")
+    expect(r.vocabulary).toMatchObject({ alias: "Basmatireis", preferredSelected: true })
+  })
+
+  it.each([
+    ["rote Paprika", "Paprika, rot", "bell pepper", "G543100", "G541100", "word order"],
+    ["rote Paprika", "rote Gemüsepaprika", "bell pepper", "G543100", "G541100", "adjective expanded to the curated identity"],
+  ])("%s keeps the RED record when the model writes %j (%s)", async (term, canonicalGerman, en, want, mustNot) => {
+    const r = await resolveWithClassifier(term, ai(term, en, { canonicalGerman, coreFoodGerman: "Paprika", coreFoodEnglish: en }))
+    expect(r.id, `resolved to ${r.product}`).toBe(want)
+    expect(r.id, "the green record is a different vegetable").not.toBe(mustNot)
+  })
+
+  it("Limete keeps curated provenance when the model corrects the spelling", async () => {
+    // The row exists BECAUSE "Limete" is a misspelling, so a classifier writing "Limette" is the
+    // row agreeing with itself — the one rewrite that must never be read as a contradiction.
+    const r = await resolveWithClassifier("Limete", ai("Limete", "lime", { canonicalGerman: "Limette", coreFoodGerman: "Limette" }))
+    expect(r.id).toBe("F602100")
+    expect(r.reason).toBe("recipe-vocabulary:spelling_variant")
+  })
+
+  /**
+   * The other side of the rule. Each of these names a genuinely different food, and each must
+   * send resolution back to the ordinary chain rather than hand over the curated pointer.
+   */
+  it.each([
+    ["Mehl", "Gerstenmehl", "barley flour", "C214100", "barley is not wheat"],
+    ["Milch", "Magermilch", "skim milk", "M111300", "skimmed is not whole milk"],
+    ["Pflanzenöl", "Rapsöl", "rapeseed oil", "172370", "rapeseed is not soybean oil"],
+  ])("%s + a classifier reading of %j must NOT select the curated target (%s)", async (term, canonicalGerman, en, mustNot) => {
+    const built = buildResolverQuery(term, ai(term, en, { canonicalGerman, coreFoodGerman: canonicalGerman, coreFoodEnglish: en }))
+    expect(built.query.vocabulary?.preferred, "a renamed food must drop the pointer").toBeUndefined()
+    const r = await resolveWithClassifier(term, ai(term, en, { canonicalGerman, coreFoodGerman: canonicalGerman, coreFoodEnglish: en }))
+    expect(r.id, `resolved to ${r.product}`).not.toBe(mustNot)
+    expect(r.reason ?? "").not.toMatch(/^recipe-vocabulary:/)
+  })
+
+  it("Basmatireis uses the curated mapping rather than reaching the record by accident", async () => {
+    // A good classifier core ("Reis"/"rice") ALSO finds C352000 through ordinary fuzzy matching,
+    // so asserting the id alone would pass even with the pointer still suppressed. The match
+    // REASON is what distinguishes a curated decision from a lucky one.
+    const r = await resolveWithClassifier("Basmatireis", ai("Basmatireis", "Basmati rice", {
+      coreFoodGerman: "Reis", coreFoodEnglish: "rice",
+    }))
+    expect(r.id).toBe("C352000")
+    expect(r.reason).toBe("recipe-vocabulary:recipe_default")
+    expect(r.vocabulary).toMatchObject({ alias: "Basmatireis", preferredSelected: true })
+  })
+
+  it.each([
+    ["Bohnen", "beans", "2644281"],
+    ["Koriander", "coriander", "170922"],
+  ])("%s stays ambiguous under a generic '%s' classification", async (term, english, mustNotBe) => {
+    expect((await resolve(term)).id, `${term} deterministic`).toBeNull()
+    const r = await resolveWithClassifier(term, ai(term, english))
+    expect(r.id, `${term} resolved to ${r.product} with AI on`).toBeNull()
+    expect(r.id).not.toBe(mustNotBe)
+  })
+
+  it("rote Paprika keeps the RED record in both modes", async () => {
+    expect((await resolve("rote Paprika")).id).toBe("G543100")
+    const r = await resolveWithClassifier("rote Paprika", ai("rote Paprika", "red bell pepper"))
+    expect(r.id).toBe("G543100")
+    expect(r.product).toMatch(/rot/)
+    expect(r.id, "the green record is a different vegetable").not.toBe("G541100")
+  })
+
+  it("Limete keeps curated provenance in both modes", async () => {
+    for (const [mode, r] of [
+      ["deterministic", await resolve("Limete")],
+      ["ai", await resolveWithClassifier("Limete", ai("Limete", "lime"))],
+    ] as const) {
+      expect(r.id, mode).toBe("F602100")
+      expect(r.reason, mode).toBe("recipe-vocabulary:spelling_variant")
+    }
+  })
+
+  it("does NOT make curated pointers unconditional: stated state still rejects one", async () => {
+    // The other half of the invariant. "Mehl" prefers C214100; a classifier that states a
+    // preparation the record contradicts must still send resolution back to the chain.
+    const built = buildResolverQuery("Milch", ai("Milch", "milk", { state: "cooked" }))
+    expect(built.query.vocabulary?.preferred).toBeDefined()
+    const record = await bls.loadBlsRecordByCode("M111300")
+    vi.spyOn(bls, "loadBlsRecordByCode").mockResolvedValue({ ...record!, state: "raw" })
+    const next = vi.fn().mockResolvedValue(null)
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "bls", lookup: next }])
+    expect(await resolveNutrients(built.query, built.route)).toBeNull()
+    expect(next, "resolution must continue down the chain").toHaveBeenCalledOnce()
+  })
+
+  it("does NOT make curated pointers unconditional: a renamed food rejects one", async () => {
+    // The classifier read "Mehl" and called the food barley. That is identity evidence, and it
+    // outranks a default written for the bare word — unlike a core it invented for retrieval.
+    const built = buildResolverQuery("Mehl", ai("Mehl", "barley flour", {
+      canonicalGerman: "Gerstenmehl", coreFoodGerman: "Gerstenmehl",
+    }))
+    expect(built.query.vocabulary?.preferred).toBeUndefined()
+    expect(built.query.vocabulary).toMatchObject({ alias: "Mehl", kind: "recipe_default" })
+  })
 })
