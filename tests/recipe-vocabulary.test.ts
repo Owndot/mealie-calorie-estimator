@@ -1,10 +1,18 @@
-import { describe, it, expect, beforeAll } from "vitest"
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest"
 import { initCache } from "../src/utils/cache.js"
 import { estimateRecipe } from "../src/services/estimator.js"
 import {
   lookupVocabulary, narrowsAmbiguousIngredient, vocabularyEntryCount,
 } from "../src/services/vocabulary/recipe-vocabulary.js"
 import { normalizeIdentityText } from "../src/utils/text-normalize.js"
+import { buildResolverQuery } from "../src/services/resolver-query.js"
+import { resolveNutrients } from "../src/services/nutrient-resolver.js"
+import * as normalizer from "../src/services/llm-normalizer.js"
+import * as registry from "../src/services/providers/registry.js"
+import * as bls from "../src/services/providers/bls-provider.js"
+import * as usda from "../src/services/providers/usda-local-provider.js"
+import { UNKNOWN_ATTRIBUTES, type IngredientClassification, type ProviderMatch } from "../src/types.js"
+import type { ProviderQuery } from "../src/services/providers/types.js"
 import type { MealieRecipe } from "../src/types.js"
 
 /**
@@ -44,6 +52,7 @@ async function resolve(name: string) {
 }
 
 beforeAll(async () => { await initCache() })
+afterEach(() => { vi.restoreAllMocks() })
 
 describe("the resource loads and validates", () => {
   it("holds the measured entries and rejects nothing at startup", () => {
@@ -69,6 +78,7 @@ describe("the resource loads and validates", () => {
 describe("measured failures the vocabulary exists to fix", () => {
   const cases: [string, string, number][] = [
     ["Rinderhackfleisch", "U010100", 224],
+    ["Crème fraîche", "M176800", 265],
     ["Petersilie", "G250100", 33],
     ["glatte Petersilie", "G250100", 33],
     ["Mehl", "C214100", 348],
@@ -196,13 +206,13 @@ describe("a preferred record is a hint, never an instruction", () => {
   it("is reported as a vocabulary match rather than as an ordinary lexical one", async () => {
     const r = await resolve("Kurkuma")
     expect(r.reason).toMatch(/^recipe-vocabulary:/)
-    expect(r.vocabulary).toEqual({ alias: "Kurkuma", kind: "synonym" })
+    expect(r.vocabulary).toEqual({ alias: "Kurkuma", kind: "synonym", semanticsApplied: true, preferredSelected: true })
   })
 
   it("a recipe_default is recorded as an assumption, distinguishable from a stated fact", async () => {
     // "Mehl" does not state Type 405; the project chose it. Provenance must not claim otherwise.
-    expect((await resolve("Mehl")).vocabulary).toEqual({ alias: "Mehl", kind: "recipe_default" })
-    expect((await resolve("Tahini")).vocabulary).toEqual({ alias: "Tahini", kind: "synonym" })
+    expect((await resolve("Mehl")).vocabulary).toEqual({ alias: "Mehl", kind: "recipe_default", semanticsApplied: true, preferredSelected: true })
+    expect((await resolve("Tahini")).vocabulary).toEqual({ alias: "Tahini", kind: "synonym", semanticsApplied: true, preferredSelected: true })
   })
 
   it("every preferred target names a database provider, never copied nutrients", async () => {
@@ -232,4 +242,132 @@ describe("Rohrzucker is masked here, but the mechanism is not fixed", () => {
     expect(r.id).toBe("S111000")
     expect(r.reason).toMatch(/^recipe-vocabulary:/)
   })
+})
+
+function classified(overrides: Partial<IngredientClassification> = {}): IngredientClassification {
+  return {
+    index: 0, canonicalGerman: "Gerstenmehl", canonicalEnglish: "barley flour",
+    coreFoodGerman: "Gerstenmehl", coreFoodEnglish: "barley flour", brand: null,
+    category: null, state: "unknown", attributes: UNKNOWN_ATTRIBUTES, foodType: "simple",
+    route: "generic", llmClassified: true, ...overrides,
+  }
+}
+
+describe("classifier precedence and decision provenance", () => {
+  it("a classifier's barley interpretation of Mehl cannot select the wheat default", async () => {
+    vi.spyOn(normalizer, "normalizeIngredients").mockResolvedValue([classified()])
+    const built = buildResolverQuery("Mehl", classified())
+    expect(built.query.coreFoodGerman).toBe("Gerstenmehl")
+    expect(built.query.vocabulary?.preferred).toBeUndefined()
+    const result = await resolve("Mehl")
+    expect(result.id).not.toBe("C214100")
+    expect(result.product).toMatch(/Gerste|barley/i)
+    expect(result.vocabulary).toEqual({ alias: "Mehl", kind: "recipe_default", semanticsApplied: false, preferredSelected: false })
+  })
+
+  it.each([
+    classified({ coreFoodGerman: null, coreFoodEnglish: null }),
+    classified({ llmClassified: false }),
+    classified({ llmClassified: false, coreFoodGerman: null }),
+  ])("does not fill any semantics when classifier support exists: %j", (classification) => {
+    const built = buildResolverQuery("Cooked Puy Lentils", classification)
+    expect(built.query.state).toBe("unknown")
+    expect(built.query.coreFoodGerman).toBe(classification.coreFoodGerman)
+    expect(built.query.vocabulary).toMatchObject({ semanticsApplied: false })
+    expect(built.query.vocabulary?.preferred).toBeUndefined()
+    expect(buildResolverQuery("Bohnen", classification).query.vocabulary?.ambiguous).toBeUndefined()
+  })
+
+  it.each(["mealie-recipe", "food-override"])("%s wins before a vocabulary preference, and provenance says so", async (provider) => {
+    const record = await bls.loadBlsRecordByCode("C214100")
+    const match: ProviderMatch = {
+      nutrients: record!.nutrients, canonicalName: "Mehl", brand: null, state: "unknown",
+      provider: provider === "mealie-recipe" ? "mealie-recipe" : "bls", providerId: "priority-record",
+      productName: "User's flour", confidence: 1,
+      matchReason: provider === "food-override" ? "user-confirmed-override" : "recipe",
+    }
+    const preferred = vi.spyOn(bls, "loadBlsRecordByCode")
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([
+      { name: provider, lookup: vi.fn().mockResolvedValue(match) },
+      { name: "bls", lookup: vi.fn().mockResolvedValue(null) },
+    ])
+    const result = await resolve("Mehl")
+    expect(result.id).toBe("priority-record")
+    expect(preferred).not.toHaveBeenCalled()
+    expect(result.vocabulary).toEqual({ alias: "Mehl", kind: "recipe_default", semanticsApplied: false, preferredSelected: false })
+  })
+
+  it("records applied semantics but no selected preference after a missing target", async () => {
+    vi.spyOn(bls, "loadBlsRecordByCode").mockResolvedValue(null)
+    const result = await resolve("Mehl")
+    expect(result.vocabulary).toEqual({ alias: "Mehl", kind: "recipe_default", semanticsApplied: true, preferredSelected: false })
+    expect(result.reason).not.toMatch(/^recipe-vocabulary:/)
+  })
+
+  it("records only an observation if grams prevented any resolution attempt", async () => {
+    const recipe = oneIngredient("Mehl")
+    recipe.recipeIngredient[0]!.quantity = 1
+    recipe.recipeIngredient[0]!.unit!.name = "unconvertible-test-unit"
+    const result = await estimateRecipe(recipe)
+    expect(result.matchedIngredients?.[0]?.grams).toBeNull()
+    expect(result.matchedIngredients?.[0]?.classification?.vocabulary).toEqual({
+      alias: "Mehl", kind: "recipe_default", semanticsApplied: false, preferredSelected: false,
+    })
+  })
+})
+
+describe("preferred target compatibility uses the existing semantic gates", () => {
+  const cases: { name: string; query: Partial<ProviderQuery>; recordName?: string; recordType?: "composite_dish" }[] = [
+    { name: "state", query: { state: "cooked" } },
+    { name: "form", query: { attributes: { ...UNKNOWN_ATTRIBUTES, form: "whole" } }, recordName: "Vollmilch Pulver" },
+    { name: "preservation", query: { attributes: { ...UNKNOWN_ATTRIBUTES, preservation: "fresh" } }, recordName: "Vollmilch getrocknet" },
+    { name: "fresh versus processed form", query: { attributes: { ...UNKNOWN_ATTRIBUTES, preservation: "fresh" } }, recordName: "Vollmilch Pulver" },
+    { name: "measured fat", query: { attributes: { ...UNKNOWN_ATTRIBUTES, fatPercent: 20 } } },
+    { name: "German core", query: { coreFoodGerman: "Gerste" } },
+    { name: "food type", query: { foodType: "simple" }, recordType: "composite_dish" },
+    { name: "qualitative modifier shortfall", query: { structuredName: "fettarme Milch" } },
+  ]
+  it.each(cases)("rejects a preferred record conflicting with $name and continues the chain", async ({ query, recordName, recordType }) => {
+    const record = await bls.loadBlsRecordByCode("M111300")
+    vi.spyOn(bls, "loadBlsRecordByCode").mockResolvedValue({ ...record!, state: "raw", ...(recordName ? { name: recordName } : {}), ...(recordType ? { foodType: recordType } : {}) })
+    const next = vi.fn().mockResolvedValue(null)
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "bls", lookup: next }])
+    const built = buildResolverQuery("Milch", undefined)
+    expect(await resolveNutrients({ ...built.query, ...query }, built.route)).toBeNull()
+    expect(next).toHaveBeenCalledOnce()
+  })
+
+  it("enforces English core identity on a USDA target", async () => {
+    const built = buildResolverQuery("Ei", undefined)
+    built.query.coreFoodEnglish = "beef"
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "usda-local", lookup: vi.fn().mockResolvedValue(null) }])
+    expect(await resolveNutrients(built.query, built.route)).toBeNull()
+  })
+
+  it("checks USDA form and preservation metadata too", async () => {
+    const built = buildResolverQuery("Kurkuma", undefined)
+    built.query.attributes = { ...UNKNOWN_ATTRIBUTES, preservation: "fresh" }
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "usda-local", lookup: vi.fn().mockResolvedValue(null) }])
+    expect(await resolveNutrients(built.query, built.route)).toBeNull()
+  })
+
+  it("rejects nutritionally impossible preferred records", async () => {
+    const record = await usda.loadUsdaRecordById("171287")
+    vi.spyOn(usda, "loadUsdaRecordById").mockResolvedValue({ ...record!, nutrients: { ...record!.nutrients, kcalPer100g: 10000 } })
+    vi.spyOn(registry, "getProviderChain").mockReturnValue([{ name: "usda-local", lookup: vi.fn().mockResolvedValue(null) }])
+    const built = buildResolverQuery("Ei", undefined)
+    expect(await resolveNutrients(built.query, built.route)).toBeNull()
+  })
+})
+
+it("keeps unknown record metadata permissive rather than claiming verification", async () => {
+  const record = await bls.loadBlsRecordByCode("M111300")
+  vi.spyOn(bls, "loadBlsRecordByCode").mockResolvedValue({
+    ...record!, name: "Vollmilch", state: "unknown", nutrients: { ...record!.nutrients, fatPer100g: null },
+  })
+  const built = buildResolverQuery("Milch", undefined)
+  built.query.state = "cooked"
+  built.query.attributes = { form: "whole", preservation: "fresh", fatPercent: 3.5 }
+  const result = await resolveNutrients(built.query, built.route)
+  expect(result?.vocabularyPreferredSelected).toBe(true)
 })

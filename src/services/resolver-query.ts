@@ -1,11 +1,5 @@
 import { evidenceFor } from "./identity-evidence.js"
-
-/** The vocabulary resource is JSON, so its attribute strings are checked before they are trusted. */
-const FOOD_FORMS = new Set(["whole", "ground", "powder", "leaf", "seed", "flakes", "paste", "unknown"])
-const FOOD_PRESERVATIONS = new Set(["fresh", "dried", "canned", "frozen", "unknown"])
-const isFoodForm = (v: unknown): v is FoodForm => typeof v === "string" && FOOD_FORMS.has(v)
-const isFoodPreservation = (v: unknown): v is FoodPreservation => typeof v === "string" && FOOD_PRESERVATIONS.has(v)
-import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type FoodForm, type FoodPreservation, type FoodRoute, type FoodState, type IngredientClassification } from "../types.js"
+import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type FoodRoute, type FoodState, type IngredientClassification } from "../types.js"
 import type { ProviderQuery } from "./providers/types.js"
 import { lookupVocabulary } from "./vocabulary/recipe-vocabulary.js"
 import type { VocabularyMatch } from "./vocabulary/types.js"
@@ -39,7 +33,7 @@ export interface ResolverQueryOptions {
 export interface ResolverQueryResult {
   query: ProviderQuery
   route: FoodRoute
-  /** The curated vocabulary row that participated, for provenance. Null for unknown terms. */
+  /** The matched row, including observation-only matches. See query.vocabulary for application. */
   vocabulary: VocabularyMatch | null
 }
 
@@ -65,21 +59,25 @@ export function buildResolverQuery(
   // vocabulary was measured against. A classifier that already produced a core keeps it: the
   // vocabulary exists to cover the case where there is no classifier, and must not overrule one.
   const vocabulary = lookupVocabulary(structuredName)
-  const identity = vocabulary?.identity ?? null
+  const classifierSupported = classification?.llmClassified === true || coreFoodGerman !== null || coreFoodEnglish !== null
+  const enrichment = classifierSupported ? null : vocabulary
+  const identity = enrichment?.identity ?? null
   const vocabularyCore = coreFoodGerman === null && identity !== null ? identity : null
 
   // Only attributes the ALIAS itself states, and only where the ingredient stated nothing. An
   // explicit "fettarme Milch" must never be overwritten by a default attached to "Milch".
-  const claimedForm = vocabulary?.attributes?.form
-  const claimedPreservation = vocabulary?.attributes?.preservation
+  const claimedForm = enrichment?.attributes?.form
+  const claimedPreservation = enrichment?.attributes?.preservation
   const attributes: FoodAttributes = {
     ...classifierAttributes,
-    ...(classifierAttributes.form === "unknown" && isFoodForm(claimedForm) ? { form: claimedForm } : {}),
-    ...(classifierAttributes.preservation === "unknown" && isFoodPreservation(claimedPreservation)
+    ...(classifierAttributes.fatPercent === null && enrichment?.attributes.fatPercent !== undefined
+      ? { fatPercent: enrichment.attributes.fatPercent } : {}),
+    ...(classifierAttributes.form === "unknown" && claimedForm !== undefined ? { form: claimedForm } : {}),
+    ...(classifierAttributes.preservation === "unknown" && claimedPreservation !== undefined
       ? { preservation: claimedPreservation } : {}),
   }
   // A state the alias states ("Cooked Puy Lentils") applies only when the ingredient states none.
-  const vocabularyState = vocabulary?.attributes?.state
+  const vocabularyState = enrichment?.attributes?.state
   const effectiveState: FoodState =
     state === "unknown" && (vocabularyState === "cooked" || vocabularyState === "dried" || vocabularyState === "raw")
       ? vocabularyState
@@ -102,8 +100,13 @@ export function buildResolverQuery(
       attributes,
       ...(vocabulary
         ? { vocabulary: {
-              ...(vocabulary.preferred ? { preferred: vocabulary.preferred } : {}),
-              ...(vocabulary.kind === "ambiguous" ? { ambiguous: true } : {}),
+              ...(enrichment?.preferred ? { preferred: enrichment.preferred } : {}),
+              ...(enrichment?.kind === "ambiguous" ? { ambiguous: true } : {}),
+              semanticsApplied: vocabularyCore !== null || effectiveState !== state
+                || attributes.form !== classifierAttributes.form
+                || attributes.preservation !== classifierAttributes.preservation
+                || attributes.fatPercent !== classifierAttributes.fatPercent
+                || enrichment?.kind === "ambiguous",
               kind: vocabulary.kind, alias: vocabulary.alias,
             } }
         : {}),

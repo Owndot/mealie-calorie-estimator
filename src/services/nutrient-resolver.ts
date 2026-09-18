@@ -1,7 +1,8 @@
 import { getProviderChain } from "./providers/registry.js"
 import { config } from "../config.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
-import { unmetModifierFamilies } from "./providers/food-semantics.js"
+import { coreIdentityConflict, foodTypeConflict } from "./providers/ranking.js"
+import { inferAttributesFromName, formConflict, preservationConflict, freshVsProcessedFormConflict, fatConflict, unmetModifierFamilies } from "./providers/food-semantics.js"
 import { poolFingerprint } from "./providers/judge/candidate-pool.js"
 import { buildShortlist } from "./providers/judge/shortlist.js"
 import { searchOff, filterOffHits, offProxyJustified } from "./providers/judge/off-proxy.js"
@@ -18,6 +19,8 @@ import type { FoodRoute, FallbackStatus, ProviderMatch } from "../types.js"
 
 export interface ResolvedNutrients {
   match: ProviderMatch
+  /** Set only by the preferred-target branch, never inferred from a matching record id. */
+  vocabularyPreferredSelected?: boolean
   fallbackStatus: FallbackStatus
   /** Present only when the semantic judge was actually asked about this ingredient. */
   judge?: {
@@ -103,8 +106,8 @@ function unansweredBy(match: ProviderMatch, unmet: string[]): string[] {
  *
  * Validated the way a user-confirmed override is, and for the same reason: an id is a pointer into
  * a database that gets upgraded, so it is re-loaded live rather than trusted. It must still exist,
- * be nutritionally possible for the food asked for, and not contradict a state the ingredient
- * itself stated. Any of those failing is not an error — the vocabulary simply stops having an
+ * be nutritionally possible for the food asked for, and pass the existing supported semantic
+ * conflict checks. Any of those failing is not an error — the vocabulary simply stops having an
  * opinion and normal resolution continues.
  */
 async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedNutrients | null> {
@@ -129,6 +132,22 @@ async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedN
     logger.info({ foodName: query.foodName, ...preferred, queryState: query.state, recordState: record.state }, "Recipe vocabulary: preferred record contradicts the stated state, resolving normally")
     return null
   }
+  const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
+  const recordAttrs = inferAttributesFromName(record.name)
+  // Core names are language-specific. A German alias pointing to USDA is a reviewed translation;
+  // without an English core the existing identity gate cannot independently verify that link.
+  const core = preferred.provider === "bls" ? query.coreFoodGerman : query.coreFoodEnglish
+  const conflict = foodTypeConflict(query.foodType, record.foodType)
+    || coreIdentityConflict(core, record.name, preferred.provider === "bls" ? "compound" : "token")
+    || formConflict(attrs.form, recordAttrs.form)
+    || freshVsProcessedFormConflict(attrs.preservation, recordAttrs.form)
+    || preservationConflict(attrs.preservation, recordAttrs.preservation)
+    || fatConflict(attrs.fatPercent, record.nutrients.fatPer100g)
+    || unmetModifierFamilies(query.structuredName ?? query.foodName, record.name).length > 0
+  if (conflict) {
+    logger.info({ foodName: query.foodName, ...preferred }, "Recipe vocabulary: preferred record contradicts or does not support stated semantics, resolving normally")
+    return null
+  }
   const match: ProviderMatch = {
     nutrients: record.nutrients, provider: preferred.provider, providerId: preferred.id,
     productName: record.name, canonicalName: record.name, brand: null, state: record.state,
@@ -136,7 +155,7 @@ async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedN
     matchReason: `recipe-vocabulary:${query.vocabulary?.kind ?? "entry"}`,
     foodType: record.foodType,
   }
-  return { match, fallbackStatus: toFallbackStatus(preferred.provider) }
+  return { match, fallbackStatus: toFallbackStatus(preferred.provider), vocabularyPreferredSelected: true }
 }
 
 /**
@@ -153,12 +172,11 @@ async function resolveDeterministic(query: ProviderQuery, route: FoodRoute): Pro
   // worth keeping.
   let shortfall: ResolvedNutrients | null = null
 
-  // The curated preference is consulted FIRST among database sources, but the override provider is
-  // the head of the chain and must still win — so it is asked before the preference is applied.
+  // Recipes, user overrides and branded-route OFF retain their priority over curated targets.
   let vocabularyPreference: ResolvedNutrients | null | undefined
 
   for (const provider of chain) {
-    if (provider.name !== "food-override" && vocabularyPreference === undefined) {
+    if ((provider.name === "bls" || provider.name === "usda-local") && vocabularyPreference === undefined) {
       vocabularyPreference = await preferredVocabularyMatch(query)
       if (vocabularyPreference) return vocabularyPreference
     }

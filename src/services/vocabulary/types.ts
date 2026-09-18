@@ -1,4 +1,4 @@
-import type { FoodAttributes } from "../../types.js"
+import type { FoodAttributes, FoodState } from "../../types.js"
 
 /**
  * What a vocabulary row asserts about an alias. The kinds are not decoration: they record HOW
@@ -23,6 +23,18 @@ export interface VocabularyPreferredTarget {
   id: string
 }
 
+export type VocabularyAttributes = Partial<FoodAttributes> & { state?: FoodState }
+
+export interface VocabularyProvenance {
+  /** Presence means an alias matched, regardless of whether it influenced resolution. */
+  alias: string
+  kind: VocabularyKind
+  /** Vocabulary enriched a resolution query (or enforced ambiguity), excluding priority sources. */
+  semanticsApplied: boolean
+  /** The resolver actually selected the reviewed target. */
+  preferredSelected: boolean
+}
+
 export interface VocabularyEntry {
   /** As a human writes it, for review and logs. */
   alias: string
@@ -33,7 +45,7 @@ export interface VocabularyEntry {
   /** The canonical food noun handed to the resolver as its core identity. Absent when ambiguous. */
   identity?: string
   /** Only attributes the alias itself states. Merged, never overriding what the ingredient said. */
-  attributes?: Partial<FoodAttributes> & Record<string, unknown>
+  attributes?: VocabularyAttributes
   preferred?: VocabularyPreferredTarget
   confidence?: number
   provenance?: { source?: string; method?: string; reviewedAt?: string }
@@ -52,7 +64,7 @@ export interface VocabularyMatch {
   language: "de" | "en"
   kind: VocabularyKind
   identity: string | null
-  attributes: Record<string, unknown>
+  attributes: VocabularyAttributes
   preferred: VocabularyPreferredTarget | null
   confidence: number | null
 }

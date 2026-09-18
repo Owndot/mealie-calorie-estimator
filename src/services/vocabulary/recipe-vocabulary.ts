@@ -68,6 +68,21 @@ function validate(entry: unknown, language: string, seen: Set<string>): { ok: tr
     if (typeof p.provider !== "string" || !VALID_PROVIDERS.has(p.provider)) return { ok: false, reason: `preferred.provider "${String(p.provider)}" is not a database provider` }
     if (typeof p.id !== "string" || !p.id.trim()) return { ok: false, reason: "preferred.id missing" }
   }
+  if (e.attributes !== undefined) {
+    if (typeof e.attributes !== "object" || e.attributes === null || Array.isArray(e.attributes)) {
+      return { ok: false, reason: "attributes must be an object" }
+    }
+    for (const [key, value] of Object.entries(e.attributes)) {
+      const valid = key === "state" ? ["raw", "cooked", "dried", "unknown"].includes(String(value))
+        : key === "form" ? ["whole", "ground", "powder", "leaf", "seed", "flakes", "paste", "unknown"].includes(String(value))
+        : key === "preservation" ? ["fresh", "dried", "canned", "frozen", "unknown"].includes(String(value))
+        : key === "fatPercent" ? value === null || (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100)
+        : false
+      if (!valid || (key !== "fatPercent" && typeof value !== "string")) {
+        return { ok: false, reason: `unsupported attribute "${key}" or value` }
+      }
+    }
+  }
   if (e.confidence !== undefined && (typeof e.confidence !== "number" || e.confidence < 0 || e.confidence > 1)) {
     return { ok: false, reason: "confidence must be between 0 and 1" }
   }
@@ -81,9 +96,10 @@ function keyOf(language: string, normalized: string): string {
   return `${language}:${normalized}`
 }
 
-function load(): Map<string, VocabularyEntry> {
+export function loadVocabularyDirectory(dir: string): Map<string, VocabularyEntry> {
   const map = new Map<string, VocabularyEntry>()
-  const dir = resourceDir()
+  const aliases = new Map<string, string>()
+  const collisions = new Set<string>()
   for (const language of LANGUAGES) {
     const file = path.join(dir, `${language}.json`)
     if (!fs.existsSync(file)) {
@@ -107,6 +123,16 @@ function load(): Map<string, VocabularyEntry> {
         logger.error({ file, alias: (raw as { alias?: unknown })?.alias, reason: result.reason }, "Recipe vocabulary: rejected entry")
         continue
       }
+      const normalized = result.entry.normalizedAlias
+      const previous = aliases.get(normalized)
+      if (collisions.has(normalized) || (previous !== undefined && previous !== language)) {
+        if (previous) map.delete(keyOf(previous, normalized))
+        collisions.add(normalized)
+        rejected++
+        logger.error({ file, alias: normalized }, "Recipe vocabulary: cross-language collision; all copies rejected")
+        continue
+      }
+      aliases.set(normalized, language)
       seen.add(result.entry.normalizedAlias)
       map.set(keyOf(language, result.entry.normalizedAlias), result.entry)
     }
@@ -117,7 +143,7 @@ function load(): Map<string, VocabularyEntry> {
 
 /** Loaded once. Exact lookup is a single map probe; nothing reads disk per ingredient. */
 function getIndex(): Map<string, VocabularyEntry> {
-  if (!index) index = load()
+  if (!index) index = loadVocabularyDirectory(resourceDir())
   return index
 }
 
@@ -133,9 +159,8 @@ export function vocabularyEntryCount(): number {
 /**
  * The entry for an ingredient's own words, or null.
  *
- * German is consulted before English because the corpus this was built from is German and the
- * databases it bridges are mixed; an alias that exists in both would be a data error the loader
- * cannot see, so the order is fixed and documented rather than incidental.
+ * Cross-language duplicates are removed by the loader, including identical rows. No language
+ * detection or file-order arbitration is attempted.
  */
 export function lookupVocabulary(text: string | null | undefined): VocabularyMatch | null {
   if (!text) return null
@@ -151,7 +176,7 @@ export function lookupVocabulary(text: string | null | undefined): VocabularyMat
       language: entry.language,
       kind: entry.kind,
       identity: entry.identity ?? null,
-      attributes: (entry.attributes ?? {}) as Record<string, unknown>,
+      attributes: entry.attributes ?? {},
       preferred: entry.preferred ?? null,
       confidence: entry.confidence ?? null,
     }

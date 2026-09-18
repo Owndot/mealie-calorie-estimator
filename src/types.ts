@@ -1,3 +1,4 @@
+import type { VocabularyProvenance } from "./services/vocabulary/types.js"
 export interface MealieIngredient {
   quantity: number | null
   unit: MealieUnit | null
@@ -320,7 +321,7 @@ export interface IngredientMatch {
      * fact about naming; a `recipe_default` is a culinary assumption the project made on the
      * cook's behalf, and reporting it as though the ingredient had stated it would be a lie.
      */
-    vocabulary?: { alias: string; kind: string } | null
+    vocabulary?: VocabularyProvenance | null
   }
   /** See ProviderMatch.sourceRecipeSlug. */
   sourceRecipeSlug?: string | null

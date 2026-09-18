@@ -8,7 +8,7 @@ import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
-import { lookupVocabulary } from "./vocabulary/recipe-vocabulary.js"
+import type { VocabularyProvenance } from "./vocabulary/types.js"
 import { judgeNeed } from "./providers/judge/judge-need.js"
 import { buildResolverQuery } from "./resolver-query.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
@@ -295,12 +295,6 @@ export function classifyMatchQuality(
   return { matchQuality: "mixed", reason: `calorie-weighted match confidence is ${weighted.toFixed(2)}`, lowConfidence }
 }
 
-/** Compact provenance: which curated row was consulted, and how strong a claim it makes. */
-function vocabularyProvenance(foodName: string): { alias: string; kind: string } | null {
-  const match = lookupVocabulary(foodName)
-  return match ? { alias: match.alias, kind: match.kind } : null
-}
-
 export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResult> {
   const validIngredients = collectValidIngredients(recipe)
 
@@ -355,6 +349,17 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       }
     }
 
+    const built = buildResolverQuery(ing.foodName, classification, {
+      householdId: recipe.householdId ?? recipe.household_id ?? null,
+      ancestorSlugs: [recipe.slug],
+    })
+    const vocabulary: VocabularyProvenance | null = built.query.vocabulary ? {
+      alias: built.query.vocabulary.alias,
+      kind: built.query.vocabulary.kind,
+      semanticsApplied: false,
+      preferredSelected: false,
+    } : null
+
     // The classifier's own verdict, carried into provenance so a change in how an ingredient is
     // READ is visible without having to infer it from which record won. Built before the weight
     // check, so an ingredient whose grams cannot be resolved still reports how it was classified.
@@ -366,7 +371,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       category: classification?.category ?? null,
       coreEnglish: coreFoodEnglish,
       cached: classification?.fromCache ?? false,
-      vocabulary: vocabularyProvenance(ing.foodName),
+      vocabulary,
     }
 
     if (grams === null) {
@@ -382,14 +387,14 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
 
     totalKnownWeight += grams
 
-    // One construction, shared with the override-preview endpoint — see buildResolverQuery().
-    // This recipe is an ancestor of anything it resolves, which is what stops a recipe resolving
-    // through itself or through a cycle.
-    const built = buildResolverQuery(ing.foodName, classification, {
-      householdId: recipe.householdId ?? recipe.household_id ?? null,
-      ancestorSlugs: [recipe.slug],
-    })
     const resolved = await resolveNutrients(built.query, built.route)
+    if (vocabulary) {
+      const prioritySource = resolved?.match.provider === "mealie-recipe"
+        || resolved?.match.matchReason === "user-confirmed-override"
+        || (built.route === "branded" && resolved?.match.provider === "off")
+      vocabulary.semanticsApplied = !prioritySource && (built.query.vocabulary?.semanticsApplied ?? false)
+      vocabulary.preferredSelected = resolved?.vocabularyPreferredSelected ?? false
+    }
 
     // Judge ELIGIBILITY, computed for every resolution attempt whether or not the judge is
     // enabled. It is a pure, local function of the classification and the outcome — no request,

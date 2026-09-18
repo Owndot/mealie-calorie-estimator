@@ -1,6 +1,7 @@
 import type { FoodState, FoodRoute, FoodType, ProviderMatch } from "../../types.js"
 import type { IdentityEvidence } from "../identity-evidence.js"
 import type { FoodAttributes } from "../../types.js"
+import type { VocabularyKind } from "../vocabulary/types.js"
 import type { JudgeCandidate } from "./judge/types.js"
 
 export interface ProviderQuery {
@@ -25,8 +26,9 @@ export interface ProviderQuery {
   vocabulary?: {
     preferred?: { provider: "bls" | "usda-local"; id: string }
     ambiguous?: boolean
-    kind?: string
-    alias?: string
+    kind: VocabularyKind
+    alias: string
+    semanticsApplied: boolean
   }
   candidateSink?: (candidates: JudgeCandidate[]) => void
   /**

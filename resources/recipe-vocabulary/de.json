@@ -173,7 +173,7 @@
    "normalizedAlias": "crème fraîche",
    "language": "de",
    "kind": "synonym",
-   "identity": "Crème fraîche",
+   "identity": "Creme fraiche",
    "preferred": {
     "provider": "bls",
     "id": "M176800"
@@ -286,9 +286,6 @@
    "language": "de",
    "kind": "exact_phrase",
    "identity": "Joghurt",
-   "attributes": {
-    "fat": "low"
-   },
    "preferred": {
     "provider": "bls",
     "id": "M141200"
@@ -327,7 +324,7 @@
    "kind": "exact_phrase",
    "identity": "Sesam",
    "attributes": {
-    "state": "roasted"
+    "state": "cooked"
    },
    "preferred": {
     "provider": "bls",
@@ -367,8 +364,7 @@
    "kind": "exact_phrase",
    "identity": "Tomate",
    "attributes": {
-    "preservation": "dried",
-    "packedIn": "oil"
+    "preservation": "dried"
    },
    "preferred": {
     "provider": "bls",
@@ -778,9 +774,6 @@
    "language": "de",
    "kind": "exact_phrase",
    "identity": "Weizenmehl",
-   "attributes": {
-    "type": "405"
-   },
    "preferred": {
     "provider": "bls",
     "id": "C214100"
@@ -1092,9 +1085,6 @@
    "language": "de",
    "kind": "exact_phrase",
    "identity": "Gemüsepaprika",
-   "attributes": {
-    "colour": "red"
-   },
    "preferred": {
     "provider": "bls",
     "id": "G543100"
@@ -1146,9 +1136,6 @@
    "language": "de",
    "kind": "exact_phrase",
    "identity": "Gemüsepaprika",
-   "attributes": {
-    "colour": "red"
-   },
    "preferred": {
     "provider": "bls",
     "id": "G543100"
@@ -1166,9 +1153,6 @@
    "language": "de",
    "kind": "exact_phrase",
    "identity": "Mineralwasser",
-   "attributes": {
-    "carbonated": true
-   },
    "preferred": {
     "provider": "bls",
     "id": "N127000"
@@ -1235,9 +1219,6 @@
    "language": "de",
    "kind": "exact_phrase",
    "identity": "Weißwein",
-   "attributes": {
-    "style": "dry"
-   },
    "preferred": {
     "provider": "bls",
     "id": "P210000"

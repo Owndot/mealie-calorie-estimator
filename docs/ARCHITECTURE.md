@@ -108,8 +108,46 @@ attributes the phrase states, `spelling_variant` is a misspelling someone actual
 `ambiguous` records that no safe default exists and blocks the resolver from narrowing.
 
 A `preferred` target names a provider and record id — never copied nutrients. It is re-loaded live,
-sanity-checked, and required to agree with any state the ingredient itself stated; any of those
-failing drops the preference and normal resolution continues.
+sanity-checked, and checked using existing state, form, preservation, measured fat and food-type
+conflict rules. A supported core in the record's language must match (German compound rules for
+BLS, English token rules for USDA); stated modifier families must not go unmet. Failure drops the
+preference and normal resolution continues. Recipes and user overrides retain priority, as does
+OFF on the branded route.
+
+A genuine classifier result (`llmClassified`, or an existing core in either language) makes the
+vocabulary observation-only: it cannot add identity, attributes, state, ambiguity gates or a
+preferred target. This includes a successful classifier that deliberately left its core unknown.
+
+Vocabulary attributes accept only `state` (`raw`, `cooked`, `dried`, `unknown`), `form` and
+`preservation` from the existing runtime enums, and finite `fatPercent` in [0, 100] or null.
+Unknown keys and invalid values reject the row. Every alias duplicated across languages is
+removed from both languages, even if the entries are identical; lookup never arbitrates by file
+order. Rejection is logged. No language detection is used.
+
+`classification.vocabulary` is null/absent when no row matched. Its presence (`alias`, `kind`)
+means only that the alias matched. `semanticsApplied` means vocabulary fields enriched a query
+that was actually resolved, or its ambiguity restriction was in force; it does not assert that a
+record was found. It is false if grams prevented resolution, a classifier supplied the semantics,
+or a higher-priority recipe/override/branded OFF source supplied the result. `preferredSelected`
+is true only when the resolver's preferred-target branch selected the record, never merely when
+the resulting id happens to equal the preference. These decisions come from the actual query and
+resolver; the estimator does not perform another lookup.
+
+Compatibility is limited by available metadata: unknown record state/form/preservation and missing
+measured fat remain permissive under the existing rules, not proof of compatibility. USDA has no
+German core metadata, so a German-only curated translation to USDA cannot be independently checked
+by the core gate. The reviewed link supplies that translation. Generic compound-head limitations
+(#56) are unchanged, and plant-part ambiguity requiring a full candidate pool is not evaluated by
+this single-record check.
+
+The 84-row attribute audit removed unsupported `fat` (Fettarmer Joghurt), `packedIn` (getrocknete
+Tomaten in Öl), `type` (Mehl Type 405), `colour` (rote Paprika and Spitzpaprika rot), `carbonated`
+(Sprudel) and `style` (trockener Weißwein). Those distinctions are represented only by reviewed
+targets and any existing name-based checks, not invented semantic axes. `state: roasted` for
+gerösteter Sesam became `cooked`, the runtime's existing preparation class for roasting; the
+preferred Sesam record itself has unknown state, so it does not independently verify roasting.
+Crème fraîche's canonical identity uses the target's spelling `Creme fraiche` so the existing core
+gate can verify it without changing accent normalization or adding another alias.
 
 Sized by measurement. The 84 entries are the terms a 22-recipe corpus showed resolving wrongly or
 not at all. An independent 117-recipe corpus matched only 10% of its ingredient occurrences against

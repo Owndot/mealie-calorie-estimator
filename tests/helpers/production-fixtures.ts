@@ -208,21 +208,21 @@ export const TIKKA_PASTE: ProductionRecipe = {
   // 884 -> 885.05, or garam masala 379 -> 437) to hit a total, which is fitting, not fidelity.
   reconcilesWithin: 2.4,
   productionRows: [
-    ["Korianderkörner", "usda-local", "Spices, coriander seed", 40, 0.85],
-    ["Kreuzkümmelsamen", "usda-local", "Spices, cumin seed", 40, 0.85],
+    ["Korianderkörner", "usda-local", "Spices, coriander seed", 40, 0.7],
+    ["Kreuzkümmelsamen", "usda-local", "Spices, cumin seed", 40, 0.7],
     ["rote Chilischoten", "usda-local", "Peppers, hot chili, red, raw", 50, 0.7],
     ["rosa Pfefferkorn", "llm-nutrient", null, 4, 0.35],
     ["Koriander", "llm-nutrient", null, 50, 0.35],
     ["Knoblauchzehen", "bls", "Knoblauch roh", 100, 0.85],
     ["Ingwer", "bls", "Ingwer/Ingwerwurzel, roh", 100, 0.85],
-    ["Pflanzenöl", "usda-local", "Oil, vegetable, soybean, refined", 220, 0.85],
+    ["Pflanzenöl", "llm-nutrient", null, 220, 0.35],
     ["Wasser", "bls", "Trinkwasser", 100, 0.8],
     ["Zitronensaft", "bls", "Zitronensaft", 100, 0.92],
     ["Salz", "bls", "Speisesalz/Siedesalz/Tafelsalz", 30, 0.75],
     ["Röstzwiebel", "bls", "Röstzwiebeln (Fertigprodukt)", 50, 0.85],
     ["Tomatenmark", "bls", "Tomatenmark", 140, 0.92],
-    ["Kurkuma", "usda-local", "Spices, turmeric, ground", 4, 0.85],
-    ["Chilipulver", "usda-local", "Spices, chili powder", 4, 0.85],
+    ["Kurkuma", "usda-local", "Spices, turmeric, ground", 4, 0.8],
+    ["Chilipulver", "llm-nutrient", null, 4, 0.35],
     ["Garam Masala", "llm-nutrient", null, 4, 0.35],
   ],
   fixtureDeviations: {
@@ -231,7 +231,7 @@ export const TIKKA_PASTE: ProductionRecipe = {
     // local corpus exposes it. Same 282 kcal either way, so the recipe total does not move — what
     // changes is that the figure is now a cited database record instead of an estimate.
     Chilipulver: {
-      provider: "usda-local", record: "Spices, chili powder", confidence: 0.85,
+      provider: "usda-local", record: "Spices, chili powder", confidence: 0.8,
       why: "USDA 171319 is reachable locally; the live API result window never surfaced it",
     },
     // Same RECORD as production ("Peppers, hot chili, red, raw"), reached differently. Production
@@ -307,7 +307,7 @@ export const BUTTER_CHICKEN: ProductionRecipe = {
     ["Salz", "bls", "Speisesalz/Siedesalz/Tafelsalz", 6, 0.75],
     ["Kreuzkümmel gemahlen", "usda-local", "Spices, cumin seed", 8, 0.7],
     ["Getrockneter Koriander", "llm-nutrient", null, 8, 0.35],
-    ["Kurkuma", "usda-local", "Spices, turmeric, ground", 2, 0.85],
+    ["Kurkuma", "usda-local", "Spices, turmeric, ground", 2, 0.8],
     ["Wasser", "bls", "Trinkwasser", 100, 0.8],
     ["Tomatenmark", "bls", "Tomatenmark", 70, 0.92],
     ["Kochsahne 15%", "llm-nutrient", null, 500, 0.35],
@@ -428,7 +428,7 @@ export const BIG_MAC_SALAT: ProductionRecipe = {
     ["Gurkenwasser", "llm-nutrient", null, 20, 0.35],
     ["Salz", "bls", "Speisesalz/Siedesalz/Tafelsalz", 0.3, 0.75],
     ["Pfeffer", "bls", "Pfeffer schwarz, getrocknet", 0.4, 0.8],
-    ["Paprikapulver", "usda-local", "Spices, paprika", 4, 0.85],
+    ["Paprikapulver", "llm-nutrient", null, 4, 0.35],
     ["Knoblauchgewürz", "usda-local", "Spices, garlic powder", 4, 0.7],
   ],
   fixtureDeviations: {
