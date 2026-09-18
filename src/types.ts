@@ -312,6 +312,15 @@ export interface IngredientMatch {
     coreEnglish: string | null
     /** True when this interpretation came from the classification cache rather than a request. */
     cached: boolean
+    /**
+     * The curated recipe-vocabulary row that participated, if any.
+     *
+     * Recorded beside the classifier's verdict because it belongs to the same question — how the
+     * ingredient was READ — and because the kinds are not equivalent evidence. A `synonym` is a
+     * fact about naming; a `recipe_default` is a culinary assumption the project made on the
+     * cook's behalf, and reporting it as though the ingredient had stated it would be a lie.
+     */
+    vocabulary?: { alias: string; kind: string } | null
   }
   /** See ProviderMatch.sourceRecipeSlug. */
   sourceRecipeSlug?: string | null

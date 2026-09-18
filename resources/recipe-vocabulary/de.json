@@ -1,0 +1,1287 @@
+{
+ "version": 1,
+ "language": "de",
+ "entries": [
+  {
+   "alias": "Baby-Spinat",
+   "normalizedAlias": "baby spinat",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Spinat",
+   "preferred": {
+    "provider": "bls",
+    "id": "G211100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Bandnudeln",
+   "normalizedAlias": "bandnudeln",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Teigwaren",
+   "confidence": 0.8,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Basilikum, getrocknet",
+   "normalizedAlias": "basilikum getrocknet",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Basilikum",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171317"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Basmatireis",
+   "normalizedAlias": "basmatireis",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Reis",
+   "preferred": {
+    "provider": "bls",
+    "id": "C352000"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Bohnen",
+   "normalizedAlias": "bohnen",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Cayenne-Pfeffer",
+   "normalizedAlias": "cayenne pfeffer",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Cayennepfeffer",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170932"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Chiliflocken",
+   "normalizedAlias": "chiliflocken",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Chili",
+   "attributes": {
+    "form": "flakes"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170932"
+   },
+   "confidence": 0.7,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Chilipulver",
+   "normalizedAlias": "chilipulver",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Chilipulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171319"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Chilischote",
+   "normalizedAlias": "chilischote",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Chilischote",
+   "confidence": 0.6,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "chinesische Eiernudeln",
+   "normalizedAlias": "chinesische eiernudeln",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Eierteigwaren",
+   "preferred": {
+    "provider": "bls",
+    "id": "E432000"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Crème fraîche",
+   "normalizedAlias": "crème fraîche",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Crème fraîche",
+   "preferred": {
+    "provider": "bls",
+    "id": "M176800"
+   },
+   "confidence": 0.85,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Curry",
+   "normalizedAlias": "curry",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Currypulver",
+   "normalizedAlias": "currypulver",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Currypulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170924"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Ei",
+   "normalizedAlias": "ei",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Ei",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171287"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Eier",
+   "normalizedAlias": "eier",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Ei",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171287"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Eier (Größe M)",
+   "normalizedAlias": "eier groesse m",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Ei",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171287"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "etwas Öl für die Pfanne",
+   "normalizedAlias": "etwas oel fuer die pfanne",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Fettarmer Joghurt",
+   "normalizedAlias": "fettarmer joghurt",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Joghurt",
+   "attributes": {
+    "fat": "low"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "M141200"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "gemahlener Kreuzkümmel",
+   "normalizedAlias": "gemahlener kreuzkuemmel",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Kreuzkümmel",
+   "attributes": {
+    "form": "ground"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170923"
+   },
+   "confidence": 0.85,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "gerösteter Sesam",
+   "normalizedAlias": "geroesteter sesam",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Sesam",
+   "attributes": {
+    "state": "roasted"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "H420100"
+   },
+   "confidence": 0.8,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrocknete Petersilie",
+   "normalizedAlias": "getrocknete petersilie",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Petersilienblatt",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "G250400"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrocknete Tomaten (in Öl)",
+   "normalizedAlias": "getrocknete tomaten in oel",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Tomate",
+   "attributes": {
+    "preservation": "dried",
+    "packedIn": "oil"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "G567702"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrockneter Basilikum",
+   "normalizedAlias": "getrockneter basilikum",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Basilikum",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171317"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrockneter Bohnenkräuter",
+   "normalizedAlias": "getrockneter bohnenkraeuter",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Bohnenkraut",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170936"
+   },
+   "confidence": 0.85,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrockneter Koriander",
+   "normalizedAlias": "getrockneter koriander",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrockneter Oregano",
+   "normalizedAlias": "getrockneter oregano",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Oregano",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171328"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrockneter Thymian",
+   "normalizedAlias": "getrockneter thymian",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Thymian",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170938"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "glatte Petersilie",
+   "normalizedAlias": "glatte petersilie",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Petersilienblatt",
+   "preferred": {
+    "provider": "bls",
+    "id": "G250100"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Gouda (am Stück)",
+   "normalizedAlias": "gouda am stueck",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Gouda",
+   "preferred": {
+    "provider": "bls",
+    "id": "M402600"
+   },
+   "confidence": 0.6,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "grüne Chilischoten, frisch",
+   "normalizedAlias": "gruene chilischoten frisch",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Chilischote",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170497"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Kirschtomaten",
+   "normalizedAlias": "kirschtomaten",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Tomate",
+   "preferred": {
+    "provider": "bls",
+    "id": "G561100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Knoblauchzehen",
+   "normalizedAlias": "knoblauchzehen",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Knoblauch",
+   "preferred": {
+    "provider": "bls",
+    "id": "G490100"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Knoblauchzehn",
+   "normalizedAlias": "knoblauchzehn",
+   "language": "de",
+   "kind": "spelling_variant",
+   "identity": "Knoblauch",
+   "preferred": {
+    "provider": "bls",
+    "id": "G490100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Kodneybohnen",
+   "normalizedAlias": "kodneybohnen",
+   "language": "de",
+   "kind": "spelling_variant",
+   "identity": "Kidneybohne",
+   "preferred": {
+    "provider": "bls",
+    "id": "H742100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Koriander",
+   "normalizedAlias": "koriander",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Koriander, gemahlen",
+   "normalizedAlias": "koriander gemahlen",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Koriandersamen",
+   "attributes": {
+    "form": "ground"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170922"
+   },
+   "confidence": 0.85,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Korianderkörner",
+   "normalizedAlias": "korianderkoerner",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Koriandersamen",
+   "attributes": {
+    "form": "seed"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170922"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Kräuterseitlinge",
+   "normalizedAlias": "kraeuterseitlinge",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Kräuterseitling",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "2003599"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Kreuzkümmelsamen",
+   "normalizedAlias": "kreuzkuemmelsamen",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Kreuzkümmel",
+   "attributes": {
+    "form": "seed"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170923"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Kurkuma",
+   "normalizedAlias": "kurkuma",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Kurkuma",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "172231"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Kurkuma, gemahlen",
+   "normalizedAlias": "kurkuma gemahlen",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Kurkuma",
+   "attributes": {
+    "form": "ground"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "172231"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Limete",
+   "normalizedAlias": "limete",
+   "language": "de",
+   "kind": "spelling_variant",
+   "identity": "Limette",
+   "preferred": {
+    "provider": "bls",
+    "id": "F602100"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Lorbeerblätter",
+   "normalizedAlias": "lorbeerblaetter",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Lorbeerblatt",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170917"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Mehl",
+   "normalizedAlias": "mehl",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Weizenmehl",
+   "preferred": {
+    "provider": "bls",
+    "id": "C214100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Mehl (Type 405)",
+   "normalizedAlias": "mehl type 405",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Weizenmehl",
+   "attributes": {
+    "type": "405"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "C214100"
+   },
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Milch",
+   "normalizedAlias": "milch",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Vollmilch",
+   "preferred": {
+    "provider": "bls",
+    "id": "M111300"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Milch (Vollmilch)",
+   "normalizedAlias": "milch vollmilch",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Vollmilch",
+   "preferred": {
+    "provider": "bls",
+    "id": "M111300"
+   },
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Minze",
+   "normalizedAlias": "minze",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Minze",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "173475"
+   },
+   "confidence": 0.6,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "mittelgroße Zwiebeln",
+   "normalizedAlias": "mittelgrosse zwiebeln",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Zwiebel",
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Muskat",
+   "normalizedAlias": "muskat",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Muskatnuss",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171326"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Öl",
+   "normalizedAlias": "oel",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Öl für die Pfanne",
+   "normalizedAlias": "oel fuer die pfanne",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Oregano, getrocknet",
+   "normalizedAlias": "oregano getrocknet",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Oregano",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171328"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Paprikapulver",
+   "normalizedAlias": "paprikapulver",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Paprikapulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171329"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Paprikapulver (edelsüß)",
+   "normalizedAlias": "paprikapulver edelsuess",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Paprikapulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171329"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Petersilie",
+   "normalizedAlias": "petersilie",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Petersilienblatt",
+   "preferred": {
+    "provider": "bls",
+    "id": "G250100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Pflanzenöl",
+   "normalizedAlias": "pflanzenoel",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Pflanzenöl",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "172370"
+   },
+   "confidence": 0.7,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Reisessig",
+   "normalizedAlias": "reisessig",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Essig",
+   "confidence": 0.7,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Rigatoni",
+   "normalizedAlias": "rigatoni",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Teigwaren",
+   "confidence": 0.8,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Rinderhackfleisch",
+   "normalizedAlias": "rinderhackfleisch",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Rind Hackfleisch",
+   "preferred": {
+    "provider": "bls",
+    "id": "U010100"
+   },
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Rohrzucker",
+   "normalizedAlias": "rohrzucker",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Zucker",
+   "preferred": {
+    "provider": "bls",
+    "id": "S111000"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Rosmarin",
+   "normalizedAlias": "rosmarin",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "rote Chilischote",
+   "normalizedAlias": "rote chilischote",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Chilischote",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170106"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "rote Paprika",
+   "normalizedAlias": "rote paprika",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Gemüsepaprika",
+   "attributes": {
+    "colour": "red"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "G543100"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Schinkenwürfel",
+   "normalizedAlias": "schinkenwuerfel",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Kochschinken",
+   "preferred": {
+    "provider": "bls",
+    "id": "W440000"
+   },
+   "confidence": 0.85,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "schwarze Bohnen",
+   "normalizedAlias": "schwarze bohnen",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "schwarze Bohne",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "173734"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Spitzpaprika, rot",
+   "normalizedAlias": "spitzpaprika rot",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Gemüsepaprika",
+   "attributes": {
+    "colour": "red"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "G543100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Sprudel",
+   "normalizedAlias": "sprudel",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Mineralwasser",
+   "attributes": {
+    "carbonated": true
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "N127000"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "stückige Tomaten (Dose)",
+   "normalizedAlias": "stueckige tomaten dose",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Tomate",
+   "attributes": {
+    "preservation": "canned"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "G560900"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Tahini",
+   "normalizedAlias": "tahini",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Tahin",
+   "preferred": {
+    "provider": "bls",
+    "id": "Q901000"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Thymian",
+   "normalizedAlias": "thymian",
+   "language": "de",
+   "kind": "ambiguous",
+   "confidence": 1,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "trockener Weißwein",
+   "normalizedAlias": "trockener weisswein",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Weißwein",
+   "attributes": {
+    "style": "dry"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "P210000"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Weizenmehl",
+   "normalizedAlias": "weizenmehl",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Weizenmehl",
+   "preferred": {
+    "provider": "bls",
+    "id": "C214100"
+   },
+   "confidence": 0.85,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Zimt",
+   "normalizedAlias": "zimt",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Zimt",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171320"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  }
+ ]
+}

@@ -48,8 +48,10 @@ describe("an under-constrained query never reaches global USDA ranking", () => {
     // It may legitimately stay unresolved deterministically, or be answered by another provider —
     // what it must never be is a confident USDA record chosen from an unconstrained scan.
     expect(resolved?.match.providerId).not.toBe("325658")
-    if (resolved?.match.provider === "usda-local") {
-      throw new Error(`"Ei" still reached USDA: ${resolved.match.productName}`)
+    // A curated recipe-vocabulary row is exempt: it names one reviewed record and never scans.
+    // What stays forbidden is USDA answering from its own ranking for a query this short.
+    if (resolved?.match.provider === "usda-local" && !resolved.match.matchReason?.startsWith("recipe-vocabulary:")) {
+      throw new Error(`"Ei" still reached USDA by ranking: ${resolved.match.productName}`)
     }
   })
 

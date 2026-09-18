@@ -1,0 +1,188 @@
+{
+ "version": 1,
+ "language": "en",
+ "entries": [
+  {
+   "alias": "Capers",
+   "normalizedAlias": "capers",
+   "language": "en",
+   "kind": "synonym",
+   "identity": "Kapern",
+   "preferred": {
+    "provider": "bls",
+    "id": "G012902"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Cherry Tomatoes",
+   "normalizedAlias": "cherry tomatoes",
+   "language": "en",
+   "kind": "synonym",
+   "identity": "Tomate",
+   "preferred": {
+    "provider": "bls",
+    "id": "G561100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Cooked Puy Lentils",
+   "normalizedAlias": "cooked puy lentils",
+   "language": "en",
+   "kind": "exact_phrase",
+   "identity": "Linse",
+   "attributes": {
+    "state": "cooked"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "H730132"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Fresh Coriander",
+   "normalizedAlias": "fresh coriander",
+   "language": "en",
+   "kind": "exact_phrase",
+   "identity": "Koriandergrün",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "169997"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Fresh Ginger",
+   "normalizedAlias": "fresh ginger",
+   "language": "en",
+   "kind": "exact_phrase",
+   "identity": "Ingwer",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "R211200"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "ground beef",
+   "normalizedAlias": "ground beef",
+   "language": "en",
+   "kind": "synonym",
+   "identity": "Rind Hackfleisch",
+   "preferred": {
+    "provider": "bls",
+    "id": "U010100"
+   },
+   "confidence": 0.95,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Pitta Breads",
+   "normalizedAlias": "pitta breads",
+   "language": "en",
+   "kind": "synonym",
+   "identity": "Pitabrot",
+   "preferred": {
+    "provider": "usda-local",
+    "id": "174915"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Plum Tomatoes",
+   "normalizedAlias": "plum tomatoes",
+   "language": "en",
+   "kind": "synonym",
+   "identity": "Tomate",
+   "preferred": {
+    "provider": "bls",
+    "id": "G561100"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Red Chilli",
+   "normalizedAlias": "red chilli",
+   "language": "en",
+   "kind": "exact_phrase",
+   "identity": "Chilischote",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170106"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Tomato Purée",
+   "normalizedAlias": "tomato purée",
+   "language": "en",
+   "kind": "synonym",
+   "identity": "Tomatenmark",
+   "preferred": {
+    "provider": "bls",
+    "id": "R160000"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "paprika-corpus",
+    "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  }
+ ]
+}

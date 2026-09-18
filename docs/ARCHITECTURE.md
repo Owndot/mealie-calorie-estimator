@@ -87,3 +87,31 @@ Candidate ordering for the judge is a pure function of the candidate set, and de
 by ingredient identity + the exact pool, so the same question yields the same answer.
 
 See [CACHING.md](CACHING.md) for cache layers and TTLs, [OVERRIDES.md](OVERRIDES.md) for overrides.
+
+## Recipe vocabulary
+
+A sparse, curated map from what people write in recipes to what the databases call it, sitting
+between normalization and the resolver:
+
+```
+ingredient -> normalization -> recipe vocabulary -> provider chain
+```
+
+`resources/recipe-vocabulary/{de,en}.json`, loaded and validated once, exact normalized alias
+matching only. It is an enrichment layer, not a provider: it supplies the canonical identity that
+deterministic mode cannot derive for itself, and everything it does not know falls through to the
+existing resolver untouched.
+
+Five kinds, and the distinction matters for provenance: `synonym` is a fact about naming,
+`recipe_default` is an assumption the project makes on the cook's behalf, `exact_phrase` carries
+attributes the phrase states, `spelling_variant` is a misspelling someone actually wrote, and
+`ambiguous` records that no safe default exists and blocks the resolver from narrowing.
+
+A `preferred` target names a provider and record id — never copied nutrients. It is re-loaded live,
+sanity-checked, and required to agree with any state the ingredient itself stated; any of those
+failing drops the preference and normal resolution continues.
+
+Sized by measurement. The 84 entries are the terms a 22-recipe corpus showed resolving wrongly or
+not at all. An independent 117-recipe corpus matched only 10% of its ingredient occurrences against
+these aliases, so this is a mechanism to extend one measured failure at a time, not a vocabulary
+project.

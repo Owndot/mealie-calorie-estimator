@@ -78,7 +78,11 @@ describe("an upgraded installation with a poisoned USDA cache", () => {
     const resolved = await resolve("Ei")
 
     expect(resolved?.match.providerId).not.toBe("325658")
-    expect(resolved?.match.provider).not.toBe("usda-local")
+    // The poisoned cache row must never be served. A curated vocabulary row may answer, because it
+    // names one reviewed record directly and never reads the provider cache.
+    if (resolved?.match.provider === "usda-local") {
+      expect(resolved.match.matchReason).toMatch(/^recipe-vocabulary:/)
+    }
   })
 
   it("never consults the USDA cache at all for an unconstrained query", async () => {
@@ -119,7 +123,7 @@ describe("the v1.0.4 invariants are preserved", () => {
   it("cold-cache 'Ei', 'Zz' and 'Aa' resolve to nothing", async () => {
     for (const junk of ["Ei", "Zz", "Aa"]) {
       const r = await resolve(junk)
-      if (r) expect(r.match.provider).not.toBe("usda-local")
+      if (r?.match.provider === "usda-local") expect(r.match.matchReason).toMatch(/^recipe-vocabulary:/)
     }
     expect(await resolve("Zz")).toBeNull()
     expect(await resolve("Aa")).toBeNull()

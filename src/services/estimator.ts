@@ -8,6 +8,7 @@ import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
 import { resolveNutrients } from "./nutrient-resolver.js"
+import { lookupVocabulary } from "./vocabulary/recipe-vocabulary.js"
 import { judgeNeed } from "./providers/judge/judge-need.js"
 import { buildResolverQuery } from "./resolver-query.js"
 import { normalizeIngredients, type NormalizerInput } from "./llm-normalizer.js"
@@ -294,6 +295,12 @@ export function classifyMatchQuality(
   return { matchQuality: "mixed", reason: `calorie-weighted match confidence is ${weighted.toFixed(2)}`, lowConfidence }
 }
 
+/** Compact provenance: which curated row was consulted, and how strong a claim it makes. */
+function vocabularyProvenance(foodName: string): { alias: string; kind: string } | null {
+  const match = lookupVocabulary(foodName)
+  return match ? { alias: match.alias, kind: match.kind } : null
+}
+
 export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResult> {
   const validIngredients = collectValidIngredients(recipe)
 
@@ -359,6 +366,7 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       category: classification?.category ?? null,
       coreEnglish: coreFoodEnglish,
       cached: classification?.fromCache ?? false,
+      vocabulary: vocabularyProvenance(ing.foodName),
     }
 
     if (grams === null) {

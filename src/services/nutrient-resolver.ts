@@ -8,6 +8,9 @@ import { searchOff, filterOffHits, offProxyJustified } from "./providers/judge/o
 import { askJudge, JUDGE_PROMPT_VERSION } from "./providers/judge/judge.js"
 import type { JudgeCandidate, JudgeVerdict } from "./providers/judge/types.js"
 import { sanityCheckNutrients } from "./sanity-check.js"
+import { loadBlsRecordByCode } from "./providers/bls-provider.js"
+import { loadUsdaRecordById } from "./providers/usda-local-provider.js"
+import { narrowsAmbiguousIngredient } from "./vocabulary/recipe-vocabulary.js"
 import { statedModifierFamilies } from "./providers/food-semantics.js"
 import { logger } from "../utils/logger.js"
 import type { ProviderQuery } from "./providers/types.js"
@@ -95,6 +98,53 @@ function unansweredBy(match: ProviderMatch, unmet: string[]): string[] {
   return unmet.filter((family) => !stated.includes(family))
 }
 
+/**
+ * The record the curated vocabulary prefers, if it is still usable.
+ *
+ * Validated the way a user-confirmed override is, and for the same reason: an id is a pointer into
+ * a database that gets upgraded, so it is re-loaded live rather than trusted. It must still exist,
+ * be nutritionally possible for the food asked for, and not contradict a state the ingredient
+ * itself stated. Any of those failing is not an error — the vocabulary simply stops having an
+ * opinion and normal resolution continues.
+ */
+async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedNutrients | null> {
+  const preferred = query.vocabulary?.preferred
+  if (!preferred) return null
+
+  const record = preferred.provider === "bls"
+    ? await loadBlsRecordByCode(preferred.id)
+    : await loadUsdaRecordById(preferred.id)
+  if (!record) {
+    logger.info({ foodName: query.foodName, ...preferred }, "Recipe vocabulary: preferred record no longer exists, resolving normally")
+    return null
+  }
+  const check = sanityCheckNutrients(record.nutrients, query.foodName)
+  if (!check.ok) {
+    logger.warn({ foodName: query.foodName, ...preferred, reason: check.reason }, "Recipe vocabulary: preferred record is not nutritionally possible, resolving normally")
+    return null
+  }
+  // A state the INGREDIENT stated outranks the vocabulary's preference. "Cooked Puy Lentils" may
+  // prefer the cooked record; a query that says "raw" must not be handed it.
+  if (query.state !== "unknown" && record.state !== "unknown" && record.state !== query.state) {
+    logger.info({ foodName: query.foodName, ...preferred, queryState: query.state, recordState: record.state }, "Recipe vocabulary: preferred record contradicts the stated state, resolving normally")
+    return null
+  }
+  const match: ProviderMatch = {
+    nutrients: record.nutrients, provider: preferred.provider, providerId: preferred.id,
+    productName: record.name, canonicalName: record.name, brand: null, state: record.state,
+    confidence: VOCABULARY_CONFIDENCE,
+    matchReason: `recipe-vocabulary:${query.vocabulary?.kind ?? "entry"}`,
+    foodType: record.foodType,
+  }
+  return { match, fallbackStatus: toFallbackStatus(preferred.provider) }
+}
+
+/**
+ * Reported confidence for a curated match. Below an exact database name match, because the row is
+ * a human judgement about vocabulary rather than the database agreeing with the ingredient.
+ */
+const VOCABULARY_CONFIDENCE = 0.85
+
 async function resolveDeterministic(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
   const chain = getProviderChain(route)
 
@@ -103,7 +153,15 @@ async function resolveDeterministic(query: ProviderQuery, route: FoodRoute): Pro
   // worth keeping.
   let shortfall: ResolvedNutrients | null = null
 
+  // The curated preference is consulted FIRST among database sources, but the override provider is
+  // the head of the chain and must still win — so it is asked before the preference is applied.
+  let vocabularyPreference: ResolvedNutrients | null | undefined
+
   for (const provider of chain) {
+    if (provider.name !== "food-override" && vocabularyPreference === undefined) {
+      vocabularyPreference = await preferredVocabularyMatch(query)
+      if (vocabularyPreference) return vocabularyPreference
+    }
     let match: ProviderMatch | null
     try {
       match = await provider.lookup(query)
@@ -113,6 +171,17 @@ async function resolveDeterministic(query: ProviderQuery, route: FoodRoute): Pro
     }
 
     if (!match) continue
+
+    // An alias the vocabulary marked ambiguous refuses a record that NARROWS it. "Bohnen" spans
+    // 28-344 kcal/100 g, and the top-scoring bean is not evidence of which one was meant — a
+    // withheld ingredient is recoverable, a confidently wrong one is not. A genuinely generic
+    // record still passes.
+    if (query.vocabulary?.ambiguous && match.productName
+        && narrowsAmbiguousIngredient(query.structuredName ?? query.foodName, match.productName)) {
+      logger.info({ provider: provider.name, foodName: query.foodName, record: match.productName },
+        "Recipe vocabulary: ingredient is ambiguous and this record narrows it, declining")
+      continue
+    }
 
     const check = sanityCheckNutrients(match.nutrients, query.foodName)
     if (!check.ok) {
