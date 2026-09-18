@@ -51,6 +51,11 @@ async function resolve(name: string) {
   }
 }
 
+vi.mock("../src/services/mealie-client.js", () => ({
+  listRecipeNames: vi.fn(async () => []),
+  getRecipe: vi.fn(async () => { throw new Error("No Mealie recipes in vocabulary fixtures") }),
+}))
+
 beforeAll(async () => { await initCache() })
 afterEach(() => { vi.restoreAllMocks() })
 
