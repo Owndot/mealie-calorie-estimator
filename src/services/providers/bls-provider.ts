@@ -9,7 +9,7 @@ import { getCachedProviderMatch, setCachedProviderMatch, isProviderMiss, markPro
 import type { NutrientSet, ProviderMatch, FoodState, FoodType, FoodAttributes } from "../../types.js"
 import type { NutrientProvider, ProviderQuery } from "./types.js"
 import { findMismatch, categoryConflict, foodTypeConflict, coreIdentityConflict, coreIdentityScoreAdjustment, cachedMatchConflict, matchingContextKey, GENERIC_DESCRIPTOR_WORDS, specificityConflict, sharesFullQueryIdentity, unmetModifierPenalty, UNMET_MODIFIER_WEIGHT } from "./ranking.js"
-import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches, germanStem, standalonePlantPart, unmetModifierFamilies, PLURAL_ENDINGS, type PlantPart } from "./food-semantics.js"
+import { GERMAN_DESCRIPTOR_WORDS, germanTokenMatches, germanStem, standalonePlantPart, unmetModifierFamilies, isGenericQualifier, PLURAL_ENDINGS, type PlantPart } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 import { FULL_EVIDENCE, usesDegradedBlsPolicy } from "../identity-evidence.js"
 import {
@@ -732,6 +732,19 @@ function recallNeedles(core: string): string[] {
     v !== base && v.length >= MIN_DERIVED_NEEDLE_LENGTH && germanTokenMatches(v, base))]
 }
 
+/**
+ * The phrase with its colour and leaf-shape qualifiers removed, or null when that leaves nothing
+ * or changes nothing. Used only as BlsProvider's last-resort variant — see the comment at its call
+ * site for why removing these words is safe there and nowhere else.
+ */
+function baseIdentityText(text: string | null | undefined): string | null {
+  if (!text) return null
+  const words = text.split(/\s+/).filter(Boolean)
+  const kept = words.filter((w) => !isGenericQualifier(normalizeGermanText(w).replace(/[^\p{L}\p{N}]/gu, "")))
+  if (kept.length === 0 || kept.length === words.length) return null
+  return kept.join(" ")
+}
+
 function recallCandidates(query: ProviderQuery, data: BlsData, attrs: FoodAttributes): ScoredRecord[] {
   const core = (query.coreFoodGerman ?? query.structuredName ?? "").trim()
   const needles = recallNeedles(core)
@@ -855,6 +868,24 @@ export class BlsProvider implements NutrientProvider {
       // variety BLS does not model, but its core "Reis" reaches the generic rice record — using
       // the base noun we already have rather than inventing a synonym list.
       { text: query.coreFoodGerman ?? null, core: query.coreFoodGerman ?? null },
+      // The same last resort, for a query that has no classifier to supply a core.
+      //
+      // Without an LLM, coreFoodGerman is null and the variant above is empty — which is the whole
+      // of the leading-modifier failure. A colour adjective is scored as CONTENT, so it does not
+      // merely dilute the score, it redirects retrieval: "rote Linsen" ranked "Rote Rübe/Rote Bete"
+      // top at 31, the lentil records did not place at all, and the recipe was withheld, while
+      // "Linsen" alone reached "Linse reif" at 75. The same held for "rote Zwiebel", "braune
+      // Champignons", "natives Olivenöl" and "glatte Petersilie".
+      //
+      // Position matters more than the rule: variants are tried in order and only the FIRST to
+      // produce a pick becomes the deterministic answer, so this can never displace a query that
+      // resolved under its own words. "Erbse grün" and "Schwarze Bohne" — where the colour really
+      // is the identity — are reached before this is consulted and are unaffected.
+      //
+      // Only colour and leaf shape are dropped. A state, form, preservation or fat modifier stays,
+      // so "getrocknete Tomaten" and "gekochte Kartoffeln" still decline rather than quietly
+      // answering with the untransformed food.
+      { text: baseIdentityText(structuredName ?? query.foodName), core: null },
       // Tried last: only a query that found nothing under its own words falls back to BLS's lemma.
       ...synonyms,
     ].filter((v, i, arr): v is { text: string; core: string | null } => !!v.text && arr.findIndex((o) => o.text === v.text) === i)

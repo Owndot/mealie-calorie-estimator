@@ -59,6 +59,40 @@ export const GERMAN_DESCRIPTOR_WORDS = new Set([
   "speise", "speisen", "tafel", "haushalts", "voll", "standard", "normal",
 ])
 
+/** German weak-declension adjective endings: "rot" -> rote/roter/rotes/roten/rotem. */
+const ADJECTIVE_ENDINGS = ["", "e", "er", "es", "en", "em"]
+
+/**
+ * Colour and leaf-shape adjectives — the only modifiers safe to REMOVE when a phrase has otherwise
+ * found nothing at all.
+ *
+ * Deliberately not merged into category A, and deliberately not used in scoring. A colour is not
+ * reliably generic: "Erbse grün" is 88 kcal/100 g against 311 for "Erbse reif", and "Schwarze
+ * Bohne" is a variety with its own record. Treating colour as noise in the scorer breaks both.
+ *
+ * What is safe is the narrower claim this list is used for: when a phrase resolves to NOTHING, the
+ * same phrase without its colour is a better guess than silence. That is the last-resort fallback
+ * in BlsProvider, and it can only ever turn a withheld ingredient into a base-food match — it
+ * cannot disturb a query that already resolved under its own words.
+ *
+ * "schwarz" and "weiss" are excluded for a stronger reason than "orange": in legumes and grains
+ * they name a VARIETY the databases model separately. "Schwarze Bohne" must keep reaching USDA's
+ * black-bean record rather than falling back onto a green bean, and dropping the colour took it
+ * there — a fallback that preempts a better provider is worse than the silence it replaced.
+ *
+ * "orange" is excluded too: in German it is also the fruit, the same reasoning that keeps "kraut"
+ * out of the leaf markers.
+ */
+const GENERIC_QUALIFIER_STEMS = [
+  "rot", "gruen", "gelb", "braun", "violett", "glatt", "kraus", "nativ",
+]
+
+/** Whether a token is a colour or leaf-shape qualifier, in any of its German adjective endings. */
+export function isGenericQualifier(token: string): boolean {
+  return GENERIC_QUALIFIER_STEMS.some((stem) =>
+    ADJECTIVE_ENDINGS.some((ending) => token === stem + ending))
+}
+
 /**
  * Category B — modifiers that CHANGE the food's nutritional identity. Never generic; a candidate
  * carrying one of these must not satisfy a query that does not ask for it.
@@ -352,7 +386,6 @@ const PRESERVATION_MARKERS: [FoodPreservation, string[]][] = [
  * that happens to be jarred), and BLS states the primary transformation first, so earliest-wins
  * reads the name the way it is written instead of the order the marker table happens to use.
  */
-const ADJECTIVE_ENDINGS = ["", "e", "er", "es", "en", "em"]
 
 function markerIndex(tokens: string[], markers: string[]): number {
   for (let i = 0; i < tokens.length; i++) {
