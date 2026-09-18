@@ -323,7 +323,9 @@ export function compoundMatchesTokens(queryToken: string, candidateTokens: strin
  * "cabbage" ("Sauerkraut"), so it is not reliable evidence of a leaf herb.
  */
 const FORM_MARKERS: [FoodForm, string[]][] = [
-  ["powder", ["pulver", "powder", "instant"]],
+  // "rosenscharf" and "edelsuess" are grade names for ground paprika and appear on nothing else,
+  // so they are spice evidence wherever they occur — the words themselves carry the form.
+  ["powder", ["pulver", "powder", "instant", "rosenscharf", "edelsuess"]],
   ["ground", ["gemahlen", "gerieben", "geraspelt", "ground", "grated", "milled"]],
   ["flakes", ["flocken", "flakes", "schrot"]],
   ["leaf", ["blatt", "blaetter", "leaf", "leaves", "cilantro"]],
@@ -618,11 +620,78 @@ function earliestMarker<T>(tokens: string[], table: [T, string[]][]): T | null {
   return best
 }
 
+/**
+ * USDA states the spice category in the description itself: all 42 of its spice records begin
+ * "Spices, ". That prefix is preparation evidence the marker tables cannot see, because most of
+ * those names carry no preparation WORD at all — "Spices, paprika" and "Spices, cardamom" read as
+ * attribute-free, so nothing distinguished a dried ground spice at ~300 kcal/100 g from the fresh
+ * vegetable of the same name at ~25.
+ *
+ * Measured on v1.1.0: deterministic "rote Paprika" and "grüne Paprika" both resolved to USDA
+ * "Spices, paprika" (282 kcal/100 g) rather than "Peppers, sweet, red/green, raw" (20-26), a ~10x
+ * error on an ingredient used in vegetable quantities. Both candidates looked equally silent.
+ *
+ * A spice is dried by definition, so the category states a preservation. Recording it lets the
+ * rules already in place do the work: attributeFit() prefers a record that introduces nothing over
+ * one that introduces an attribute the ingredient never mentioned, and preservationConflict()
+ * rejects a dried record outright for an explicitly fresh query. A name carrying its own, more
+ * specific marker keeps it — "Spices, cumin seed" stays seed, "Spices, coriander leaf, dried"
+ * stays leaf/dried — because this only fills a gap, it never overrides evidence.
+ */
+const USDA_SPICE_CATEGORY = /^\s*spices\s*,/i
+
+/**
+ * German food words that name a FRESH VEGETABLE while the identical English word names a dried
+ * spice. Deliberately not a translation table: it exists because the nutrient databases disagree
+ * about what the same letters mean, and the disagreement is worth ~10x in energy density.
+ *
+ * "Paprika" is the case this was built for. German "Paprika" is the bell pepper, ~20-38 kcal/100 g;
+ * English "paprika" is the ground dried spice, 282. USDA holds exactly one record containing the
+ * token — "Spices, paprika" — and files the vegetable under "Peppers, sweet, red, raw", which
+ * shares no token with the German phrase at all. So no ranking, attribute or rerank rule can reach
+ * the right record from a German query: the only safe deterministic answer is to refuse the wrong
+ * one. Measured on v1.1.0, "rote Paprika" and "grüne Paprika" both resolved to the 282 kcal spice.
+ *
+ * Kept to the words where the collision is real and the energy gap is large. A term only belongs
+ * here if the German sense is a fresh vegetable, the English sense is a dried spice, and both
+ * senses are spelled the same.
+ */
+const GERMAN_VEGETABLE_ENGLISH_SPICE = ["paprika"]
+
+/**
+ * Whether the text names one of those false friends in its VEGETABLE sense — that is, with no word
+ * anywhere in it claiming a spice preparation. "Paprikapulver", "Paprika rosenscharf" and
+ * "Paprika edelsüß" all state a powder and are excluded; "rote Paprika" and "Paprikaschote" do not
+ * and are included, as is the bare word.
+ *
+ * Reported as preservation "fresh" rather than as a new axis, because that is what it means and
+ * because the rules that must act on it already exist: preservationConflict() rejects a dried
+ * candidate for a fresh query, and freshVsProcessedFormConflict() rejects a ground or powdered one.
+ */
+/**
+ * Smoking is a spice preparation here, but it is NOT a form and must not become one: "geräuchert"
+ * is also how a salmon, a ham and a sausage are described, and those are whole foods. It is read
+ * only as a reason the false-friend rule does not apply — "smoked paprika" is unambiguously the
+ * spice, while a smoked fish is unaffected because no false friend is named.
+ */
+const SMOKED_MARKERS = ["geraeuchert", "smoked"]
+
+function namesFreshVegetableFalseFriend(tokens: string[]): boolean {
+  if (!tokens.some((t) => GERMAN_VEGETABLE_ENGLISH_SPICE.some((w) => t === w || t.startsWith(w)))) return false
+  if (earliestMarker(tokens, FORM_MARKERS) !== null) return false
+  return markerIndex(tokens, SMOKED_MARKERS) < 0
+}
+
 export function inferAttributesFromName(name: string): FoodAttributes {
   const tokens = semanticTokens(name)
+  const stated = earliestMarker(tokens, PRESERVATION_MARKERS)
+  const preservation = stated
+    ?? (USDA_SPICE_CATEGORY.test(name) ? "dried" : null)
+    ?? (namesFreshVegetableFalseFriend(tokens) ? "fresh" : null)
+    ?? "unknown"
   return {
     form: earliestMarker(tokens, FORM_MARKERS) ?? "unknown",
-    preservation: earliestMarker(tokens, PRESERVATION_MARKERS) ?? "unknown",
+    preservation,
     fatPercent: null,
   }
 }
