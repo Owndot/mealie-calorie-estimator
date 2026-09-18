@@ -4,7 +4,8 @@ import type { ProviderQuery } from "./providers/types.js"
 import { lookupVocabulary } from "./vocabulary/recipe-vocabulary.js"
 import { coreIdentityConflict } from "./providers/ranking.js"
 import type { VocabularyMatch } from "./vocabulary/types.js"
-import { reconcileAttributes } from "./providers/food-semantics.js"
+import { reconcileAttributes, compoundSpecifierConflict, sharesLeadingIdentity } from "./providers/food-semantics.js"
+import { normalizeIdentityText } from "../utils/text-normalize.js"
 
 /**
  * Turns one classified ingredient into the query the resolver actually receives.
@@ -108,10 +109,33 @@ export function buildResolverQuery(
   //
   // Only asked when a classifier actually spoke. Deterministic mode has canonicalGerman ===
   // structuredName by construction, so the pointer applies exactly as before.
+  //
+  // A rename is only a CONTRADICTION when the new name is a different food. Measured in
+  // production: for "Koriander frisch" the model returned "Koriandergrün" — its own word for the
+  // same fresh leaf the curated row points at — and the pointer was dropped, so the ingredient
+  // went unresolved in one recipe while resolving correctly in three others whose batch happened
+  // to echo the alias. Whole-recipe classification means the same ingredient is worded differently
+  // from recipe to recipe, so a text mismatch alone cannot mean "different food".
+  //
+  // Two extra questions separate the cases, both answered with existing German morphology:
+  //   - do the two words share their LEADING material? `Koriandergrün`/`Korianderblätter` do, and
+  //     German narrows from the front, so that is the same food said differently;
+  //   - do they share a HEAD but state different specifiers? `Gerstenmehl` against the curated
+  //     `Weizenmehl` does — barley is not wheat — and that is a real contradiction, which is
+  //     exactly the case the gate was added for.
+  const renamedTo = normalizeIdentityText(canonicalGerman)
+  const curatedTexts = vocabulary
+    ? [vocabulary.alias, vocabulary.identity].filter((t): t is string => typeof t === "string" && t.length > 0)
+    : []
+  const contradictsCuratedFood = curatedTexts.some((t) => compoundSpecifierConflict(renamedTo, normalizeIdentityText(t)))
+  const agreesWithCuratedFood = !contradictsCuratedFood
+    && curatedTexts.some((t) => sharesLeadingIdentity(renamedTo, normalizeIdentityText(t)))
+
   const classifierRenamedIngredient = classification?.llmClassified === true
     && vocabulary !== null
     && coreIdentityConflict(canonicalGerman, vocabulary.alias, "compound")
     && (vocabulary.identity === null || coreIdentityConflict(canonicalGerman, vocabulary.identity, "compound"))
+    && !agreesWithCuratedFood
 
   /**
    * The curated assertions. Unlike enrichment these are reviewed judgements about this exact

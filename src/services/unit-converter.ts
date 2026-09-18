@@ -53,6 +53,10 @@ const SPOON_CUP_UNIT_NAMES = new Set([
 
 const PIECE_PACKAGE_UNIT_NAMES = new Set([
   "stück", "stueck", "piece", "pieces", "slice", "slices",
+  // "Scheibe" and "Würfel" are ordinary Mealie units that were never routed here, so a food with
+  // a perfectly good piece weight still converted to nothing — the yeast entry below has declared
+  // a `würfel` weight all along and could never be reached.
+  "scheibe", "scheiben", "würfel", "wuerfel", "cube", "cubes",
   "dose", "dosen", "glas", "gläser", "glaeser",
   "bund", "bunde", "bündel", "buendel",
   "packung", "packungen", "päckchen", "paeckchen",

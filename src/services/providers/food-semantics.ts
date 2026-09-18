@@ -299,6 +299,60 @@ export function germanStem(token: string): string {
   return token
 }
 
+/** Every way a token can be read as `<specifier><head>`, plus the bare token as a pure head. */
+function headSpecifierReadings(token: string): { head: string; specifier: string }[] {
+  const readings = compoundSegments(token).map(([specifier, head]) => ({ head, specifier }))
+  readings.push({ head: token, specifier: "" })
+  return readings
+}
+
+/**
+ * Do two German food words name the same head food but DISAGREE about which kind of it?
+ *
+ * "Gerstenmehl" and "Weizenmehl" share the head `mehl` and each states a different specifier —
+ * barley is not wheat. "Magermilch" and "Vollmilch" likewise. That is a genuine identity
+ * contradiction, and it is the ONLY thing separating those from an ordinary synonym.
+ *
+ * A word that is purely the head is not a disagreement: "Basmatireis" against "Reis" narrows,
+ * it does not contradict, and neither does "Gemüsepaprika" against "Paprika". So a conflict
+ * requires BOTH sides to state a specifier, and the two specifiers to be different foods rather
+ * than inflections of one.
+ *
+ * Deliberately narrow. Everything it cannot see falls through to the caller's other tests; this
+ * answers one question only, and answers `false` whenever it is unsure.
+ */
+export function compoundSpecifierConflict(a: string, b: string): boolean {
+  for (const left of headSpecifierReadings(a)) {
+    if (!left.specifier) continue
+    for (const right of headSpecifierReadings(b)) {
+      if (!right.specifier) continue
+      if (germanStem(left.head) !== germanStem(right.head)) continue
+      if (germanTokenMatches(left.specifier, right.specifier)) continue
+      if (left.specifier.startsWith(right.specifier) || right.specifier.startsWith(left.specifier)) continue
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Do two German food words share enough leading word-material to be the same food said
+ * differently? "Koriandergrün" and "Korianderblätter" are both coriander leaf; a model that
+ * returns one where the curated row says the other has agreed, not renamed the ingredient.
+ *
+ * Leading material specifically, because German narrows from the front: a shared HEAD is what
+ * "Gerstenmehl" and "Weizenmehl" have, and that is the case this must NOT treat as agreement.
+ */
+export function sharesLeadingIdentity(a: string, b: string, minPart = 5): boolean {
+  const lead = (token: string): string[] => {
+    const out = [token, germanStem(token)]
+    for (const [specifier] of compoundSegments(token, minPart)) out.push(specifier)
+    return out.filter((t) => t.length >= minPart)
+  }
+  const left = new Set(lead(a))
+  return lead(b).some((t) => left.has(t))
+}
+
 /** Regular plural/inflection endings a German noun picks up: Erbse -> Erbsen, Tomate -> Tomaten. */
 export const PLURAL_ENDINGS = ["n", "en", "e", "s"]
 

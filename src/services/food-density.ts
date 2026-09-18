@@ -314,6 +314,27 @@ const PIECE_WEIGHTS: PieceWeightEntry[] = [
     keywords: /\b(hefe|yeast)\b/i,
     unitWeights: { päckchen: 7, paeckchen: 7, packung: 7, packungen: 7, würfel: 42, wuerfel: 42 },
   },
+  {
+    // A stock cube is a manufactured unit with a standard size: the German 0.5 l cubes
+    // (Maggi, Knorr) are 10-11 g. Without this, "1 Stück Gemüsebrühwürfel" converts to no weight
+    // at all and the ingredient is dropped BEFORE any provider runs — so its curated BLS mapping
+    // could never be used, and it was reported as unresolved for a reason that has nothing to do
+    // with resolution. Note this is the DRY cube; the prepared broth is a different food.
+    // No leading \b: German compounds this word ("Gemüse|brühwürfel", "Hühner|brühwürfel"), and a
+    // boundary-anchored pattern cannot see inside one.
+    keywords: /(brüh|brueh|bouillon)(würfel|wuerfel)|\b(stock|bouillon) cubes?\b/i,
+    unitWeights: {
+      stück: 10, stueck: 10, piece: 10, pieces: 10, würfel: 10, wuerfel: 10, cube: 10, cubes: 10,
+    },
+  },
+  {
+    // Sliced cheese is sold in standard slices of about 20 g, and "Scheibe" is how a recipe asks
+    // for it. Deliberately keyed on the cheese words rather than on the unit: a slice of bread or
+    // of ham weighs something quite different, and a general "Scheibe" default would guess at all
+    // three. Same reasoning as the piece weights above — state the ones that are stable.
+    keywords: /\b(käse|kaese|cheese|gouda|edamer|emmentaler|leerdammer|cheddar|butterkäse|maasdamer)\b/i,
+    unitWeights: { scheibe: 20, scheiben: 20, slice: 20, slices: 20 },
+  },
 ]
 
 /** Generic package/container weights used only when no food-specific piece weight matched above. */
