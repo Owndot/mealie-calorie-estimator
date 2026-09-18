@@ -3,6 +3,7 @@ import { initCache } from "../../src/utils/cache.js"
 import { BlsProvider, __buildTestBlsData, __resetBlsDataForTests } from "../../src/services/providers/bls-provider.js"
 import type { NutrientSet } from "../../src/types.js"
 import type { ProviderQuery } from "../../src/services/providers/types.js"
+import { providerQuery } from "../helpers/provider-query.js"
 
 function nutrients(overrides: Partial<NutrientSet> = {}): NutrientSet {
   return {
@@ -22,7 +23,7 @@ function nutrients(overrides: Partial<NutrientSet> = {}): NutrientSet {
 }
 
 function query(overrides: Partial<ProviderQuery> = {}): ProviderQuery {
-  return { foodName: "Test", structuredName: "Test", brand: null, category: null, state: "unknown", ...overrides }
+  return providerQuery({ foodName: "Test", ...overrides })
 }
 
 // Every test below uses its own uniquely-named synthetic food (never a real BLS word like

@@ -13,7 +13,7 @@ function makeRecipe(overrides: Partial<MealieRecipe> = {}): MealieRecipe {
         quantity: 500,
         unit: { id: "1", name: "g", pluralName: "g", abbreviation: "g", standardQuantity: null, standardUnit: null },
         food: { id: "1", name: "Mehl", pluralName: null, aliases: [] },
-        note: null, display: "500 g Mehl", title: null, original_text: null,
+        note: null, display: "500 g Mehl", title: null, originalText: null,
       },
     ],
     nutrition: null,
@@ -40,7 +40,7 @@ describe("Manual calories flow", () => {
     // hasManualCalories' docstring for the legacy-ack edge case this distinction exists for.
     const recipe = makeRecipe({
       nutrition: {
-        calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null, fiberContent: null, cholesterolContent: null,
+        calories: "500", carbohydrateContent: null, cholesterolContent: null, fatContent: null, proteinContent: null, saturatedFatContent: null, sodiumContent: null, sugarContent: null, transFatContent: null, unsaturatedFatContent: null, fiberContent: null, 
       },
       extras: { calorie_estimator_hash: "abc123", calorie_estimator_provenance: "[]" },
     })
@@ -74,7 +74,7 @@ describe("Manual calories flow", () => {
           quantity: 600,
           unit: { id: "1", name: "g", pluralName: "g", abbreviation: "g", standardQuantity: null, standardUnit: null },
           food: { id: "1", name: "Mehl", pluralName: null, aliases: [] },
-          note: null, display: "600 g Mehl", title: null, original_text: null,
+          note: null, display: "600 g Mehl", title: null, originalText: null,
         },
       ],
     })

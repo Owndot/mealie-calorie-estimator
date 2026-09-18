@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll } from "vitest"
 import { initCache } from "../src/utils/cache.js"
 import { createBlsProviderIfAvailable } from "../src/services/providers/bls-provider.js"
 import { statedPreparation } from "../src/services/providers/food-semantics.js"
-import { UNKNOWN_ATTRIBUTES, type FoodState, type ProviderQuery } from "../src/types.js"
+import { UNKNOWN_ATTRIBUTES, type FoodState } from "../src/types.js"
+import type { ProviderQuery } from "../src/services/providers/types.js"
 
 /**
  * A preparation state the INGREDIENT TEXT STATES must be able to CHOOSE a record, not only reject

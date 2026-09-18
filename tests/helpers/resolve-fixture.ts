@@ -25,10 +25,8 @@ export function stubProviderResponses(): void {
       const q = decodeURIComponent(new URL(u).searchParams.get("q") ?? "").toLowerCase()
       return new Response(JSON.stringify({ hits: OFF_HITS[q] ?? [] }), { status: 200, headers: { "content-type": "application/json" } })
     }
-    if (u.startsWith(config.usda.baseUrl)) {
-      const q = decodeURIComponent(new URL(u).searchParams.get("query") ?? "").toLowerCase()
-      return new Response(JSON.stringify({ foods: USDA_HITS[q] ?? [] }), { status: 200, headers: { "content-type": "application/json" } })
-    }
+    // No remote-USDA branch: usda-local reads a bundled SQLite database and makes no
+    // HTTP request, so there is nothing to stub. USDA_HITS below serves the OFF-shaped fixtures.
     return new Response("{}", { status: 200 })
   }))
 }

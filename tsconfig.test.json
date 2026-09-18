@@ -1,0 +1,19 @@
+{
+  // The build config emits src/ and nothing else; this one adds the test suite for CHECKING only.
+  //
+  // tsconfig.json says include: ["src/**/*"], so `tsc --noEmit` saw zero test files and a type
+  // error in a test could not fail CI: vitest runs through esbuild, which strips types without
+  // checking them. Six estimator fixtures were already broken against a changed EstimateResult and
+  // the suite stayed green.
+  //
+  // Kept as a separate config rather than widening the build config, so `npm run build` keeps
+  // emitting exactly src/ with no test output and no test types in dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // rootDir only governs where output would be written, and nothing is written here. It has to
+    // widen or the inherited "src" rejects every test file before a single type is checked.
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}

@@ -4,6 +4,7 @@ import { initCache } from "../src/utils/cache.js"
 import { __buildTestBlsData, __resetBlsDataForTests } from "../src/services/providers/bls-provider.js"
 import { config } from "../src/config.js"
 import { useUsdaLocalFixture, useEmptyUsdaLocal, resetUsdaLocalFixture } from "./helpers/usda-local-fixture.js"
+import { providerQuery } from "./helpers/provider-query.js"
 
 beforeAll(async () => {
   await initCache()
@@ -50,7 +51,7 @@ describe("resolveNutrients", () => {
     // rather than hitting the real network in a test.
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ hits: [] }), { status: 200, headers: { "content-type": "application/json" } }))
 
-    const result = await resolveNutrients({ foodName: "Weizenmehl", brand: null, category: null, state: "unknown" }, "generic")
+    const result = await resolveNutrients(providerQuery({ foodName: "Weizenmehl" }), "generic")
     expect(result).toBeNull()
   })
 
@@ -61,7 +62,7 @@ describe("resolveNutrients", () => {
       { fdcId: 999111, description: "Resolvertest Flour", kcal: 364, protein: 10, carbs: 76, fat: 1 },
     ])
 
-    const result = await resolveNutrients({ foodName: "Resolvertest Flour", brand: null, category: null, state: "unknown" }, "generic")
+    const result = await resolveNutrients(providerQuery({ foodName: "Resolvertest Flour" }), "generic")
 
     expect(result?.fallbackStatus).toBe("usda-local")
     expect(result?.match.provider).toBe("usda-local")
@@ -78,7 +79,7 @@ describe("resolveNutrients", () => {
       ),
     )
 
-    await resolveNutrients({ foodName: "Resolvertest Sugar", brand: null, category: null, state: "unknown" }, "generic")
+    await resolveNutrients(providerQuery({ foodName: "Resolvertest Sugar" }), "generic")
 
     // Every fetched URL must be an Open Food Facts one — USDA must never be reached once OFF
     // already produced an acceptable match earlier in the chain.
@@ -96,7 +97,7 @@ describe("resolveNutrients", () => {
       return new Response(JSON.stringify({ foods: [] }), { status: 200 })
     })
 
-    const result = await resolveNutrients({ foodName: "Resolvertestnonexistent", brand: null, category: null, state: "unknown" }, "generic")
+    const result = await resolveNutrients(providerQuery({ foodName: "Resolvertestnonexistent" }), "generic")
     expect(result).toBeNull()
   })
 })

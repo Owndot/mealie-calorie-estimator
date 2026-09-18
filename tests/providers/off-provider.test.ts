@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
 import { OffProvider } from "../../src/services/providers/off-provider.js"
 import { initCache } from "../../src/utils/cache.js"
 import { config } from "../../src/config.js"
+import { providerQuery } from "../helpers/provider-query.js"
 
 beforeAll(async () => {
   await initCache()
@@ -13,7 +14,7 @@ beforeEach(() => {
 })
 
 function query(foodName: string, brand: string | null = null) {
-  return { foodName, brand, category: null, state: "unknown" as const }
+  return providerQuery({ foodName, brand })
 }
 
 function hitsResponse(products: { product_name: string; brands?: string[] | string; nutriments?: Record<string, number> }[]) {

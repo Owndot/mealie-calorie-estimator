@@ -246,7 +246,7 @@ describe("volume units: g/ml contract and catastrophic-error guard", () => {
     const fetchMock = vi.fn(async () => reply("100"))
     vi.stubGlobal("fetch", fetchMock)
     await estimateGrams(750, "Milliliter", "Gemüsebrühe")
-    const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content
+    const prompt = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body).messages[0].content
     expect(prompt).toContain("100 ml")
     expect(prompt).not.toMatch(/for 1 Milliliter/)
   })
@@ -295,7 +295,7 @@ describe("volume units: g/ml contract and catastrophic-error guard", () => {
     vi.stubGlobal("fetch", fetchMock)
     // 5 kg for one Dose is unusual but legitimate (catering tin) — deliberately NOT rejected.
     expect(await estimateGrams(1, "Dose", "Tomaten")).toBe(5000)
-    const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content
+    const prompt = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body).messages[0].content
     expect(prompt).toContain("1 Dose")
   })
 })

@@ -83,7 +83,7 @@ describe("the reranker can only improve on records retrieval already found", () 
     expect(s.calls).toBe(1)
     expect(s.prompts[0]).toMatch(/Petersilienblatt/)
     expect(m?.productName).toMatch(/Petersilienblatt/)
-    expect(m?.kcalPer100g ?? m?.nutrients.kcalPer100g).toBeLessThan(60) // the herb, not the 76 kcal root
+    expect(m?.nutrients.kcalPer100g).toBeLessThan(60) // the herb, not the 76 kcal root
     expect(m?.llmReranked).toBe(true)
     expect(m?.provider).toBe("bls") // nutrients still come FROM the database
     expect(m?.providerId).toMatch(/^G/)
@@ -192,7 +192,7 @@ describe("a declining model leaves every gate-enforced outcome exactly as it was
     const m = await lookup("Senf", "Senf", "mustard")
     expect(s.prompts[0]).toMatch(/Senf süß/)
     expect(m?.productName).not.toMatch(/süß/)
-    expect(m?.kcalPer100g ?? m?.nutrients.kcalPer100g).toBeLessThan(140)
+    expect(m?.nutrients.kcalPer100g).toBeLessThan(140)
   })
 
   it("a model that picks sweet mustard anyway is honoured — and that is why the prompt forbids it", async () => {
