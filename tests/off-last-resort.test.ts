@@ -8,7 +8,8 @@ import { UNKNOWN_ATTRIBUTES, type FoodAttributes, type IngredientClassification 
 /**
  * OPEN FOOD FACTS AS A LAST RESORT, and the curated-pointer bugs the same production audit found.
  *
- * Measured on the deployed v1.3.1 corpus: 226 ingredient rows, 15 unresolved. Most of those are
+ * Measured on the deployed v1.3.1 corpus once every asynchronous re-estimation had finished:
+ * 226 ingredient rows, 14 unresolved. Most of those are
  * branded or specialty foods that BLS and USDA simply do not stock — `Leerdammer Leger`,
  * `Hoisin-Sauce`, `Reisessig`, `Proteinpulver` — and OFF was never even asked about them. The
  * judge's OFF route existed, but it was justified only for an unresolved PROPERTY claim
@@ -215,9 +216,19 @@ describe("the last resort never displaces a real database record", () => {
 })
 
 /**
- * The curated pointers the same audit found being dropped, and the ones that must keep being
- * dropped. Whole-recipe classification words the same ingredient differently from recipe to
- * recipe, which is how `Koriander frisch` resolved in three recipes and not in a fourth.
+ * A LATENT defect, demonstrated by construction rather than by a production miss.
+ *
+ * `Koriander frisch` appeared to resolve in three recipes and not in a fourth, and this suite was
+ * written against that reading. It was wrong: the audit had been taken while asynchronous
+ * re-estimation jobs were still running, and verified production resolves it correctly in every
+ * recipe. So these cases fix no observed failure and are kept on their own merits.
+ *
+ * The merit is that the gate is reachable. Classification is per RECIPE, not per ingredient, so
+ * the same word is described differently from batch to batch — and `buildResolverQuery` drops a
+ * reviewed pointer for any canonical name the alias and identity do not account for. A model that
+ * answers `Koriandergrün` where the row says `Korianderblätter` means the same leaf, and nothing
+ * but the wording separates that from `Gerstenmehl` against `Weizenmehl`, which genuinely is a
+ * different food. Both directions are pinned below so the distinction cannot quietly erode.
  */
 describe("a curated pointer survives the model rewording the ingredient", () => {
   const ai = (o: Partial<IngredientClassification>): IngredientClassification => ({

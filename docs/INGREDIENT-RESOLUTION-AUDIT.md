@@ -200,9 +200,22 @@ a separate intentional decision before their existing nutrition is overwritten.
 
 # Follow-up — OFF as a last resort, 2026-09-18 (v1.3.1 production audit)
 
-The v1.3.1 deployment moved real-world resolution from 89.8 % to 93.4 % (226 ingredient rows,
-15 unresolved). This follow-up addresses what the deployed run then exposed, which was not what
-the previous round predicted.
+The v1.3.1 deployment moved real-world resolution from 89.8 % to **93.8 %** (226 ingredient rows,
+14 unresolved). This follow-up addresses what the deployed run then exposed.
+
+**Correction to the first reading of that audit.** Its two reported anomalies were stale: it was
+taken while asynchronous `POST /estimate/:slug?force=true` jobs were still running. Verified
+production, re-read after every job had completed, resolves both correctly:
+
+| Reported as | Verified v1.3.1 production |
+|---|---|
+| `rote Chilischoten getrocknet` → USDA 169373 (sweet, freeze-dried) — WRONG | USDA **168570** `Peppers, hot chile, sun-dried`, `recipe-vocabulary:recipe_default`, confidence 0.85 |
+| `Koriander frisch` unresolved in `tikka-paste` | USDA **169997** `Coriander (cilantro) leaves, raw`, `recipe-vocabulary:exact_phrase`, confidence 0.85 |
+
+Neither is a current v1.3.1 failure, and neither required a code change. This matches what probing
+`main` had already shown — no code path produced the wrong chili record — and it retires the
+"inconsistent across recipes" symptom entirely. `tikka-paste`'s remaining misses are
+`rosa Pfefferkörner` and `Garam Masala`.
 
 ## What the production audit actually showed
 
@@ -213,14 +226,16 @@ M711300, bouillon → R821000. The failures are therefore not missing mappings.
 
 ## Root causes
 
-1. **A reworded ingredient dropped its curated pointer.** `Koriander frisch` resolved in three
-   recipes and not in a fourth. Reproduced: the batch classifier returns a different
-   `canonicalGerman` per recipe, and for one batch it returned `Koriandergrün` — its own word for
-   the same leaf. The rename gate treated any name unaccounted for by the alias or identity as a
-   different food, so the pointer was discarded. Whole-recipe classification makes this a general
-   hazard, not a coriander one. A rename is now only a contradiction when the two words share a
-   HEAD and state different specifiers (`Gerstenmehl` vs `Weizenmehl`); sharing leading material
-   (`Koriandergrün`/`Korianderblätter`) is agreement.
+1. **A reworded ingredient drops its curated pointer — latent, not observed.** This was
+   originally attributed to `Koriander frisch`; that attribution is withdrawn, because verified
+   production resolves it correctly. The defect itself is real and is demonstrated by
+   construction: `buildResolverQuery("Koriander frisch", { canonicalGerman: "Koriandergrün", … })`
+   discards the reviewed pointer and the ingredient goes unresolved. Classification is per RECIPE,
+   so the same ingredient is worded differently from batch to batch and the gate is reachable by
+   ordinary model variation. A rename is now a contradiction only when the two words share a HEAD
+   and state different specifiers (`Gerstenmehl` vs the curated `Weizenmehl`); sharing leading
+   material (`Koriandergrün`/`Korianderblätter`) is agreement. Kept as hardening against a
+   reachable failure, not as a fix for a measured one.
 
 2. **OFF was never asked about branded or specialty foods.** The judge's OFF route was justified
    only for an unresolved *property* claim ("mager", "7 %"). An ingredient with no property claim
@@ -274,7 +289,6 @@ capabilities, which is why they are different flags.
 
 | Ingredient | Category | Expected after this change |
 |---|---|---|
-| `Koriander frisch` (tikka-paste) | F — rename dropped the pointer | Resolves to USDA 169997, consistently across recipes |
 | `Gemüsebrühwürfel`-class cube weights | F — no gram conversion | `Stück`/`Würfel` now 10 g; the curated BLS R821000 becomes reachable |
 | `Leerdammer Leger` | C/F — OFF never asked **and** no slice weight | `Scheibe` now 20 g; OFF last resort offers the real barcode 4388860276916 |
 | `Hoisin-Sauce` | C/D — OFF never asked | Judge selects a real hoisin product, or declines |
@@ -292,31 +306,54 @@ capabilities, which is why they are different flags.
 Categories: **C** resolvable through OFF, **D** through retrieval + judge, **E** legitimately
 unresolved, **F** a control-flow or conversion bug.
 
+`Koriander frisch` was on this list and has been removed: verified production resolves it to USDA
+169997. `rote Chilischoten getrocknet` was never an unresolved row — it was the reported wrong
+match, and verified production has it on USDA 168570.
+
 `Koriander` staying unresolved is the design working. Nothing in the wording says leaf or seed,
 and guessing would be a 13× error.
 
-## Status of the two reported anomalies
+## Status of the two reported anomalies — both CLOSED, both stale
 
-- **`rote Chilischoten getrocknet` → USDA 169373 (sweet, freeze-dried).** Not reproducible on
-  current `main`. Probed deterministically and with five plausible classifier shapes, including
-  ones that drop the word "chili" from the English name: every path returns USDA 168570 through
-  the curated pointer. The pool exclusion of 169373 is asserted by an existing test. The
-  production row is therefore attributed to provenance written before v1.3.1 reached the running
-  container, or to an ingredient whose stored name differs from the audit's display string —
-  **unverified without production access**, and no code path on `main` produces it.
-- **`Koriander frisch` inconsistent across recipes.** Reproduced and fixed; see root cause 1.
+- **`rote Chilischoten getrocknet` → USDA 169373.** Never reproducible on `main`: probed
+  deterministically and with five plausible classifier shapes, including ones dropping "chili"
+  from the English name, every path returned USDA 168570 through the curated pointer, and an
+  existing test asserts 169373 is excluded from the judge pool. Verified production now agrees.
+  **Stale audit read. No code change was made or needed.**
+- **`Koriander frisch` inconsistent across recipes.** Verified production resolves it to USDA
+  169997 in every recipe including `tikka-paste`. **Stale audit read.** The rename gate it
+  prompted is a genuine latent defect and the hardening is kept, but it fixes no measured
+  production failure — see root cause 1.
 
-## `knoblauch-hahnchen-reis-bowl`
+The lesson is procedural rather than technical: `POST /estimate/:slug?force=true` is asynchronous,
+and provenance read before the jobs finish describes the previous release. Any future audit should
+confirm completion before the extras are read.
 
-Still not present in any supplied export, so its individual cause remains **unverified**. The one
-recipe that was supplied, `huhnchen-in-cremiger-tomaten-sahnesauce`, is a worked example of the
-most likely mechanism: it carries `calorie_estimator_manual: "true"` with the note
-`Manual — preserved existing calorie entry`, and manual-owned nutrition deliberately writes no
-estimator provenance. Check that recipe's `calorie_estimator_*` extras and tags before assuming a
-resolution failure, and do not overwrite genuinely manual nutrition to manufacture provenance.
+## `knoblauch-hahnchen-reis-bowl` — verified intentional
+
+Confirmed from its production extras:
+
+```
+calorie_estimator_manual: true
+calorie_estimator_note:   Manual — preserved existing calorie entry
+calorie_estimator_unmatched: []
+calorie_estimator_hash:   present
+```
+
+This is manual-protection working exactly as designed: nutrition already owned by a person is
+never overwritten, and the manual acknowledgement deliberately writes no estimator provenance.
+Absent provenance here is the correct outcome, not a resolution failure, and the behaviour must
+stay unchanged. The supplied export of `huhnchen-in-cremiger-tomaten-sahnesauce` carries the same
+three extras and is the same case.
+
+**No code change.** Nothing in this PR touches the manual-protection path.
 
 ## Validation
 
 `npm run typecheck`, `npm run build` and the full suite pass: **63 files / 1,229 tests**
-(1,203 before). Docker could not be run in this environment; repository CI covers the image build
-and smoke test.
+(1,203 before). Docker is unavailable in this environment; repository CI ran the image build and
+smoke test on this branch and both passed.
+
+Verified production findings dated after the asynchronous jobs completed are incorporated above.
+They required **no functional code change**: the two anomalies were stale reads and the
+missing-provenance recipe is intentional. Only documentation and test commentary were corrected.
