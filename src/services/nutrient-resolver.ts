@@ -1,7 +1,7 @@
 import { getProviderChain } from "./providers/registry.js"
 import { config } from "../config.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
-import { foodTypeConflict } from "./providers/ranking.js"
+import { foodTypeConflict, findMismatch } from "./providers/ranking.js"
 import { inferAttributesFromName, formConflict, preservationConflict, freshVsProcessedFormConflict, fatConflict, unmetModifierFamilies } from "./providers/food-semantics.js"
 import { poolFingerprint } from "./providers/judge/candidate-pool.js"
 import { buildShortlist } from "./providers/judge/shortlist.js"
@@ -150,6 +150,7 @@ async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedN
   // Unchanged everywhere else: the gate still guards every ordinary provider match. This is
   // narrowly about validating a pointer a human already reviewed.
   const conflict = foodTypeConflict(query.foodType, record.foodType)
+    || findMismatch(query.structuredName ?? query.foodName, record.name) !== null
     || formConflict(attrs.form, recordAttrs.form)
     || freshVsProcessedFormConflict(attrs.preservation, recordAttrs.form)
     || preservationConflict(attrs.preservation, recordAttrs.preservation)
@@ -165,6 +166,7 @@ async function preferredVocabularyMatch(query: ProviderQuery): Promise<ResolvedN
     confidence: VOCABULARY_CONFIDENCE,
     matchReason: `recipe-vocabulary:${query.vocabulary?.kind ?? "entry"}`,
     foodType: record.foodType,
+    ...("dataType" in record && typeof record.dataType === "string" ? { dataType: record.dataType } : {}),
   }
   return { match, fallbackStatus: toFallbackStatus(preferred.provider), vocabularyPreferredSelected: true }
 }

@@ -61,9 +61,9 @@ afterEach(() => { vi.restoreAllMocks() })
 
 describe("the resource loads and validates", () => {
   it("holds the measured entries and rejects nothing at startup", () => {
-    // 74 German + 10 English. A rejected row is logged at error level and dropped, so a count
+    // 86 German + 10 English. A rejected row is logged at error level and dropped, so a count
     // below this means the resource stopped validating.
-    expect(vocabularyEntryCount()).toBe(84)
+    expect(vocabularyEntryCount()).toBe(96)
   })
 
   it("keys on the production normalizer, so a lookup finds what a resolution would", () => {
@@ -137,7 +137,7 @@ describe("terms that must be left completely alone", () => {
   const untouched: [string, string][] = [
     ["Wasser", "N110000"], ["Zucker", "S111000"], ["Salz", "R111000"], ["Olivenöl", "Q120000"],
     ["Vollmilch", "M111300"], ["Wurzelpetersilie", "G670100"], ["Paprika", "G541100"],
-    ["Paprika rosenscharf", "171329"], ["Kidneybohnen", "H742100"], ["Schlagsahne", "M173800"],
+    ["Kidneybohnen", "H742100"], ["Schlagsahne", "M173800"],
   ]
 
   for (const [term, id] of untouched) {

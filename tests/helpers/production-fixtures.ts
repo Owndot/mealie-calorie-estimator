@@ -263,23 +263,7 @@ export const TIKKA_PASTE: ProductionRecipe = {
       why: "USDA 171319 is reachable locally; the live API result window never surfaced it. "
         + "Confidence 0.8 -> 0.85 because the curated pointer now survives AI classification",
     },
-    // Same RECORD as production ("Peppers, hot chili, red, raw"), reached differently. Production
-    // accepted it deterministically (matchReason "fuzzy", confidence 0.7). Against the USDA page
-    // recorded here, the deterministic ranker puts "Peppers, sweet, red, raw" FIRST (score 62) and
-    // the hot chilli third (39) — a query whose core is "chili pepper" outscored by a record that
-    // does not contain the word — so USDA's `partial-core` trigger fires and the judge moves it,
-    // giving confidence 0.8 and matchReason "llm-reranked".
-    //
-    // Verified identical on main (867d85f): NOT caused by this PR. Two things feed it — USDA's
-    // live result set has drifted since production's run, and the core gate accepts a multi-word
-    // core on any ONE of its tokens, so the generic head noun "pepper" carries the identity on its
-    // own. The second is a real ranking weakness and is reported as such; fixing it is a matcher
-    // change, which this PR deliberately is not. Today the reranker is what stands between this
-    // query and sweet bell pepper.
-    "rote Chilischoten": {
-      confidence: 0.8,
-      why: "USDA result drift + a multi-word core satisfied by its generic head noun; the reranker corrects it",
-    },
+    // Chili now reproduces production without reranking: sweet peppers fail the identity gate.
   },
 }
 

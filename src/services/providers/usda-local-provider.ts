@@ -48,7 +48,7 @@ const PROVIDER_NAME = "usda-local"
  * re-importing a new USDA release also invalidates this provider's cached matches and cannot leave
  * a stale row pointing at an fdc_id that moved.
  */
-const USDA_LOCAL_MATCH_ALGORITHM_VERSION = "v3"
+const USDA_LOCAL_MATCH_ALGORITHM_VERSION = "v4"
 
 /** The importer's output contract. A database written by a different shape must not be read. */
 const SUPPORTED_SCHEMA_VERSION = "1"

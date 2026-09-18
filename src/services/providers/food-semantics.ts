@@ -729,6 +729,26 @@ export function inferAttributesFromName(name: string): FoodAttributes {
   }
 }
 
+/** Fat in dry matter is a cheese grade, not grams of fat per 100 g of food. */
+const FAT_IN_DRY_MATTER = /(\d+(?:[.,]\d+)?)\s*%\s*(?:fett\s*(?:i\s*\.?\s*tr\s*\.?|in\s+(?:der\s+)?trockenmasse)|fat\s+in\s+dry\s+matter|f\s*\.?\s*i\s*\.?\s*t\s*\.?)/i
+
+export function fatInDryMatter(name: string): number | null {
+  const match = name.match(FAT_IN_DRY_MATTER)
+  return match ? Number(match[1].replace(",", ".")) : null
+}
+
+/** Explicit ingredient wording survives missing or conflicting classifier attributes. */
+export function reconcileAttributes(name: string, attributes: FoodAttributes): FoodAttributes {
+  const stated = inferAttributesFromName(name)
+  const separatePercentage = [...name.replace(FAT_IN_DRY_MATTER, "").matchAll(/(\d+(?:[.,]\d+)?)\s*%/g)]
+    .some((match) => Number(match[1].replace(",", ".")) === attributes.fatPercent)
+  return {
+    form: stated.form === "unknown" ? attributes.form : stated.form,
+    preservation: stated.preservation === "unknown" ? attributes.preservation : stated.preservation,
+    fatPercent: fatInDryMatter(name) === null || separatePercentage ? attributes.fatPercent : null,
+  }
+}
+
 /**
  * Forms that are mutually exclusive — asking for one must not accept the other. Whole/fresh root
  * ginger vs ground ginger, coriander leaf vs seed. Everything not listed stays permissive.

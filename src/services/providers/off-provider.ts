@@ -8,8 +8,9 @@ import { rankCandidates, MIN_ACCEPTABLE_SCORE, inferStateFromName, cachedMatchCo
 import { FULL_EVIDENCE, mayQueryOff } from "../identity-evidence.js"
 import { attributesKey, unmetModifierFamilies } from "./food-semantics.js"
 import { UNKNOWN_ATTRIBUTES } from "../../types.js"
+import { normalizeIdentityText } from "../../utils/text-normalize.js"
 
-const OFF_FIELDS = ["product_name", "brands", "nutriments", "categories_tags"].join(",")
+const OFF_FIELDS = ["code", "product_name", "brands", "nutriments", "categories_tags"].join(",")
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504])
 const SEARCH_PAGE_SIZE = 10
 
@@ -176,7 +177,7 @@ export async function loadOffProductByBarcode(barcode: string): Promise<OffProdu
   }
 }
 
-/** The barcode is needed as a provider id; the ordinary provider path never uses it. */
+/** Barcode loading and judge proxy searches need the same identity and nutrition fields. */
 const OFF_PROXY_FIELDS = ["code", "product_name", "brands", "nutriments", "categories_tags"].join(",")
 
 export interface OffProxyHit {
@@ -256,6 +257,14 @@ interface RankableOffProduct extends RankableCandidate {
   product: OffProduct
 }
 
+function exactBrandedName(query: ProviderQuery, candidateName: string): boolean {
+  if (query.route !== "branded" || !query.brand || !query.structuredName) return false
+  const name = normalizeIdentityText(query.structuredName)
+  const brand = normalizeIdentityText(query.brand)
+  return brand.length > 0 && ` ${name} `.includes(` ${brand} `)
+    && name === normalizeIdentityText(candidateName)
+}
+
 /**
  * Open Food Facts provider. Used on the branded route (and as a generic-route fallback when
  * routing allows it). Never accepts the first search hit blindly — ranks all candidates by
@@ -266,7 +275,7 @@ interface RankableOffProduct extends RankableCandidate {
 // same reasoning as BLS_MATCH_ALGORITHM_VERSION/USDA_MATCH_ALGORITHM_VERSION: without this,
 // provider_match_cache would silently mask a matching-logic fix behind up to CACHE_MATCH_TTL of
 // stale cached matches for any already-resolved ingredient text.
-const OFF_MATCH_ALGORITHM_VERSION = "v18"
+const OFF_MATCH_ALGORITHM_VERSION = "v19"
 
 export class OffProvider implements NutrientProvider {
   readonly name = "off"
@@ -279,7 +288,7 @@ export class OffProvider implements NutrientProvider {
     // (see nutrient-resolver.ts), so e.g. a fresh-parsley match (~36 kcal/100g) could be returned
     // for a dried-parsley query (~292 kcal/100g) whenever both normalized to the same query text.
     const attrs = query.attributes ?? UNKNOWN_ATTRIBUTES
-    const queryKey = buildQueryKey(`${OFF_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${attributesKey(attrs)}`, query.brand)
+    const queryKey = buildQueryKey(`${OFF_MATCH_ALGORITHM_VERSION}:${query.foodName}|${query.state}|${attributesKey(attrs)}|${query.structuredName ?? ""}`, query.brand)
 
     // The negative cache is additionally scoped by the acceptance context — see
     // matchingContextKey(). A miss means "nothing here was acceptable under THESE rules", so it
@@ -306,7 +315,8 @@ export class OffProvider implements NutrientProvider {
 
     const cached = getCachedProviderMatch(this.name, queryKey)
     if (cached) {
-      const conflict = cachedMatchConflict(cached, ctx)
+      const conflict = cachedMatchConflict(cached, exactBrandedName(query, cached.productName ?? "")
+        ? { ...ctx, foodName: query.structuredName!, coreFood: null } : ctx)
       if (!conflict) {
         logger.debug({ foodName: query.foodName }, "OFF provider cache hit")
         return cached
@@ -349,13 +359,19 @@ export class OffProvider implements NutrientProvider {
     // categoryConflict participates here too (query-side data only — no new OFF response field
     // needed) for the same reason BLS/USDA reject it: a strict raw-ingredient category query
     // should never accept an OFF product that reads as a composite/manufactured item.
-    const ranked = rankCandidates(query.foodName, query.brand, rankable, {
+    // A full branded label is stronger identity evidence than a translated generic core:
+    // "Leerdammer Leger" need not print "cheese" to identify that exact product.
+    const exactProducts = rankable.filter((candidate) => exactBrandedName(query, candidate.name))
+    const hasExactProduct = exactProducts.length > 0
+    const ranked = rankCandidates(hasExactProduct ? query.structuredName! : query.foodName, query.brand,
+      hasExactProduct ? exactProducts : rankable, {
       queryState: query.state,
       queryCategory: query.category,
       queryFoodType: query.foodType,
-      queryCoreFood: query.coreFoodEnglish,
+      queryCoreFood: hasExactProduct ? null : query.coreFoodEnglish,
       coreMatchMode: "token" as const,
       queryAttributes: attrs,
+      candidateFat: (c) => (c as RankableOffProduct).product.nutriments?.["fat_100g"] ?? null,
       // Generic route with no brand evidence: an arbitrary manufacturer's product must not stand
       // in for a basic food. OFF stays fully available for branded/manufactured lookups.
       rejectBrandedWithoutBrandEvidence: (query.route ?? "generic") === "generic" && !query.brand,
@@ -398,7 +414,7 @@ export class OffProvider implements NutrientProvider {
       brand: normalizeOffBrand(product.brands) ?? query.brand,
       state: query.state,
       provider: this.name,
-      providerId: typeof product.product_name === "string" ? product.product_name : null,
+      providerId: typeof product.code === "string" ? product.code : null,
       productName: typeof product.product_name === "string" ? product.product_name : null,
       ...(unmet.length > 0 ? { unmetAttributes: unmet } : {}),
       confidence: Math.min(0.95, top.score / 100),

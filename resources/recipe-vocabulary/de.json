@@ -992,7 +992,7 @@
    "normalizedAlias": "reisessig",
    "language": "de",
    "kind": "synonym",
-   "identity": "Essig",
+   "identity": "Reisessig",
    "confidence": 0.7,
    "provenance": {
     "source": "paprika-corpus",
@@ -1261,6 +1261,244 @@
    "provenance": {
     "source": "paprika-corpus",
     "method": "measured+human-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Koriander frisch",
+   "normalizedAlias": "koriander frisch",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Korianderblätter",
+   "attributes": {
+    "form": "leaf",
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "169997"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "frischer Koriander",
+   "normalizedAlias": "frischer koriander",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Korianderblätter",
+   "attributes": {
+    "form": "leaf",
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "169997"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Curry Gewürzmischung",
+   "normalizedAlias": "curry gewuerzmischung",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Currypulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "170924"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Paprika rosenscharf",
+   "normalizedAlias": "paprika rosenscharf",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Paprikapulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171329"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Paprika edelsüß",
+   "normalizedAlias": "paprika edelsuess",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Paprikapulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171329"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Paprikapulver rosenscharf",
+   "normalizedAlias": "paprikapulver rosenscharf",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Paprikapulver",
+   "attributes": {
+    "form": "powder"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "171329"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "rote Chilischoten getrocknet",
+   "normalizedAlias": "rote chilischoten getrocknet",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Chilischote",
+   "attributes": {
+    "state": "dried",
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "168570"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "getrocknete Chilischoten",
+   "normalizedAlias": "getrocknete chilischoten",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Chilischote",
+   "attributes": {
+    "state": "dried",
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "168570"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Gouda 48 % Fett i. Tr.",
+   "normalizedAlias": "gouda 48 fett i tr",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Gouda",
+   "preferred": {
+    "provider": "bls",
+    "id": "M402600"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "körniger Frischkäse",
+   "normalizedAlias": "koerniger frischkaese",
+   "language": "de",
+   "kind": "recipe_default",
+   "identity": "Körniger Frischkäse",
+   "preferred": {
+    "provider": "bls",
+    "id": "M711300"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Thymian frisch",
+   "normalizedAlias": "thymian frisch",
+   "language": "de",
+   "kind": "exact_phrase",
+   "identity": "Thymian",
+   "attributes": {
+    "preservation": "fresh"
+   },
+   "preferred": {
+    "provider": "usda-local",
+    "id": "173470"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
+    "reviewedAt": "2026-09-18"
+   }
+  },
+  {
+   "alias": "Gemüsebrühwürfel",
+   "normalizedAlias": "gemuesebruehwuerfel",
+   "language": "de",
+   "kind": "synonym",
+   "identity": "Gemüse Bouillon",
+   "attributes": {
+    "preservation": "dried"
+   },
+   "preferred": {
+    "provider": "bls",
+    "id": "R821000"
+   },
+   "confidence": 0.9,
+   "provenance": {
+    "source": "production-ingredient-audit",
+    "method": "bundled-record-reviewed",
     "reviewedAt": "2026-09-18"
    }
   }

@@ -8,6 +8,7 @@ x-nutrition-env: &nutrition-env
   # compose always supplies the variable and the built-in default would never be reached.
   OFF_USER_AGENT: ${OFF_USER_AGENT:-}
   LLM_ENABLED: ${LLM_ENABLED:-false}
+  LLM_NUTRIENT_ENABLED: ${LLM_NUTRIENT_ENABLED:-true}
   LLM_API_KEY: ${LLM_API_KEY:-}
   LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
   LLM_ENDPOINT_URL: ${LLM_ENDPOINT_URL:-/chat/completions}

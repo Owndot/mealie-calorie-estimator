@@ -4,7 +4,7 @@ import { evidenceKey, type IdentityEvidence } from "../identity-evidence.js"
 import {
   GERMAN_DESCRIPTOR_WORDS, compoundSpecifier, compoundMatchesTokens, absenceMarkerStem, germanStem, germanTokenMatches,
   formConflict, preservationConflict, fatConflict, freshVsProcessedFormConflict, inferAttributesFromName, compoundSegments,
-  derivedProductConflict, carrierConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, unmetModifierFamilies, type PlantPart,
+  derivedProductConflict, carrierConflict, standalonePlantPart, namesDerivedProduct, isDerivedProductMarker, unmetModifierFamilies, fatInDryMatter, type PlantPart,
 } from "./food-semantics.js"
 import { normalizeGermanText } from "../../utils/text-normalize.js"
 
@@ -364,7 +364,9 @@ export function coreIdentityScoreAdjustment(
   }
 
   const queryNamesDerivedProduct = namesDerivedProduct(fullQueryText)
-  const candidateTokens = tokenize(candidateName)
+  // Readiness is preparation metadata, not two extra ingredients. Keep the original name for
+  // all state, form and identity gates; only the unexplained-content penalty omits this phrase.
+  const candidateTokens = tokenize(candidateName.replace(/\bready[\s-]+to[\s-]+serve\b/gi, ""))
   let modifierMatches = 0
   let extraCount = 0
   for (const t of candidateTokens) {
@@ -449,6 +451,7 @@ interface MismatchRule {
  * these exist to hard-block the specific classes of false positive the skill calls out.
  */
 const MISMATCH_RULES: MismatchRule[] = [
+  { queryPattern: /\b(chili|chile|chilli|chilischoten?|pfefferschoten?)\b|\bhot peppers?\b/i, forbiddenCandidatePattern: /\b(bell|sweet)\b.*\bpeppers?\b|\bpeppers?\b.*\b(sweet|bell)\b|gemüsepaprika|gemuesepaprika/i, description: "hot chili vs sweet bell pepper" },
   { queryPattern: /\b(ingwer|ginger)\b/i, forbiddenCandidatePattern: /\b(ale|soda|drink|getränk|getraenk|limonade)\b/i, description: "ginger vs ginger-flavored drink" },
   { queryPattern: /\b(salz|salt)\b/i, forbiddenCandidatePattern: /\b(electrolyte|elektrolyt|sportgetränk|sportgetraenk|sports? ?drink)\b/i, description: "salt vs electrolyte drink" },
   { queryPattern: /\b(koriander|coriander|cilantro)\b/i, forbiddenCandidatePattern: /\b(chutney)\b/i, description: "coriander vs coriander chutney" },
@@ -487,7 +490,7 @@ const MISMATCH_RULES: MismatchRule[] = [
   // vegetable-pepper queries the rule above protects; excludes "black"/"white"/"red or cayenne" from
   // the forbidden side since those ARE the correct spice-side candidates.
   {
-    queryPattern: /(?<!bell )\b(pfeffer|pepper)\b(?!\s*,)/i,
+    queryPattern: /(?<!bell |chili |chile |chilli |hot )\b(pfeffer|pepper)\b(?!\s*,)/i,
     forbiddenCandidatePattern: /^peppers?,\s*(?!black\b|white\b|red or cayenne\b)[a-z]/i,
     description: "pepper (spice) vs a raw vegetable pepper variety (USDA \"Pepper, <variety>, raw\" naming)",
   },
@@ -693,6 +696,11 @@ export function availablePlantParts(candidateNames: Iterable<string>): Set<Plant
 
 /** Returns a description of the violated rule, or null if no obvious mismatch applies. */
 export function findMismatch(queryFoodName: string, candidateName: string): string | null {
+  const requestedGrade = fatInDryMatter(queryFoodName)
+  const candidateGrade = fatInDryMatter(candidateName)
+  if (requestedGrade !== null && candidateGrade !== null && requestedGrade !== candidateGrade) {
+    return "fat-in-dry-matter grade conflict"
+  }
   if (genericOilConflict(queryFoodName, candidateName)) {
     return "generic oil vs a specific oil type the query never named"
   }
