@@ -76,6 +76,19 @@ Those values are **generated, not measured**, and stay identifiable: the ingredi
 calories that were generated. See [Automatic tagging](#automatic-tagging) and the provenance
 extras.
 
+It has its own switch, because it is the one LLM capability that invents numbers rather than
+choosing among numbers somebody else measured:
+
+```bash
+LLM_ENABLED=true            # classification, translation, gram estimation, reranking, judge
+LLM_NUTRIENT_ENABLED=false  # …but no generated nutrient values
+```
+
+`LLM_NUTRIENT_ENABLED` defaults to `true`, so `LLM_ENABLED` on its own behaves exactly as before.
+Setting it to `false` keeps every other model-assisted feature and leaves an ingredient no database
+could resolve **unresolved** — a visible gap in coverage rather than a `complete` recipe whose
+calories are partly invented. Useful when you would rather see what the databases genuinely cover.
+
 ## Recipe Vocabulary
 
 ```
