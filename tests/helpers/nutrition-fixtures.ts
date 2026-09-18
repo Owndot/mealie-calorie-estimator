@@ -121,7 +121,6 @@ export const USDA_HITS: Record<string, unknown[]> = {
   "ginger": [{ fdcId: 170926, description: "Spices, ginger, ground", dataType: "SR Legacy", foodNutrients: kcal(335, 4.2) }],
   "fresh ginger": [{ fdcId: 170926, description: "Spices, ginger, ground", dataType: "SR Legacy", foodNutrients: kcal(335, 4.2) }],
   "ground cumin": [{ fdcId: 170923, description: "Spices, cumin seed", dataType: "SR Legacy", foodNutrients: kcal(375, 22.3) }],
-  "coriander": [{ fdcId: 170922, description: "Spices, coriander seed", dataType: "SR Legacy", foodNutrients: kcal(298, 17.8) }],
   "canned kidney beans, drained": [{ fdcId: 2345678, description: "Kidney beans, NFS", dataType: "Survey (FNDDS)", foodNutrients: kcal(127, 0.5) }],
   "chicken breast": [{ fdcId: 171477, description: "Chicken, broiler, breast, meat only, raw", dataType: "SR Legacy", foodNutrients: kcal(114, 2.6) }],
   "tomato paste": [{ fdcId: 170459, description: "Tomato products, canned, paste", dataType: "SR Legacy", foodNutrients: kcal(82, 0.5) }],

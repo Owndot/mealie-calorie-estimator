@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest"
 import type { NutrientSet } from "../src/types.js"
+import { providerQuery } from "./helpers/provider-query.js"
 
 const badNutrients: NutrientSet = {
   kcalPer100g: -10, proteinPer100g: null, carbsPer100g: null, fatPer100g: null,
@@ -39,7 +40,7 @@ describe("resolveNutrients — sanity-check rejection falls through to the next 
 
   it("rejects the first provider's implausible candidate and accepts the second's plausible one", async () => {
     const { resolveNutrients } = await import("../src/services/nutrient-resolver.js")
-    const result = await resolveNutrients({ foodName: "x", brand: null, category: null, state: "unknown" }, "generic")
+    const result = await resolveNutrients(providerQuery({ foodName: "x" }), "generic")
     expect(result?.match.provider).toBe("good-provider")
   })
 })

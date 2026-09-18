@@ -67,7 +67,8 @@ describe("the two axes are reported separately and additively", () => {
     slug: "s", servings: 2, totalNutrients: nutrients(1000), perServingNutrients: nutrients(500),
     matchedCount: 2, unmatchedCount: 0, unmatchedIngredients: [], matchedIngredients: [],
     completeness: "complete", completenessReason: null,
-    matchQuality: "high", matchQualityReason: null, lowConfidenceIngredients: [], ...over,
+    matchQuality: "high", matchQualityReason: null, lowConfidenceIngredients: [],
+    evidence: "database", estimatedKcalShare: 0, databaseKcalShare: 1, unresolvedWeightShare: 0, ...over,
   })
 
   it("keeps calorie_estimator_status's existing values untouched", () => {

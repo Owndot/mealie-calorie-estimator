@@ -140,7 +140,7 @@ describe("a stated nutritional attribute steers which provider is used", () => {
       canonicalGerman: "Rinderhackfleisch, mager", canonicalEnglish: "lean ground beef",
       coreFoodGerman: "Rinderhackfleisch", coreFoodEnglish: "ground beef",
       state: "raw", category: "meat",
-    }, { usda: USDA })
+    })
     expect(r.provider).toBe("bls")
     expect(r.productName).toMatch(/Hackfleisch/)
     expect(r.unmetAttributes).toEqual(["reduced-fat"])

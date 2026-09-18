@@ -34,12 +34,12 @@ describe("computeIngredientHash", () => {
         {
           quantity: 2, unit: { id: "1", name: "cup", pluralName: "cups", abbreviation: "c", standardQuantity: null, standardUnit: null },
           food: { id: "1", name: "flour", pluralName: null, aliases: [] },
-          note: null, display: "2 cups flour", title: null, original_text: null,
+          note: null, display: "2 cups flour", title: null, originalText: null,
         },
         {
           quantity: 1, unit: { id: "2", name: "tbsp", pluralName: "tbsp", abbreviation: "T", standardQuantity: null, standardUnit: null },
           food: { id: "2", name: "sugar", pluralName: null, aliases: [] },
-          note: null, display: "1 tbsp sugar", title: null, original_text: null,
+          note: null, display: "1 tbsp sugar", title: null, originalText: null,
         },
       ],
     })
@@ -49,12 +49,12 @@ describe("computeIngredientHash", () => {
         {
           quantity: 1, unit: { id: "2", name: "tbsp", pluralName: "tbsp", abbreviation: "T", standardQuantity: null, standardUnit: null },
           food: { id: "2", name: "sugar", pluralName: null, aliases: [] },
-          note: null, display: "1 tbsp sugar", title: null, original_text: null,
+          note: null, display: "1 tbsp sugar", title: null, originalText: null,
         },
         {
           quantity: 2, unit: { id: "1", name: "cup", pluralName: "cups", abbreviation: "c", standardQuantity: null, standardUnit: null },
           food: { id: "1", name: "flour", pluralName: null, aliases: [] },
-          note: null, display: "2 cups flour", title: null, original_text: null,
+          note: null, display: "2 cups flour", title: null, originalText: null,
         },
       ],
     })
@@ -68,7 +68,7 @@ describe("computeIngredientHash", () => {
         {
           quantity: 2, unit: { id: "1", name: "cup", pluralName: "cups", abbreviation: "c", standardQuantity: null, standardUnit: null },
           food: { id: "1", name: "flour", pluralName: null, aliases: [] },
-          note: null, display: "2 cups flour", title: null, original_text: null,
+          note: null, display: "2 cups flour", title: null, originalText: null,
         },
       ],
     })
@@ -78,7 +78,7 @@ describe("computeIngredientHash", () => {
         {
           quantity: 3, unit: { id: "1", name: "cup", pluralName: "cups", abbreviation: "c", standardQuantity: null, standardUnit: null },
           food: { id: "1", name: "flour", pluralName: null, aliases: [] },
-          note: null, display: "3 cups flour", title: null, original_text: null,
+          note: null, display: "3 cups flour", title: null, originalText: null,
         },
       ],
     })
@@ -110,7 +110,7 @@ describe("computeIngredientHash", () => {
       recipeIngredient: [
         {
           quantity: null, unit: null, food: null,
-          note: "salt to taste", display: "salt to taste", title: null, original_text: null,
+          note: "salt to taste", display: "salt to taste", title: null, originalText: null,
         },
       ],
     })
@@ -164,9 +164,9 @@ describe("buildNutritionPatch", () => {
 
     const patch = buildNutritionPatch(result, "abc123", "4 servings")
 
-    expect(patch.nutrition.calories).toBe("350")
-    expect(patch.nutrition.proteinContent).toBe("10")
-    expect(patch.nutrition.fatContent).toBe("15")
+    expect(patch.nutrition!.calories).toBe("350")
+    expect(patch.nutrition!.proteinContent).toBe("10")
+    expect(patch.nutrition!.fatContent).toBe("15")
     expect(patch.extras.calorie_estimator_hash).toBe("abc123")
     expect(patch.extras.calorie_estimator_total_kcal).toBe("1400")
     expect(patch.extras.calorie_estimator_yield).toBe("4")
@@ -200,7 +200,7 @@ describe("buildNutritionPatch", () => {
 
     const patch = buildNutritionPatch(result, "def456", null)
 
-    expect(patch.nutrition.calories).toBeUndefined()
+    expect(patch.nutrition!.calories).toBeUndefined()
     expect(patch.extras.calorie_estimator_yield).toBeUndefined()
     expect(patch.extras.calorie_estimator_total_kcal).toBe("500")
   })
@@ -228,7 +228,7 @@ describe("buildNutritionPatch", () => {
 
     const patch = buildNutritionPatch(result, "ghi789", "4 servings")
 
-    expect(patch.nutrition.calories).toBe("0")
+    expect(patch.nutrition!.calories).toBe("0")
     expect(patch.extras.calorie_estimator_total_kcal).toBeUndefined()
     expect(patch.extras.calorie_estimator_unmatched).toBe(JSON.stringify(["salt", "pepper", "herbs"]))
     expect(patch.extras.calorie_estimator_status).toBe("partial")
@@ -258,8 +258,8 @@ describe("buildNutritionPatch", () => {
 
     const patch = buildNutritionPatch(result, "mg-test", "4 servings")
 
-    expect(patch.nutrition.sodiumContent).toBe("800")
-    expect(patch.nutrition.cholesterolContent).toBe("100")
+    expect(patch.nutrition!.sodiumContent).toBe("800")
+    expect(patch.nutrition!.cholesterolContent).toBe("100")
   })
 
   it("withholds nutrition values entirely when completeness is 'withheld', but still writes hash/status/unmatched", () => {
@@ -305,8 +305,8 @@ describe("buildNutritionPatch", () => {
         {
           name: "Mehl", canonicalName: "Mehl", brand: null, route: "generic",
           grams: 100, gramsEstimated: false, matched: true,
-          nutrients: n(364), provider: "usda", providerId: "Mehl",
-          confidence: 0.7, fallbackStatus: "usda", llmParticipated: false,
+          nutrients: n(364), provider: "usda-local", providerId: "Mehl", productName: "Mehl",
+          confidence: 0.7, fallbackStatus: "usda-local", llmParticipated: false,
         },
       ],
       completeness: "complete",
@@ -323,7 +323,7 @@ describe("buildNutritionPatch", () => {
     const patch = buildNutritionPatch(result, "prov-hash", "2 servings")
     const provenance = JSON.parse(patch.extras.calorie_estimator_provenance)
     expect(provenance).toHaveLength(1)
-    expect(provenance[0]).toMatchObject({ name: "Mehl", provider: "usda", confidence: 0.7, matched: true })
+    expect(provenance[0]).toMatchObject({ name: "Mehl", provider: "usda-local", confidence: 0.7, matched: true })
   })
 })
 

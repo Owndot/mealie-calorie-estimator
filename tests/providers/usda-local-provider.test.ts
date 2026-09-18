@@ -7,7 +7,8 @@ import { config } from "../../src/config.js"
 import { initCache, setCachedProviderMatch, getCachedProviderMatch, buildQueryKey, __clearProviderCachesForTests } from "../../src/utils/cache.js"
 import { usdaLocalProvider, getUsdaLocalData, __resetUsdaLocalForTests } from "../../src/services/providers/usda-local-provider.js"
 import { useUsdaLocalFixture, resetUsdaLocalFixture } from "../helpers/usda-local-fixture.js"
-import { UNKNOWN_ATTRIBUTES, type ProviderMatch, type ProviderQuery } from "../../src/types.js"
+import { UNKNOWN_ATTRIBUTES, type ProviderMatch } from "../../src/types.js"
+import type { ProviderQuery } from "../../src/services/providers/types.js"
 
 /**
  * Tests against the REAL BUNDLED DATABASE, not a mock.

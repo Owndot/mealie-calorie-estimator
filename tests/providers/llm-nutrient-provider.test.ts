@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest"
 import { llmNutrientProvider } from "../../src/services/providers/llm-nutrient-provider.js"
 import { initCache, clearLlmCache } from "../../src/utils/cache.js"
 import { config } from "../../src/config.js"
+import { providerQuery } from "../helpers/provider-query.js"
 
 beforeAll(async () => {
   await initCache()
@@ -15,7 +16,7 @@ beforeEach(() => {
 })
 
 function query(foodName: string) {
-  return { foodName, brand: null, category: null, state: "unknown" as const }
+  return providerQuery({ foodName })
 }
 
 describe("LlmNutrientProvider — final fallback only", () => {

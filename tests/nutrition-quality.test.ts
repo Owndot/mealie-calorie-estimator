@@ -27,7 +27,8 @@ beforeEach(() => {
   stubProviderResponses()
 })
 
-const find = (rows: { ingredient: string }[], name: string) => rows.find((r) => r.ingredient === name)!
+const find = <T extends { ingredient: string }>(rows: T[], name: string): T =>
+  rows.find((r) => r.ingredient === name)!
 
 describe("BLS becomes reachable for ordinary German foods", () => {
   it("does not get WORSE when the correct coreFoodGerman is supplied", async () => {

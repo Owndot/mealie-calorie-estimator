@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest"
 import type { NutrientSet } from "../../src/types.js"
 import type { ProviderQuery } from "../../src/services/providers/types.js"
+import { providerQuery } from "../helpers/provider-query.js"
 
 /**
  * Full-chain routing-order tests: proves the exact sequencing required by the architecture —
@@ -20,7 +21,7 @@ function nutrients(overrides: Partial<NutrientSet> = {}): NutrientSet {
 }
 
 function query(overrides: Partial<ProviderQuery> = {}): ProviderQuery {
-  return { foodName: "Test", structuredName: "Test", brand: null, category: null, state: "unknown", ...overrides }
+  return providerQuery({ foodName: "Test", ...overrides })
 }
 
 function fakeMatch(provider: string, overrides: Record<string, unknown> = {}) {

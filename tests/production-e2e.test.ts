@@ -65,7 +65,7 @@ describe("CRITICAL: canned kidney beans reach the BLS canned record", () => {
       preservation: "canned",
       category: "legume",
       foodType: "processed_single_food",
-    }, { usda: USDA_BEANS })
+    })
 
     expect(r.provider).toBe("bls")
     expect(r.productName).toMatch(/Konserve/)
@@ -82,7 +82,7 @@ describe("CRITICAL: canned kidney beans reach the BLS canned record", () => {
         canonicalGerman: "Kidneybohnen aus der Dose", canonicalEnglish: "canned kidney beans",
         coreFoodGerman: core, coreFoodEnglish: "kidney beans",
         preservation: "canned", category: "legume", foodType: "processed_single_food",
-      }, { usda: USDA_BEANS })
+      })
       expect(r.provider, core).toBe("bls")
       expect(r.productName, core).toMatch(/Konserve/)
     }
@@ -134,10 +134,6 @@ describe("previously-correct behaviour is preserved end to end", () => {
       canonicalGerman: "Koriander", canonicalEnglish: "coriander", coreFoodGerman: "Koriander",
       coreFoodEnglish: "coriander", category: "herb",
     }, {
-      usda: { coriander: [
-        { fdcId: 170922, description: "Spices, coriander seed", dataType: "SR Legacy", foodCategory: "Spices and Herbs", foodNutrients: kcal(298, 17.8) },
-        { fdcId: 169997, description: "Coriander (cilantro) leaves, raw", dataType: "SR Legacy", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(23, 0.5) },
-      ] },
     })
     expect(r.productName ?? "").not.toMatch(/seed/i)
   })
@@ -147,9 +143,6 @@ describe("previously-correct behaviour is preserved end to end", () => {
       canonicalGerman: "Knoblauchgewürz", canonicalEnglish: "garlic seasoning",
       coreFoodGerman: "Knoblauch", coreFoodEnglish: "garlic", category: "seasoning",
     }, {
-      usda: { "garlic seasoning": [
-        { fdcId: 1104647, description: "Garlic, raw", dataType: "Foundation", foodCategory: "Vegetables and Vegetable Products", foodNutrients: kcal(143, 0.5) },
-      ] },
     })
     expect(r.productName ?? "").not.toMatch(/^Garlic, raw|^Knoblauch roh/)
   })
@@ -224,7 +217,7 @@ describe("production matching failures observed on the deployed branch", () => {
     const r = await one("rote Chilischoten", 20, "Gramm", {
       canonicalGerman: "rote Chilischoten", canonicalEnglish: "red chili peppers",
       coreFoodGerman: "Chilischote", coreFoodEnglish: "chili pepper", state: "raw", category: "vegetable",
-    }, { usda: USDA_CHILI, rerank: () => '{"selected":null,"confidence":0.95,"reason":"sweet pepper is not a chili"}' })
+    }, { rerank: () => '{"selected":null,"confidence":0.95,"reason":"sweet pepper is not a chili"}' })
     expect(r.productName ?? "").not.toMatch(/sweet/i)
   })
 
