@@ -1,6 +1,7 @@
 import type { FoodState, FoodRoute, FoodType, ProviderMatch } from "../../types.js"
 import type { IdentityEvidence } from "../identity-evidence.js"
 import type { FoodAttributes } from "../../types.js"
+import type { VocabularyKind } from "../vocabulary/types.js"
 import type { JudgeCandidate } from "./judge/types.js"
 
 export interface ProviderQuery {
@@ -17,6 +18,18 @@ export interface ProviderQuery {
    *
    * Absent for every ordinary lookup, and a provider that ignores it behaves exactly as before.
    */
+  /**
+   * A record the curated recipe vocabulary prefers for this ingredient, and whether the alias was
+   * marked ambiguous. A hint, never an instruction: the record is re-loaded live, sanity-checked
+   * and required to agree with anything the ingredient itself stated before it can be used.
+   */
+  vocabulary?: {
+    preferred?: { provider: "bls" | "usda-local"; id: string }
+    ambiguous?: boolean
+    kind: VocabularyKind
+    alias: string
+    semanticsApplied: boolean
+  }
   candidateSink?: (candidates: JudgeCandidate[]) => void
   /**
    * Diagnostic pass: report gate survivors to `candidateSink` and return null, without consulting
