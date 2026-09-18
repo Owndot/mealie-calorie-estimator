@@ -104,8 +104,13 @@ describe("sugar alcohols are not 4 kcal/g", () => {
   /**
    * Production: the judge correctly selected a real `Erythrit` record and the generic macro-energy
    * check threw it away — 100 g of carbohydrate "should" be ~400 kcal, and erythritol is 0.
-   * EU 1169/2011 rates polyols at 2.4 kcal/g and erythritol explicitly at 0, so where polyols are
-   * present the expectation is a RANGE across those two factors rather than a single number.
+   *
+   * The factor is per SUBSTANCE, not one range for all polyols. OFF is international and mixes
+   * two regimes — EU 1169/2011 rates every polyol 2.4 kcal/g with erythritol explicitly 0, while
+   * the FDA rates them individually (mannitol 1.6, isomalt/lactitol 2.0, maltitol 2.1, xylitol
+   * 2.4, sorbitol 2.6) — so each polyol gets the band spanning both. A flat 0-2.4 band would have
+   * let a xylitol record claim zero energy, which is not a labelling difference but an
+   * impossible product.
    */
   it("the exact production case is accepted", () => {
     const r = sanityCheckNutrients(N({ kcalPer100g: 0, carbsPer100g: 100 }), "erythritol")
@@ -113,16 +118,37 @@ describe("sugar alcohols are not 4 kcal/g", () => {
   })
 
   it("uses the provider's own polyol figure when there is one, not the name", () => {
-    // OFF reports `polyols_100g`. A product that does not say "erythritol" anywhere still gets the
-    // right expectation, which is the point of carrying the field rather than matching names.
+    // 95 g of unidentified polyol at the EU factor is ~228 kcal. Without the field the formula
+    // would demand ~380 and reject this, so the assertion proves the reported grams are used.
     const r = sanityCheckNutrients(
-      N({ kcalPer100g: 20, carbsPer100g: 95, polyolsPer100g: 95 }), "Streusüße Backmischung")
+      N({ kcalPer100g: 228, carbsPer100g: 95, polyolsPer100g: 95 }), "Streusüße Backmischung")
     expect(r.ok, r.reason ?? "").toBe(true)
   })
 
+  it("an UNIDENTIFIED polyol is not assumed to be the zero-calorie one", () => {
+    // Erythritol is the only polyol worth 0 kcal/g, and a product made of it says so. Treating an
+    // unnamed polyol as possibly-erythritol would buy one rare case and accept impossible energy
+    // for every other sweetener.
+    expect(sanityCheckNutrients(N({ kcalPer100g: 0, carbsPer100g: 95, polyolsPer100g: 95 }), "Streusüße").ok).toBe(false)
+  })
+
   it.each([
-    ["Erythrit", 0], ["Xylit", 240], ["Sorbitol", 240], ["Maltitol", 210],
-    ["Mannitol", 160], ["Isomalt", 240], ["Lactitol", 240],
+    ["Xylit"], ["Sorbitol"], ["Maltitol"], ["Mannitol"], ["Isomalt"], ["Lactitol"],
+  ])("%s may NOT report zero energy just because it is a polyol", (name) => {
+    expect(sanityCheckNutrients(N({ kcalPer100g: 0, carbsPer100g: 100 }), name).ok).toBe(false)
+  })
+
+  it("polyols are counted once, not added on top of the carbohydrate they are part of", () => {
+    // Carbohydrate INCLUDES polyols under both regimes, so 100 g carbs with 40 g polyols is
+    // 60 g ordinary carbohydrate plus 40 g polyol: 60*4 + 40*2.4 = 336, not 400 + 96 = 496.
+    const n = (kcal: number) => N({ kcalPer100g: kcal, carbsPer100g: 100, polyolsPer100g: 40 })
+    expect(sanityCheckNutrients(n(336), "Zuckerfreie Bonbons").ok).toBe(true)
+    expect(sanityCheckNutrients(n(496), "Zuckerfreie Bonbons").ok, "double counting would accept this").toBe(false)
+  })
+
+  it.each([
+    ["Erythrit", 0], ["Erythrit", 20], ["Xylit", 240], ["Sorbitol", 260], ["Maltitol", 210],
+    ["Mannitol", 160], ["Isomalt", 200], ["Lactitol", 200],
   ])("%s at %i kcal/100 g is accepted", (name, kcal) => {
     const r = sanityCheckNutrients(N({ kcalPer100g: kcal, carbsPer100g: 100 }), name)
     expect(r.ok, r.reason ?? "").toBe(true)
