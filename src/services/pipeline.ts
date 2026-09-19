@@ -67,7 +67,14 @@ async function recipeSourcesChanged(recipe: MealieRecipe, householdId: string | 
 
 export async function runEstimationPipeline(slug: string, opts: PipelineOptions = {}): Promise<PipelineOutcome> {
   const options = { ...opts }
-  return estimationQueue.run(slug, () => processEstimation(slug, options))
+  return estimationQueue.run(slug, async () => {
+    logger.info({ slug }, "Estimation pipeline started")
+    try {
+      return await processEstimation(slug, options)
+    } finally {
+      logger.info({ slug }, "Estimation pipeline finished")
+    }
+  })
 }
 
 async function processEstimation(slug: string, opts: PipelineOptions): Promise<PipelineOutcome> {
