@@ -7,7 +7,7 @@ import type {
 import { config } from "../config.js"
 import { convertToGrams } from "./unit-converter.js"
 import { UNKNOWN_ATTRIBUTES } from "../types.js"
-import { resolveNutrients } from "./nutrient-resolver.js"
+import { resolveNutrientsWithDiagnostics } from "./nutrient-resolver.js"
 import type { VocabularyProvenance } from "./vocabulary/types.js"
 import { judgeNeed } from "./providers/judge/judge-need.js"
 import { buildResolverQuery } from "./resolver-query.js"
@@ -387,7 +387,8 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
 
     totalKnownWeight += grams
 
-    const resolved = await resolveNutrients(built.query, built.route)
+    const resolution = await resolveNutrientsWithDiagnostics(built.query, built.route)
+    const resolved = resolution.match === null ? null : resolution
     if (vocabulary) {
       const prioritySource = resolved?.match.provider === "mealie-recipe"
         || resolved?.match.matchReason === "user-confirmed-override"
@@ -412,16 +413,24 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
     // When the judge actually ran, the trigger it ran UNDER is the truthful record — after a
     // successful selection the outcome is a database record, so judgeNeed() would now
     // (correctly) report nothing and the reason for asking would be lost.
-    const judgeTrigger = resolved?.judge?.trigger ?? (need ? need.reasons.join(",") : null)
-
+    const judge = resolution.judge
+    const judgeFields = {
+      judgeTrigger: judge?.trigger ?? (need ? need.reasons.join(",") : null),
+      judgeVerdict: judge?.verdict === "invalid" ? null : (judge?.verdict ?? null),
+      judgeReason: judge?.reason ?? null,
+      judgeCandidates: judge?.candidates ?? null,
+      judgePoolFingerprint: judge?.poolFingerprint ?? null,
+      judgeModel: judge?.model ?? null,
+      judgePromptVersion: judge?.promptVersion ?? null,
+    }
 
     if (!resolved) {
       unmatchedNames.push(ing.foodName)
       matchedIngredients.push({
         name: ing.foodName, canonicalName: canonicalEnglish, brand, route, grams, gramsEstimated,
         matched: false, nutrients: null, provider: null, providerId: null, productName: null, confidence: null,
-        fallbackStatus: "unresolved", llmParticipated: classification?.llmClassified ?? false,
-        judgeTrigger, classification: classificationRecord,
+        fallbackStatus: "unresolved", llmParticipated: (classification?.llmClassified ?? false) || judge != null,
+        ...judgeFields, classification: classificationRecord,
       })
       continue
     }
@@ -462,16 +471,11 @@ export async function estimateRecipe(recipe: MealieRecipe): Promise<EstimateResu
       requestedFatPercent: classification?.attributes?.fatPercent ?? null,
       sourceRecipeSlug: resolved.match.sourceRecipeSlug ?? null,
       sourceRecipeFingerprint: resolved.match.sourceRecipeFingerprint ?? null,
-      judgeTrigger,
-      judgeVerdict: resolved.judge?.verdict === "invalid" ? null : (resolved.judge?.verdict ?? null),
-      judgeReason: resolved.judge?.reason ?? null,
-      judgeCandidates: resolved.judge?.candidates ?? null,
-      judgePoolFingerprint: resolved.judge?.poolFingerprint ?? null,
-      judgeModel: resolved.judge?.model ?? null,
-      judgePromptVersion: resolved.judge?.promptVersion ?? null,
+      ...judgeFields,
       classification: classificationRecord,
       // A reranked match DID involve the LLM, even though its nutrients came from a database.
       llmParticipated: (classification?.llmClassified ?? false)
+        || judge != null
         || resolved.fallbackStatus === "llm-nutrient"
         || (resolved.match.llmReranked ?? false),
     })

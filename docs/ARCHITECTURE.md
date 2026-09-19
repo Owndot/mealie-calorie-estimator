@@ -68,6 +68,22 @@ generated value and real records survived every hard gate but scored too low to 
 It therefore cannot make an accepted result worse. Replacing an already-accepted database record is
 deliberately **not** implemented — benchmarking found no stable, justified case for it.
 
+The estimator uses `resolveNutrientsWithDiagnostics`, whose unresolved result has `match: null`
+and retains the existing judge metadata. The match-only `resolveNutrients` entry point retains
+its `ResolvedNutrients | null` contract for existing callers. Both matched and unresolved
+ingredients serialize the same judge fields. Invalid replies and request failures keep a null
+verdict with the failure reason; rejected selections retain `selected` with a rejection reason
+and do not acquire nutrients. Eligibility alone is still recorded when the judge does not run.
+
+## Pipeline concurrency
+
+`runEstimationPipeline` schedules the entire read/estimate/write operation through one process-local
+queue. `ESTIMATION_CONCURRENCY` defaults to 2. Estimate, webhook and backfill entry points share it;
+each retains its existing options and response behavior. The same slug runs serially, and the
+oldest runnable job takes each available slot. Failures release both the slot and recipe lock.
+No write retries or durable job delivery are introduced. Direct read-only resolver calls from the
+override API are outside this pipeline limit.
+
 ## Open Food Facts as a verified proxy
 
 OFF is branded retail data, not a generic database. It is queried when a *qualitative* claim needs a

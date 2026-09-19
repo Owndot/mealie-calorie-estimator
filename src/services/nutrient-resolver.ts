@@ -35,6 +35,12 @@ export interface ResolvedNutrients {
   }
 }
 
+export type NutrientResolution = ResolvedNutrients | {
+  match: null
+  fallbackStatus: "unresolved"
+  judge?: ResolvedNutrients["judge"]
+}
+
 const KNOWN_FALLBACK_STATUSES: FallbackStatus[] = ["mealie-recipe", "bls", "usda-local", "off", "llm-nutrient"]
 
 /**
@@ -299,6 +305,16 @@ const RECORD_PROVIDERS = new Set<FallbackStatus>(["mealie-recipe", "bls", "usda-
  * attribute, and the OFF proxy are deliberately NOT here.
  */
 export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): Promise<ResolvedNutrients | null> {
+  const result = await resolveNutrientsWithDiagnostics(query, route)
+  return result.match === null ? null : result
+}
+
+/** Keeps the judge's audit trail even when there is no nutrient record to return. */
+export async function resolveNutrientsWithDiagnostics(query: ProviderQuery, route: FoodRoute): Promise<NutrientResolution> {
+  return await resolveWithJudge(query, route) ?? { match: null, fallbackStatus: "unresolved" }
+}
+
+async function resolveWithJudge(query: ProviderQuery, route: FoodRoute): Promise<NutrientResolution | null> {
   // If the judge cannot actually be asked, do not pay for the pool pass either.
   if (!config.llm.judgeEnabled || !config.llm.enabled || !config.llm.apiKey) {
     return resolveDeterministic(query, route)
@@ -422,6 +438,8 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
     category: query.category ?? null,
   }, ordered)
 
+  if (outcome.skipped) return deterministic
+
   const provenance = {
     trigger,
     candidates: ordered.length,
@@ -429,6 +447,11 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
     model: config.llm.judgeModel,
     promptVersion: JUDGE_PROMPT_VERSION,
   }
+
+  const keepDeterministic = (verdict: JudgeVerdict | "invalid", reason: string): NutrientResolution => ({
+    ...(deterministic ?? { match: null, fallbackStatus: "unresolved" as const }),
+    judge: { ...provenance, verdict, reason },
+  })
 
   logger.info(
     {
@@ -461,31 +484,25 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
       { foodName: query.foodName, trigger, verdict: decision?.verdict ?? "invalid", reason: outcome.invalidReason ?? decision?.reason },
       "Semantic judge did not select a record — the deterministic outcome stands",
     )
-    return deterministic === null ? null : {
-      ...deterministic,
-      judge: { ...provenance, verdict: decision?.verdict ?? "invalid", reason: decision?.reason ?? outcome.invalidReason ?? "" },
-    }
+    return keepDeterministic(decision?.verdict ?? "invalid", decision?.reason ?? outcome.invalidReason ?? "")
   }
 
   const picked = ordered.find((c) => c.id === decision.candidateId)
-  if (!picked) return deterministic
+  if (!picked) return keepDeterministic("invalid", "selected id is not in the candidate set")
 
   if (decision.confidence < config.llm.judgeMinConfidence) {
     logger.info(
       { foodName: query.foodName, record: picked.name, confidence: decision.confidence, floor: config.llm.judgeMinConfidence },
       "Judge selection below the confidence floor — keeping the deterministic outcome",
     )
-    return deterministic === null ? null : {
-      ...deterministic,
-      judge: { ...provenance, verdict: "selected", reason: `below confidence floor: ${decision.reason}` },
-    }
+    return keepDeterministic("selected", `below confidence floor: ${decision.reason}`)
   }
 
   // The nutrients are the RECORD's, copied verbatim. The model supplied an id and nothing else.
   const check = sanityCheckNutrients(picked.nutrients, query.foodName)
   if (!check.ok) {
     logger.info({ foodName: query.foodName, record: picked.name, reason: check.reason }, "Judge-selected record failed the sanity check — keeping the deterministic outcome")
-    return deterministic
+    return keepDeterministic("selected", `failed nutrient sanity check: ${check.reason}; ${decision.reason}`)
   }
 
   const match: ProviderMatch = {

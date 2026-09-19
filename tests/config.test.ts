@@ -59,3 +59,20 @@ describe("getMealieToken", () => {
     expect(gt()).toBe("fallback-token")
   })
 })
+
+describe("estimation concurrency", () => {
+  it("defaults to two active pipelines", async () => {
+    delete process.env.ESTIMATION_CONCURRENCY
+    expect((await import("../src/config.js")).config.estimate.concurrency).toBe(2)
+  })
+
+  it("accepts an explicitly configured positive integer", async () => {
+    process.env.ESTIMATION_CONCURRENCY = "3"
+    expect((await import("../src/config.js")).config.estimate.concurrency).toBe(3)
+  })
+
+  it.each(["0", "-1", "1.5", "bad", "2jobs", "Infinity", "9007199254740992"])("rejects invalid concurrency %s at startup", async (value) => {
+    process.env.ESTIMATION_CONCURRENCY = value
+    await expect(import("../src/config.js")).rejects.toThrow("ESTIMATION_CONCURRENCY must be a positive integer")
+  })
+})

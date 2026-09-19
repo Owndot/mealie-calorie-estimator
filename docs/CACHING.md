@@ -24,6 +24,15 @@ A deployment that upgrades therefore keeps its existing file, re-resolves ingred
 new keys miss, and drops the stale rows automatically within the TTL window. Users never need to
 delete `cache.db`.
 
+The semantic judge has a separate `llm_judge_cache`. Its `j2` key combines the prompt version,
+model, normalized requested identity/properties and an ordered candidate fingerprint. The
+fingerprint includes IDs, names, provider, dataset type, brand, category, state/form/preservation
+and the energy/protein/carbohydrate/fat values shown in the prompt. Brand, category and dataset
+type were missing in `j1`; updating any of them now requires a fresh decision. Score changes
+without reordering do not invalidate it. Nutrients not shown to the judge do not affect its key.
+The version change only invalidates judge decisions; provider, classification, rerank and gram
+caches remain usable. Old judge rows expire normally; there is no schema migration or cache wipe.
+
 ## What changed with structured food state
 
 Semantic attributes (`form`, `preservation`, `fatPercent`) now participate in matching, so they
