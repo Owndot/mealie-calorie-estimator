@@ -15,6 +15,7 @@ x-nutrition-env: &nutrition-env
   LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
   LLM_RATE_LIMIT: ${LLM_RATE_LIMIT:-30}
   LOG_LEVEL: ${LOG_LEVEL:-info}
+  ESTIMATION_CONCURRENCY: ${ESTIMATION_CONCURRENCY:-2}
 
 services:
   nutrition-engine:

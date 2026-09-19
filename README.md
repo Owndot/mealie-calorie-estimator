@@ -302,6 +302,7 @@ variable is documented in [`.env.example`](.env.example).
 | `MEALIE_API_TOKEN` | **yes** | a dedicated service-account token |
 | `OFF_LANGUAGE` | no | Open Food Facts search language, default `de` |
 | `ESTIMATE_STRATEGY` | no | `all` (default) or `tagged` — see [Optional and advanced](#optional-and-advanced) |
+| `ESTIMATION_CONCURRENCY` | no | positive integer, default `2`; shared limit for active estimate, webhook and backfill pipelines per process |
 | `LLM_ENABLED`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_MODEL` | no | any OpenAI-compatible endpoint; **off** by default. Leave unset to run deterministically with no API key — see [Product modes](#product-modes) |
 | `LLM_JUDGE_ENABLED` | no | semantic judge, **off** by default |
 | `OVERRIDE_ADMIN_TOKEN` | no | enables the override API; unset means those routes do not exist |
@@ -309,6 +310,13 @@ variable is documented in [`.env.example`](.env.example).
 | `LOG_LEVEL` | no | `info`; use `debug` for per-ingredient detail |
 
 Automatic tagging has no setting — see [Automatic tagging](#automatic-tagging).
+
+Estimate and webhook requests still return HTTP 202 immediately. Accepted work waits in an
+in-memory queue when all pipeline slots are occupied. Requests for the same recipe run in order,
+including their reads and writeback; unrelated recipes can run concurrently. Jobs are not retried
+automatically. The queue is local to one process and is not durable across restarts, so 202 means
+accepted, not completed. See [the v1.3.4 audit](docs/V1.3.4-RESOLVER-HARDENING.md) for limitations
+and the post-deployment validation plan.
 
 ### Persistence and backups
 

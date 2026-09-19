@@ -58,6 +58,7 @@ async function main() {
     logger.info(
       {
         port: config.port,
+        estimationConcurrency: config.estimate.concurrency,
         usdaLocalEnabled: usdaLocal !== null,
         usdaLocalDatasets: usdaLocal?.datasets ?? null,
         llmEnabled: config.llm.enabled && Boolean(config.llm.apiKey),

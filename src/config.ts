@@ -25,6 +25,14 @@ function hasAnyToken(): boolean {
   return Object.keys(process.env).some((k) => k.startsWith("MEALIE_API_TOKEN_"))
 }
 
+function estimationConcurrency(): number {
+  const value = Number(process.env.ESTIMATION_CONCURRENCY || "2")
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error("ESTIMATION_CONCURRENCY must be a positive integer")
+  }
+  return value
+}
+
 export const config = {
   port: parseInt(process.env.PORT || "8000", 10),
 
@@ -153,6 +161,7 @@ export const config = {
   },
 
   estimate: {
+    concurrency: estimationConcurrency(),
     strategy: (process.env.ESTIMATE_STRATEGY || "all") as "all" | "tagged",
     tag: process.env.ESTIMATE_TAG || "estimate",
   },

@@ -4,6 +4,10 @@ import { perServingFromRecipeNutrition, tagsAreComplete, resolveAndMergeTags, es
 import { logger } from "../utils/logger.js"
 import { sourceFingerprint } from "./providers/mealie-recipe-provider.js"
 import type { Completeness, MealieRecipe } from "../types.js"
+import { config } from "../config.js"
+import { EstimationQueue } from "./estimation-queue.js"
+
+const estimationQueue = new EstimationQueue(config.estimate.concurrency)
 
 export interface PipelineOptions {
   /** Bypass the ingredient-hash-unchanged skip and re-estimate. Never bypasses manual protection by itself. */
@@ -62,6 +66,11 @@ async function recipeSourcesChanged(recipe: MealieRecipe, householdId: string | 
 }
 
 export async function runEstimationPipeline(slug: string, opts: PipelineOptions = {}): Promise<PipelineOutcome> {
+  const options = { ...opts }
+  return estimationQueue.run(slug, () => processEstimation(slug, options))
+}
+
+async function processEstimation(slug: string, opts: PipelineOptions): Promise<PipelineOutcome> {
   const recipe = await getRecipe(slug)
 
   if (!shouldEstimate(recipe)) {
