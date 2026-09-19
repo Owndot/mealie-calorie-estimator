@@ -188,6 +188,8 @@ export function filterOffHits(
         sugarPer100g: num(n.sugars_100g),
         sodiumPer100g: num(n.sodium_100g),
         cholesterolPer100g: null,
+        // Carried so a judge-selected product faces the energy check with its polyols known.
+        polyolsPer100g: num(n.polyols_100g),
       },
       // OFF products carry no deterministic rank of their own; they sort after the scored records
       // and are distinguished from each other by the ordering's later keys.

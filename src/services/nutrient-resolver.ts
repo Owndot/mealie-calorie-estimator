@@ -13,6 +13,7 @@ import { loadBlsRecordByCode } from "./providers/bls-provider.js"
 import { loadUsdaRecordById } from "./providers/usda-local-provider.js"
 import { narrowsAmbiguousIngredient } from "./vocabulary/recipe-vocabulary.js"
 import { statedModifierFamilies } from "./providers/food-semantics.js"
+import { normalizeIdentityText } from "../utils/text-normalize.js"
 import { logger } from "../utils/logger.js"
 import type { ProviderQuery } from "./providers/types.js"
 import type { FoodRoute, FallbackStatus, ProviderMatch } from "../types.js"
@@ -373,6 +374,36 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
   }
 
   const trigger = pool.length > 0 ? "gate-suppressed-pool" : "no-database-record"
+
+  // ONE retail product whose whole label IS the ingredient outranks its own variants.
+  //
+  // "Leerdammer Leger" came back `ambiguous`: the model was shown twelve Leerdammer records and
+  // could not say which variant was meant — reasonably, because the classifier had already
+  // translated `Léger` to `Light`, so the English name it reasoned about matched no label at all.
+  // Yet one candidate's complete name equals the complete ingredient text. That is not a
+  // preference between variants; it is the product the cook named, and the others are noise.
+  //
+  // So the competing variants are withdrawn and the judge is still asked — it confirms the
+  // identity or answers NO_SAFE_MATCH exactly as before. Removing a distraction is a different
+  // thing from removing the semantic check, and only the first is safe.
+  //
+  // Narrow by construction and self-limiting where it should be: equality must be EXACT on the
+  // whole normalized label, exactly one candidate may satisfy it, and only the last-resort route
+  // qualifies — the property proxy is answering a fat percentage, not identifying a product. A
+  // generic ingredient like `Hoisin-Sauce` matches many products all labelled "Hoisin Sauce", so
+  // uniqueness fails and nothing changes. That is the difference between naming a product and
+  // naming a food.
+  if (offRoute === "last-resort" && retail.length > 1) {
+    const exact = retail.filter((c) => normalizeIdentityText(c.name) === normalizeIdentityText(structuredName))
+    if (exact.length === 1) {
+      logger.info(
+        { foodName: query.foodName, structuredName, record: exact[0].name, providerId: exact[0].providerId, withdrew: retail.length - 1 },
+        "OFF exact label: the product name is the ingredient name, so its variants are withdrawn",
+      )
+      retail = exact
+    }
+  }
+
   if (pool.length === 0 && retail.length === 0) return deterministic
 
   // Rebuilt WITH the retail survivors, so they hold places of their own rather than competing on a
@@ -406,7 +437,11 @@ export async function resolveNutrients(query: ProviderQuery, route: FoodRoute): 
       property: localShortlist.property.kind,
       candidates: ordered.length,
       retailOffered: ordered.filter((c) => c.provider === "off").length,
-      offQueried: routing.justified,
+      // What actually happened, not what one of the two routes would have done. `routing` covers
+      // only the property proxy, so a real last-resort search logged `offQueried: false` — which
+      // made an audit of "was OFF even asked?" answer no while the network call was in the trace.
+      offQueried: offRoute !== null,
+      offRoute,
       verdict: outcome.decision?.verdict ?? "invalid",
       cached: outcome.cached ?? false,
       latencyMs: outcome.latencyMs,
